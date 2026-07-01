@@ -7,17 +7,8 @@ serves.
 
 ## Phase A - Foundation (registry + contract enforcement)
 
-- [ ] **A1 (todo, P1)** Central tool registry. Add `tools/registry.py`: a
-  declarative list of entries, one per scanner, each with `tool_id`, `module`,
-  `scope` ("host"|"page"), `category`, and `label`. Refactor `scan_site.py` to
-  build its host-scan set and `PAGE_SCANNERS` from the registry instead of the
-  hardcoded imports and lists. No change to measured output. Verify: 51 existing
-  tests still pass; add a test asserting the registry lists all 8 current
-  scanners and that `scan_site` sources its scanner set from it. Smoke: run
-  `scan_site.py https://example.com` and confirm the JSON is unchanged in shape.
-
 - [ ] **A2 (todo, P1)** Contract-conformance test. Add a test that iterates the
-  registry (A1) and, for each tool, calls `scan` against a canned in-memory page
+  registry (A1, done) and, for each tool, calls `scan` against a canned in-memory page
   context and asserts the section-4 contract: returns a dict, never raises,
   `ok` present, on success has `tool` and either a `checks` map whose every
   entry has a `verdict` in {pass,warn,fail,info} plus a `note`, or a valid
@@ -55,6 +46,12 @@ serves.
   PLAN.md first. Depends on A1.
 
 ## Done
+- [x] **A1 (done)** Central tool registry. Added `tools/registry.py` (8 entries:
+  3 host, 5 page). Refactored `scan_site.py` to build its host-scan set,
+  `PAGE_SCANNERS`, and scorecard categories from the registry; removed the
+  hardcoded scanner imports and lists. Behavior-identical (verified JSON keys,
+  labels, and scorecard categories unchanged on example.com). Added 5 registry
+  tests; suite is 56 tests, all pass. See JOURNAL.md 2026-07-01 A1.
 - [x] **A0 (done)** Bootstrap Ralph control files. Created PLAN.md, BACKLOG.md,
   JOURNAL.md seeded from repo state; initialized git; verified 51 unit tests
   pass. See JOURNAL.md 2026-07-01.

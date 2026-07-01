@@ -21,23 +21,11 @@ from pathlib import Path
 
 import common
 import htmlmeta
-import scan_accessibility
-import scan_dns_email
-import scan_http_security
-import scan_links
-import scan_performance
-import scan_readability
-import scan_seo
-import scan_tls
+import registry
 
-# Page-level scanners keyed by the module and the label used in issue lists.
-PAGE_SCANNERS = [
-    ("seo", scan_seo, "seo"),
-    ("accessibility", scan_accessibility, "a11y"),
-    ("links", scan_links, "links"),
-    ("performance", scan_performance, "perf"),
-    ("readability", scan_readability, "readability"),
-]
+# Page-level scanners as (key, module, label), discovered from the central
+# registry so adding a scanner never requires editing this orchestrator.
+PAGE_SCANNERS = [(e.key, e.module, e.label) for e in registry.page_tools()]
 
 
 def _safe_scan(fn, *args, tool_name="scan", **kwargs):
@@ -136,12 +124,8 @@ def check_cross_page(page_scans):
 
 def build_scorecard(host_scans, page_scans):
     """Roll the per-check verdicts up into one band per category plus an overall band."""
-    cats = {
-        "security": _verdicts_of(host_scans.get("http_security")),
-        "tls": _verdicts_of(host_scans.get("tls")),
-        "dns_email": _verdicts_of(host_scans.get("dns_email")),
-    }
-    page_keys = ("seo", "accessibility", "links", "performance", "readability")
+    cats = {e.category: _verdicts_of(host_scans.get(e.key)) for e in registry.host_tools()}
+    page_keys = tuple(e.key for e in registry.page_tools())
     for key in page_keys:
         acc = []
         for ps in page_scans:
@@ -161,9 +145,8 @@ def run(target, extra_pages):
     slug = common.slug_of(target)
 
     host_scans = {
-        "http_security": _safe_scan(scan_http_security.scan, target, tool_name="scan_http_security"),
-        "tls": _safe_scan(scan_tls.scan, target, tool_name="scan_tls"),
-        "dns_email": _safe_scan(scan_dns_email.scan, target, tool_name="scan_dns_email"),
+        e.key: _safe_scan(e.module.scan, target, tool_name=e.tool_id)
+        for e in registry.host_tools()
     }
 
     page_urls = [target] + [common.normalize_url(u) for u in extra_pages]
@@ -179,14 +162,15 @@ def run(target, extra_pages):
         page_scans.append(entry)
 
     issues = []
-    issues += _collect_issues("http_security", host_scans["http_security"].get("checks", {}))
-    if "checks" in host_scans["dns_email"]:
-        issues += _collect_issues("dns_email", host_scans["dns_email"]["checks"])
-    if host_scans["tls"].get("ok"):
-        issues += _collect_issues("tls", host_scans["tls"].get("checks", {}))
-    elif host_scans["tls"].get("verdict") in ("warn", "fail"):
-        issues.append({"scan": "tls", "check": "handshake", "verdict": host_scans["tls"]["verdict"],
-                       "note": host_scans["tls"].get("note", "")})
+    for e in registry.host_tools():
+        sr = host_scans[e.key]
+        if "checks" in sr:
+            issues += _collect_issues(e.label, sr["checks"])
+        elif sr.get("verdict") in ("warn", "fail"):
+            # A host scanner that could not produce checks but still graded itself
+            # (for example a failed TLS handshake) contributes one issue.
+            issues.append({"scan": e.label, "check": "handshake", "verdict": sr["verdict"],
+                           "note": sr.get("note", "")})
     for ps in page_scans:
         for key, _, label in PAGE_SCANNERS:
             if ps[key].get("ok"):

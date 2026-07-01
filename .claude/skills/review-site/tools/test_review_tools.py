@@ -17,6 +17,7 @@ import zlib
 import common
 import discover_pages as disco
 import htmlmeta
+import registry as reg
 import scan_accessibility as a11y
 import scan_dns_email as dns
 import scan_http_security as sec
@@ -473,6 +474,37 @@ class TestPerfCompressionCaching(unittest.TestCase):
     def test_caching_check(self):
         self.assertEqual(perf._caching_check({"cache-control": "max-age=3600"})["cache_control"], "max-age=3600")
         self.assertIsNone(perf._caching_check({})["cache_control"])
+
+
+class TestRegistry(unittest.TestCase):
+    def test_registry_lists_all_eight_scanners(self):
+        ids = {e.tool_id for e in reg.REGISTRY}
+        self.assertEqual(ids, {
+            "scan_http_security", "scan_tls", "scan_dns_email",
+            "scan_seo", "scan_accessibility", "scan_links",
+            "scan_performance", "scan_readability",
+        })
+        self.assertEqual(len(reg.host_tools()), 3)
+        self.assertEqual(len(reg.page_tools()), 5)
+
+    def test_every_entry_exposes_a_callable_scan(self):
+        for e in reg.REGISTRY:
+            self.assertTrue(callable(getattr(e.module, "scan", None)),
+                            f"{e.tool_id} exposes no callable scan")
+
+    def test_scan_site_sources_page_scanners_from_registry(self):
+        expected = [(e.key, e.module, e.label) for e in reg.page_tools()]
+        self.assertEqual(site.PAGE_SCANNERS, expected)
+
+    def test_scan_site_scorecard_categories_come_from_registry(self):
+        host = {e.key: {"checks": {"a": {"verdict": "pass"}}} for e in reg.host_tools()}
+        sc = site.build_scorecard(host, [])
+        for e in reg.host_tools():
+            self.assertIn(e.category, sc["categories"])
+
+    def test_by_id_roundtrip(self):
+        self.assertEqual(reg.by_id("scan_tls").key, "tls")
+        self.assertIsNone(reg.by_id("scan_nonexistent"))
 
 
 if __name__ == "__main__":

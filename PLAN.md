@@ -103,22 +103,26 @@ Registration: the tool must be discoverable through the central registry
 (section 5). The orchestrator must not hardcode tool lists.
 
 ### Contract gaps to close (drive the backlog)
-1. No central registry. `scan_site.py` hardcodes `PAGE_SCANNERS` and the host
-   scans dict. Adding a tool means editing the orchestrator.
+1. ~~No central registry.~~ CLOSED (A1). `tools/registry.py` is the single source
+   of tool discovery; `scan_site.py` builds its host set, `PAGE_SCANNERS`, and
+   scorecard categories from it. Adding a tool no longer edits the orchestrator.
 2. Category and grade are assigned centrally in `scan_site.py`, not owned by
-   the tool. A tool's output is therefore not fully self-describing.
+   the tool. A tool's output is therefore not fully self-describing. (Phase B.)
 3. The contract is not enforced by a test. A new tool can silently violate it.
+   (Phase A, task A2.)
 
-## 5. Tool registry design (target)
-Introduce `tools/registry.py` as the single source of tool discovery:
-- A declarative list of entries, one per scanner, each carrying: `tool_id`,
-  `module`, `scope` ("host" or "page"), `category` (scorecard bucket), and the
-  short `label` used in issue lists.
-- `scan_site.py` builds its host-scan set and `PAGE_SCANNERS` by reading the
-  registry instead of importing and listing scanners by hand.
-- A contract-conformance test iterates the registry and asserts every tool meets
-  section 4 (callable `scan`, required keys, valid verdicts, no raise on a canned
-  page context).
+## 5. Tool registry design (implemented in A1)
+`tools/registry.py` is the single source of tool discovery:
+- A declarative list of `ToolEntry` namedtuples, one per scanner, each carrying:
+  `tool_id`, `key` (result key in the scan JSON), `module`, `scope` ("host" or
+  "page"), `category` (scorecard bucket), and the short `label` used in issue
+  lists. Helpers: `host_tools()`, `page_tools()`, `by_id()`.
+- `scan_site.py` builds its host-scan set, `PAGE_SCANNERS`, and scorecard
+  categories by reading the registry instead of importing and listing scanners
+  by hand. (Done in A1.)
+- Still to do (A2): a contract-conformance test that iterates the registry and
+  asserts every tool meets section 4 (callable `scan`, required keys, valid
+  verdicts, no raise on a canned page context).
 Adding a dimension then means: write the scanner to the contract, add one
 registry entry, add its tests. The orchestrator does not change.
 
