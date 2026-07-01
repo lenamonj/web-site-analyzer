@@ -113,13 +113,19 @@ def _third_parties(urls, page_domain):
     return out
 
 
+def _host_matches(host, key):
+    """True when host IS the tracker domain or a subdomain of it. A plain
+    substring test would also match unrelated hosts like notfacebook.com."""
+    return host == key or host.endswith("." + key)
+
+
 def _match_trackers(urls):
-    """Known-tracker hosts present among the resource URLs, host substring -> category."""
+    """Known-tracker hosts present among the resource URLs, tracker domain -> category."""
     found = {}
     for u in urls:
         host = (urlparse(u).hostname or "").lower()
         for key, category in KNOWN_TRACKERS.items():
-            if key in host:
+            if _host_matches(host, key):
                 found[key] = category
     return found
 
@@ -138,7 +144,7 @@ def _tracking_pixels(body, base):
         w = WIDTH_RE.search(attrs)
         h = HEIGHT_RE.search(attrs)
         tiny = (w and int(w.group(1)) <= 1) or (h and int(h.group(1)) <= 1)
-        tracker = any(key in host for key in KNOWN_TRACKERS)
+        tracker = any(_host_matches(host, key) for key in KNOWN_TRACKERS)
         if (tiny or tracker) and src not in seen:
             seen.add(src)
             out.append(src)

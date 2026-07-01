@@ -32,6 +32,7 @@ class _Extractor(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.title = None
         self._in_title = False
+        self._title_buf = []
         self.html_lang = None
         self.metas = []          # raw meta tag attr dicts
         self.links = []          # raw <link> attr dicts
@@ -57,17 +58,27 @@ class _Extractor(HTMLParser):
         self._cur_button = None
         self._button_buf = []
 
+    def _end_title(self):
+        """Close the title capture. Also called when another tag interrupts an
+        unclosed <title>, so a malformed page cannot swallow the body as title."""
+        self._in_title = False
+        if self.title is None:
+            self.title = "".join(self._title_buf).strip()
+
     # -- tag open ---------------------------------------------------------
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
         a = _attr_dict(attrs)
 
+        if self._in_title and tag != "title":
+            self._end_title()
         if tag in SKIP_TEXT_TAGS:
             self._skip_depth += 1
         if tag == "html" and "lang" in a:
             self.html_lang = a["lang"]
-        if tag == "title":
+        if tag == "title" and self.title is None:
             self._in_title = True
+            self._title_buf = []
         if tag == "meta":
             self.metas.append(a)
         if tag == "link":
@@ -120,8 +131,8 @@ class _Extractor(HTMLParser):
         tag = tag.lower()
         if tag in SKIP_TEXT_TAGS and self._skip_depth > 0:
             self._skip_depth -= 1
-        if tag == "title":
-            self._in_title = False
+        if self._in_title:
+            self._end_title()
         if tag in HEADING_TAGS and self._cur_heading == int(tag[1]):
             self.headings.append({"level": self._cur_heading, "text": " ".join(self._heading_buf).strip()})
             self._cur_heading = None
@@ -149,8 +160,8 @@ class _Extractor(HTMLParser):
         if self._in_jsonld:
             self._jsonld_buf.append(data)
             return
-        if self._in_title and self.title is None:
-            self.title = data.strip()
+        if self._in_title:
+            self._title_buf.append(data)
         if self._cur_heading is not None:
             self._heading_buf.append(data)
         if self._cur_anchor is not None:
@@ -222,8 +233,13 @@ def parse_html(html):
     p = _Extractor()
     try:
         p.feed(html or "")
+        p.close()  # flush buffered RCDATA (e.g. an unclosed <title>)
     except Exception:
         pass  # malformed markup should degrade, not crash the scan
+    if p.title is None and p._title_buf:
+        # Unclosed <title>: RCDATA buffering hands us the rest of the document
+        # as text. Real title text ends where markup starts.
+        p.title = "".join(p._title_buf).split("<", 1)[0].strip()
 
     canonical = next((l.get("href") for l in p.links if l.get("rel", "").lower() == "canonical"), None)
     hreflangs = [{"lang": l.get("hreflang"), "href": l.get("href")}

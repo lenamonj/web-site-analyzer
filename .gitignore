@@ -18,6 +18,8 @@ planning/*_Executive_Report.docx
 planning/_evidence/*_scan.json
 planning/_evidence/*_scan_summary.md
 planning/_evidence/exec_report_data.json
+planning/_evidence/*_exec_report_data.draft.json
+planning/_evidence/*_visual_notes.md
 planning/_evidence/*.png
 planning/_evidence/*.jpg
 planning/_evidence/*.jpeg

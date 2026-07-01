@@ -22,7 +22,7 @@ Every run produces two files in `planning\`, named by the target's domain so run
 
 `<slug>` is the host with the scheme and any leading `www.` removed and dots turned into hyphens (for example `example.com` becomes `example-com`).
 
-The review covers six categories: Content, Design, Accessibility, Navigation and IA, SEO and Technical, and a passive Security posture pass (TLS, security headers, cookie flags, information disclosure, SPF and DMARC).
+The review covers seven categories: Content, Design, Accessibility, Navigation and IA, SEO and Technical, Privacy and tracking, and a passive Security posture pass (TLS, security headers, cookie flags, information disclosure, SPF and DMARC).
 
 ---
 
@@ -43,7 +43,8 @@ TARGET.txt  ->  scanner suite (measured evidence)  ->  gameplan  ->  executive r
 The review does not rely on the model eyeballing headers or markup. A pure standard-library, strictly passive scanner suite runs first and writes its results to `planning\_evidence\<slug>_scan.json` (plus a readable `<slug>_scan_summary.md`). Each check carries a `pass`, `warn`, `fail`, or `info` verdict and a short note that findings cite directly. Run it by hand any time:
 
 ```
-python .claude\skills\review-site\tools\discover_pages.py                             (propose an in-scope page set)
+python .claude\skills\review-site\tools\run_review.py                                (one command: discover, scan, draft)
+python .claude\skills\review-site\tools\discover_pages.py                            (propose an in-scope page set)
 python .claude\skills\review-site\tools\scan_site.py                                 (reads TARGET.txt)
 python .claude\skills\review-site\tools\scan_site.py https://example.com https://example.com/about
 ```
@@ -54,12 +55,16 @@ python .claude\skills\review-site\tools\scan_site.py https://example.com https:/
 | `scan_http_security.py` | HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners |
 | `scan_tls.py` | Negotiated TLS protocol, certificate issuer, days to expiry, hostname coverage, legacy TLS 1.0/1.1 probe |
 | `scan_dns_email.py` | SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, over DNS-over-HTTPS |
-| `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt, robots.txt, sitemap.xml |
+| `scan_crawl.py` | robots.txt presence and sitemap references, XML sitemap reachability (host-level, checked once per run) |
+| `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt |
 | `scan_accessibility.py` | Document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons |
 | `scan_links.py` | Broken links (404/410/5xx only), redirects, access-restricted links, and insecure http resources on an https page (mixed content) |
 | `scan_performance.py` | Initial HTML transfer size, static resource-weight floor, render-blocking head scripts, third-party origins, gzip/brotli compression, Cache-Control posture |
 | `scan_readability.py` | Flesch Reading Ease, Flesch-Kincaid grade level, average sentence length (heuristic, on visible text) |
+| `scan_privacy.py` | Third-party resource origins, known tracker/analytics hosts, likely tracking pixels, cookie-consent detection (static HTML only) |
 | `scan_site.py` | Orchestrates all of the above across the target and extra pages, rolls the results into a per-category scorecard, writes the evidence JSON and digest |
+| `draft_report_data.py` | Drafts the executive-report data file from the scan JSON: measured scorecard and findings filled in, judgement fields left empty |
+| `run_review.py` | One command for the whole evidence pass: discovery, full scan of the proposed page set, digest, and draft report data |
 
 Each run also produces a **scorecard**: every category is rolled up into a posture band (Strong, Adequate, Weak, Poor, or Not measured) from its own pass/warn/fail checks, plus an overall band. It is a transparent aggregation of measured checks, not an invented benchmark, and the raw counts always travel with it. The executive report renders this scorecard when present. A multi-page run adds a **cross-page** check for titles or meta descriptions reused across pages. Each page is fetched and parsed once and shared across all page-level scanners, so scanning stays light on the target, and one scanner failing never aborts the run.
 
@@ -135,7 +140,7 @@ To point at a site for a single run without editing the file, give Claude Code t
 
 ## Tests
 
-The scanner suite ships with an offline, zero-dependency regression suite (Python `unittest`). It drives the HTML parser and every pure grading function with inline fixtures, so it needs no network and runs in well under a second:
+The scanner suite ships with an offline, zero-dependency regression suite (Python `unittest`, 90 tests). It drives the HTML parser, every pure grading function, the tool contract across the whole registry, and the full pipeline with inline fixtures and stubbed network primitives, so it needs no network and runs in well under a second:
 
 ```
 cd .claude\skills\review-site\tools
@@ -167,16 +172,21 @@ README.md                                    This file
     tools\                                   Passive evaluation tools (pure standard library)
       common.py                              Shared fetch (gzip-aware), DoH, TLS, JSON helpers
       htmlmeta.py                            Single-pass HTML extractor (SEO and a11y share it)
+      registry.py                            Central tool registry (single source of discovery)
       discover_pages.py                      Sitemap/nav page-discovery scoping helper
       scan_http_security.py                  Security-header and cookie posture
       scan_tls.py                            TLS and certificate posture
       scan_dns_email.py                      SPF, DMARC, DKIM, MX, DNSSEC
+      scan_crawl.py                          robots.txt and sitemap (host-level, once per run)
       scan_seo.py                            On-page SEO and technical structure
       scan_accessibility.py                  Static accessibility checks
       scan_links.py                          Link health and mixed content
       scan_performance.py                    Page-weight and resource analysis
       scan_readability.py                    Readability metrics on visible text
+      scan_privacy.py                        Third-party trackers, pixels, consent detection
       scan_site.py                           Orchestrator + scorecard, writes the evidence JSON
+      draft_report_data.py                   Drafts exec report data from the scan JSON
+      run_review.py                          One-command pipeline: discover, scan, draft
       test_review_tools.py                   Offline unit tests for the suite
 planning\
   _evidence\                                 Scan JSON and digest, screenshots, notes, exec_report_data.json

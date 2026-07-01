@@ -169,13 +169,7 @@ def main():
     else:
         target, out = None, (args[0] if args else None)
     if not target:
-        repo_root = common.evidence_dir().parents[1]
-        tfile = repo_root / "TARGET.txt"
-        if tfile.exists():
-            for line in tfile.read_text(encoding="utf-8").splitlines():
-                if line.strip().lower().startswith("http"):
-                    target = line.strip()
-                    break
+        target = common.read_target_file()
     if not target:
         print("No target given and no http line found in TARGET.txt")
         sys.exit(1)

@@ -13,6 +13,7 @@ Usage:
     python scan_accessibility.py <url> [output.json]
 """
 
+import re
 import sys
 
 import common
@@ -20,6 +21,8 @@ import htmlmeta
 
 CATEGORY = "accessibility"
 SCOPE = "page"
+
+MAX_SCALE_RE = re.compile(r"maximum-scale=(\d+(?:\.\d+)?)")
 
 
 def _accessible_name(control, labels_for):
@@ -50,8 +53,14 @@ def _title_check(parsed):
 
 def _viewport_check(parsed):
     vp = parsed["meta_viewport"] or ""
-    if "user-scalable=no" in vp.replace(" ", "").lower() or "maximum-scale=1" in vp.replace(" ", "").lower():
-        return {"value": vp, "verdict": "warn", "note": "Viewport blocks zoom; pinch-zoom disabled."}
+    low = vp.replace(" ", "").lower()
+    scale = MAX_SCALE_RE.search(low)
+    # WCAG 1.4.4 needs 200% zoom, so a maximum-scale below 2 restricts it.
+    blocks_zoom = ("user-scalable=no" in low or "user-scalable=0" in low
+                   or (scale and float(scale.group(1)) < 2))
+    if blocks_zoom:
+        return {"value": vp, "verdict": "warn",
+                "note": "Viewport restricts zoom below 200% (WCAG 1.4.4); pinch-zoom limited."}
     if vp:
         return {"value": vp, "verdict": "pass", "note": "Viewport allows zoom."}
     return {"value": None, "verdict": "warn", "note": "No viewport meta."}

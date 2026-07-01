@@ -44,10 +44,17 @@ Repo layout that matters to the analyzer:
       normalization, evidence dir resolution.
     - `htmlmeta.py` - one-shot page fetch, HTML parse, and client-render
       detection; the shared page snapshot every page scanner consumes.
-    - `scan_http_security.py`, `scan_tls.py`, `scan_dns_email.py` - host-scoped.
+    - `registry.py` - central tool registry (section 5).
+    - `scan_http_security.py`, `scan_tls.py`, `scan_dns_email.py`,
+      `scan_crawl.py` - host-scoped.
     - `scan_seo.py`, `scan_accessibility.py`, `scan_links.py`,
-      `scan_performance.py`, `scan_readability.py` - page-scoped.
+      `scan_performance.py`, `scan_readability.py`, `scan_privacy.py` -
+      page-scoped.
     - `discover_pages.py` - passive scoping helper (sitemap + homepage nav).
+    - `draft_report_data.py` - drafts exec_report_data from a scan JSON
+      (section 8).
+    - `run_review.py` - one-command pipeline: discover -> scan -> draft
+      (section 10).
     - `scan_site.py` - orchestrator: runs host scans once and page scans per
       page, shares one fetch per page, rolls verdicts into a scorecard, runs
       cross-page checks, writes `<slug>_scan.json` and `<slug>_scan_summary.md`.
@@ -282,7 +289,64 @@ evidence mapping and ordering, and schema completeness; plus a smoke run that
 drafts from a real `<slug>_scan.json` and renders it through
 `build_exec_report.py`.
 
-## 9. Open design questions
+## 9. Design: scan_crawl (host-scoped robots.txt and sitemap checks)
+Problem: robots.txt and sitemap.xml are host-level facts, but their checks lived
+inside the page-scoped `scan_seo`. A multi-page run therefore refetched both
+files once per page (needless load on the target), repeated the identical
+warning once per page in the issue list and digest, and let those repeated
+verdicts skew the seo category grade by page count.
+
+Tool: `tools/scan_crawl.py`, host-scoped (`SCOPE = "host"`), registered with
+key `crawl` and label `crawl`. `CATEGORY = "seo"`: robots and sitemap remain
+SEO facts, so their verdicts roll into the existing seo scorecard bucket. This
+relies on the scorecard bucketing fix below.
+
+Behavior: `scan(target)` resolves the final base URL with one redirect-following
+fetch (HEAD-like, no body), then runs exactly the two checks that moved out of
+`scan_seo`:
+1. `robots_txt` (pass|warn|info): pass when /robots.txt answers 200 with a
+   user-agent line; info when the fetch itself failed (network error is not
+   evidence of a missing file); warn otherwise. Reports referenced sitemap URLs.
+2. `sitemap` (pass|warn|info): pass when the first robots-referenced sitemap
+   (or /sitemap.xml) is a 200 with a urlset or sitemapindex root; info on fetch
+   failure; warn otherwise.
+`scan_seo` drops its robots_txt and sitemap checks and no longer takes any
+host-level action. Contract, wrapper stamping, registry entry, and tests follow
+the section 4/5 pattern; `TestToolContract` covers it automatically.
+
+Scorecard bucketing fix (orchestrator): `build_scorecard` previously bucketed
+host tools by `category` but page tools by `key`, and a page bucket would
+silently overwrite a host bucket with the same name. It now buckets both scopes
+by `category` and merges verdict lists, so any number of tools can share a
+scorecard category (as scan_crawl and scan_seo now share "seo").
+
+## 10. Design: run_review (one-command pipeline)
+Purpose: collapse the three manual steps (discover, scan, draft) into one
+deterministic command so a full evidence pass is a single invocation:
+
+`python tools/run_review.py [url]`  (no url: TARGET.txt)
+
+Behavior: run `discover_pages.discover(target)`; take its
+`proposed_review_set` (falling back to just the target when discovery fails or
+proposes nothing); run `scan_site.run(target, extra_pages)`; write the scan
+JSON and markdown digest exactly as `scan_site.main` does; then write
+`<slug>_exec_report_data.draft.json` via `draft_report_data.draft`. Prints the
+same console summary as scan_site plus the paths written. Judgement steps
+(gameplan authoring, severity review, recommendations, final docx) remain with
+the agent per SKILL.md. Not a scanner: it is not registered and has no
+category; it only composes registered tools. An offline integration test stubs
+the network primitives and asserts the pipeline writes all three artifacts.
+
+## 11. Concurrency in fan-out scanners
+`scan_links` (up to 30 link probes) and `scan_performance` (up to 40 resource
+HEADs) previously ran their fan-out serially; with an 8s timeout a page with
+dead links could take minutes. Both now run their batch through a bounded
+`concurrent.futures.ThreadPoolExecutor` (max 8 workers, stdlib only).
+`executor.map` preserves input order, so output ordering and verdicts stay
+deterministic. Eight concurrent requests is comparable to a normal browser's
+per-host connection pool, so the run remains polite to the target.
+
+## 12. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -30,6 +30,8 @@ ACCENT_HEX = "0B1F3A"                       # deep navy
 ACCENT_RGB = RGBColor(0x0B, 0x1F, 0x3A)
 WHITE_RGB = RGBColor(0xFF, 0xFF, 0xFF)
 BODY_RGB = RGBColor(0x22, 0x22, 0x22)
+MARK_RGB = RGBColor(0xC0, 0x39, 0x2B)       # red, for the marked (problem) text
+MONO_FONT = "Consolas"
 
 # Background fill per severity for the severity cell.
 SEVERITY_FILL = {
@@ -95,6 +97,52 @@ def set_col_widths(table, widths):
     for row in table.rows:
         for idx, width in enumerate(widths):
             row.cells[idx].width = width
+
+
+def _add_marked_runs(paragraph, text, highlights, size=8):
+    """Add `text` as monospace runs, marking every occurrence of any highlight
+    substring with a yellow highlighter and bold red text so the exact problem
+    is unmissable."""
+    def style(run, marked=False):
+        run.font.name = MONO_FONT
+        run.font.size = Pt(size)
+        if marked:
+            run.font.bold = True
+            run.font.color.rgb = MARK_RGB
+            run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+        else:
+            run.font.color.rgb = BODY_RGB
+
+    highlights = [h for h in (highlights or []) if h]
+    i, n = 0, len(text)
+    while i < n:
+        nxt, nxt_h = None, None
+        for h in highlights:
+            idx = text.find(h, i)
+            if idx != -1 and (nxt is None or idx < nxt):
+                nxt, nxt_h = idx, h
+        if nxt is None:
+            style(paragraph.add_run(text[i:]))
+            break
+        if nxt > i:
+            style(paragraph.add_run(text[i:nxt]))
+        style(paragraph.add_run(nxt_h), marked=True)
+        i = nxt + len(nxt_h)
+
+
+def add_code_block(document, code, highlight=None):
+    """A shaded monospace box holding a literal snippet, with the exact problem
+    substring(s) highlighted. `highlight` is a string or list of strings. Each
+    source line becomes its own paragraph so line breaks are preserved."""
+    table = document.add_table(rows=1, cols=1)
+    table.style = "Table Grid"
+    cell = table.rows[0].cells[0]
+    shade_cell(cell, "F5F5F5")
+    cell.text = ""
+    for idx, line in enumerate(code.split("\n")):
+        para = cell.paragraphs[0] if idx == 0 else cell.add_paragraph()
+        _add_marked_runs(para, line, highlight)
+    set_col_widths(table, [Inches(6.5)])
 
 
 def build(data, out_path):
@@ -211,6 +259,31 @@ def build(data, out_path):
         for item in quick:
             p = document.add_paragraph(style="List Bullet")
             add_run(p, item, size=10)
+
+    # Evidence appendix (optional): captioned proof for significant findings. Each
+    # item is {"caption": "..."} plus either an "image" (screenshot path) or a
+    # "code" snippet with an optional "highlight" (string or list) that marks the
+    # exact problem so the reader sees precisely where the error is.
+    evidence = data.get("evidence", [])
+    if evidence:
+        document.add_page_break()
+        section_heading(document, "Evidence appendix")
+        for item in evidence:
+            cap = document.add_paragraph()
+            cap.paragraph_format.space_before = Pt(10)
+            cap.paragraph_format.space_after = Pt(2)
+            add_run(cap, item.get("caption", ""), size=9, bold=True, color=ACCENT_RGB)
+            if item.get("code") is not None:
+                add_code_block(document, item["code"], item.get("highlight"))
+            elif item.get("image"):
+                img = item["image"]
+                if Path(img).exists():
+                    try:
+                        document.add_picture(img, width=Inches(6.5))
+                    except Exception as e:
+                        add_run(document.add_paragraph(), f"[image not embedded: {e}]", size=8, italic=True)
+                else:
+                    add_run(document.add_paragraph(), f"[missing image: {img}]", size=8, italic=True)
 
     document.save(str(out_path))
 

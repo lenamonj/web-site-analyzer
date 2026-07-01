@@ -15,7 +15,11 @@ Before any subjective review, run the passive scanner suite. It produces hard, r
 
 `python .claude/skills/review-site/tools/scan_site.py [url] [extra_page_url ...]`
 
-With no url it reads `TARGET.txt`. Pass extra in-scope page URLs to scan them too. If `python` is not found, use `py`. It writes:
+With no url it reads `TARGET.txt`. Pass extra in-scope page URLs to scan them too. If `python` is not found, use `py`.
+
+One-command alternative: `python .claude/skills/review-site/tools/run_review.py [url]` runs discovery, scans the whole proposed page set, and also writes `<slug>_exec_report_data.draft.json` in one step. Prefer it when the default scope rules apply; run the tools separately when you need to hand-pick the page set.
+
+It writes:
 - `planning/_evidence/<slug>_scan.json` - full structured results, one verdict (pass, warn, fail, info) and a note per check.
 - `planning/_evidence/<slug>_scan_summary.md` - every failing check and warning in one list, ready to fold into the gameplan.
 
@@ -23,11 +27,13 @@ What it measures, passively, with a citable verdict per check:
 - HTTP security: HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners.
 - TLS: negotiated protocol, certificate issuer, days to expiry, hostname coverage, legacy TLS 1.0/1.1 probe.
 - DNS email-auth: SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, over DNS-over-HTTPS.
-- SEO and on-page: title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD structured data, hreflang, image alt, robots.txt, sitemap.xml.
+- Crawlability (host-level, checked once per run): robots.txt presence and its sitemap references, XML sitemap reachability.
+- SEO and on-page: title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD structured data, hreflang, image alt.
 - Accessibility (structural subset): document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons.
 - Link health and mixed content: broken links (only 404, 410, and 5xx count as broken; 401/403/429 are reported as access-restricted, not broken), redirects, and insecure http resources on an https page.
 - Page weight: initial HTML transfer size, a static resource-weight floor, render-blocking head scripts, third-party origins, whether the HTML is served compressed (gzip/brotli), and the Cache-Control posture. JS-loaded resources are not counted, so the weight is a floor.
 - Readability: Flesch Reading Ease, Flesch-Kincaid grade level, and average sentence length on the page's visible text (heuristic; inconclusive on client-rendered pages).
+- Privacy and tracking (static-only): third-party resource origins, known tracker/analytics hosts, likely tracking pixels, and whether a cookie-consent mechanism is detectable in the markup.
 
 The scan JSON also carries a `scorecard`: each category rolled into a posture band (Strong, Adequate, Weak, Poor, or Not measured) from its own pass/warn/fail checks, plus an overall band. Use it to frame the executive summary and populate the report scorecard. It is an aggregation of measured checks, not a benchmark, so present it as such. When more than one page is scanned, the JSON also carries a `cross_page` block flagging titles or meta descriptions reused across pages. Each page is fetched and parsed once and shared across all page-level scanners, so a multi-page run stays light on the target.
 
@@ -69,7 +75,9 @@ Write `planning/<slug>_GAMEPLAN.md` with exactly these sections:
 7. Open questions and assumptions: anything needing a human decision or that you could not verify.
 
 ## Deliverable 2: executive report
-1. Distill the gameplan into `planning/_evidence/exec_report_data.json` using this schema:
+1. Seed the data file mechanically, then apply judgement. Run
+   `python .claude/skills/review-site/tools/draft_report_data.py planning/_evidence/<slug>_scan.json`
+   (already done if you used run_review.py). It writes `<slug>_exec_report_data.draft.json` with the measured scorecard rows and fail/warn findings filled in and the judgement fields empty. Review the draft severities, rewrite the bottom line for a CEO, add recommendations and quick wins from the gameplan, and save the result as `planning/_evidence/exec_report_data.json` using this schema:
    {
      "site": "<display name, e.g. example.com>",
      "target_url": "<full URL>",
@@ -87,8 +95,13 @@ Write `planning/<slug>_GAMEPLAN.md` with exactly these sections:
      "recommendations": [
        {"rank": 1, "recommendation": "<fix>", "impact": "<expected impact>", "effort": "S|M|L"}
      ],
-     "quick_wins": ["<item>", "<item>"]
+     "quick_wins": ["<item>", "<item>"],
+     "evidence": [
+       {"caption": "<what this proves>", "code": "<literal snippet>", "highlight": "<substring(s) to mark>"},
+       {"caption": "<what this shows>", "image": "planning/_evidence/<screenshot>.png"}
+     ]
    }
+   `evidence` is optional: when present, the builder renders an appendix of captioned proof (a shaded code box with the problem substring highlighted, or an embedded screenshot). Use it only for the findings that most need showing, not for every row.
 2. Run the builder from the repo root:
    `python .claude/skills/review-site/build_exec_report.py planning/_evidence/exec_report_data.json planning/<slug>_Executive_Report.docx`
    If `python` is not found, try `py`. If `python-docx` is missing, run `pip install python-docx` first.

@@ -4,17 +4,16 @@ Passive SEO and on-page technical scanner.
 
 Extracts the objective, countable facts an SEO review depends on: title and
 meta description quality, canonical and hreflang, Open Graph and Twitter cards,
-heading hierarchy, structured data, image alt coverage, plus robots.txt and
-sitemap.xml presence. It reports counts and observations, never a fabricated
-score. Client-rendered pages are flagged so empty-body results are not mistaken
-for clean results.
+heading hierarchy, structured data, and image alt coverage. robots.txt and
+sitemap checks are host-level facts and live in scan_crawl. It reports counts
+and observations, never a fabricated score. Client-rendered pages are flagged
+so empty-body results are not mistaken for clean results.
 
 Usage:
     python scan_seo.py <url> [output.json]
 """
 
 import sys
-from urllib.parse import urljoin
 
 import common
 import htmlmeta
@@ -92,30 +91,6 @@ def _image_alt_check(images, inconclusive):
             "note": "All static images carry an alt attribute."}
 
 
-def _robots_txt_check(base):
-    res = common.http_fetch(urljoin(base, "/robots.txt"), want_body=True)
-    body = res.get("body") or ""
-    if res["final_status"] == 200 and "user-agent" in body.lower():
-        sitemaps = [l.split(":", 1)[1].strip() for l in body.splitlines()
-                    if l.lower().startswith("sitemap:")]
-        return {"present": True, "status": res["final_status"], "sitemaps": sitemaps,
-                "verdict": "pass",
-                "note": f"robots.txt present with {len(sitemaps)} sitemap reference(s)."}
-    return {"present": False, "status": res["final_status"], "sitemaps": [],
-            "verdict": "warn", "note": "No usable robots.txt at /robots.txt."}
-
-
-def _sitemap_check(base, robots_sitemaps):
-    candidate = robots_sitemaps[0] if robots_sitemaps else urljoin(base, "/sitemap.xml")
-    res = common.http_fetch(candidate, want_body=True)
-    body = res.get("body") or ""
-    if res["final_status"] == 200 and ("<urlset" in body.lower() or "<sitemapindex" in body.lower()):
-        return {"url": candidate, "status": res["final_status"], "verdict": "pass",
-                "note": "XML sitemap reachable and well-formed at the root level."}
-    return {"url": candidate, "status": res["final_status"], "verdict": "warn",
-            "note": "No XML sitemap found at the expected location."}
-
-
 def _scan(url, page=None):
     url = common.normalize_url(url)
     if page is None:
@@ -127,7 +102,6 @@ def _scan(url, page=None):
     base = res["final_url"]
     inconclusive = render["likely_client_rendered"]
 
-    robots_txt = _robots_txt_check(base)
     checks = {
         "title": {**_len_verdict(parsed["title"], TITLE_MIN, TITLE_MAX, "Title"),
                   "value": parsed["title"]},
@@ -160,8 +134,6 @@ def _scan(url, page=None):
                      "verdict": "info",
                      "note": f"{len(parsed['hreflang'])} hreflang alternate(s)."},
         "image_alt": _image_alt_check(parsed["images"], inconclusive),
-        "robots_txt": robots_txt,
-        "sitemap": _sitemap_check(base, robots_txt.get("sitemaps", [])),
     }
 
     tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}

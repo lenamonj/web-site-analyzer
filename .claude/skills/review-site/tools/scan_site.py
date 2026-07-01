@@ -23,6 +23,7 @@ import common
 import htmlmeta
 import registry
 
+
 # Page-level scanners as (key, module, label), discovered from the central
 # registry so adding a scanner never requires editing this orchestrator.
 PAGE_SCANNERS = [(e.key, e.module, e.label) for e in registry.page_tools()]
@@ -34,20 +35,6 @@ def _safe_scan(fn, *args, tool_name="scan", **kwargs):
         return fn(*args, **kwargs)
     except Exception as e:
         return {"tool": tool_name, "ok": False, "error": f"{type(e).__name__}: {e}"}
-
-
-def repo_root():
-    return Path(common.__file__).resolve().parents[4]
-
-
-def read_target_file():
-    path = repo_root() / "TARGET.txt"
-    if not path.exists():
-        return None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip().lower().startswith("http"):
-            return line.strip()
-    return None
 
 
 def _collect_issues(label, checks):
@@ -93,17 +80,24 @@ def check_cross_page(page_scans):
 
 
 def build_scorecard(host_scans, page_scans):
-    """Roll the per-check verdicts up into one band per category plus an overall band."""
-    cats = {e.category: common.verdicts_of(host_scans.get(e.key)) for e in registry.host_tools()}
-    page_keys = tuple(e.key for e in registry.page_tools())
-    for key in page_keys:
+    """Roll the per-check verdicts up into one band per category plus an overall band.
+
+    Both scopes bucket by the tool's category, and buckets merge, so any number
+    of tools can share a scorecard category (scan_crawl and scan_seo both roll
+    into "seo"). Host categories always appear (Not measured when empty); a
+    page category appears once any page produced verdicts for it.
+    """
+    cats = {}
+    for e in registry.host_tools():
+        cats.setdefault(e.category, []).extend(common.verdicts_of(host_scans.get(e.key)))
+    for e in registry.page_tools():
         acc = []
         for ps in page_scans:
-            sr = ps.get(key)
+            sr = ps.get(e.key)
             if sr and sr.get("ok"):
                 acc += common.verdicts_of(sr)
         if acc:
-            cats[key] = acc
+            cats.setdefault(e.category, []).extend(acc)
     categories = {name: common.grade(v) for name, v in cats.items()}
     overall = common.grade([v for lst in cats.values() for v in lst])
     return {"overall": overall, "categories": categories}
@@ -209,7 +203,7 @@ def main():
     if args and ("." in args[0] or args[0].lower().startswith("http")):
         target, extra = args[0], args[1:]
     else:
-        target, extra = read_target_file(), args
+        target, extra = common.read_target_file(), args
     if not target:
         print("No target given and no http line found in TARGET.txt")
         sys.exit(1)

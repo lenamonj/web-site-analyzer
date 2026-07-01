@@ -16,6 +16,16 @@ serves.
 _No unblocked todo items remain. See the LOOP COMPLETE entry in JOURNAL.md._
 
 ## Done
+- [x] **E1 (done)** Architecture review pass. New host-scoped `scan_crawl.py`
+  (robots/sitemap out of the page-scoped scan_seo; no more per-page refetch or
+  duplicated warnings), scorecard bucketing fixed to merge by category,
+  correctness fixes (tracker suffix matching, viewport maximum-scale parse per
+  WCAG 1.4.4, title RCDATA buffering + close(), Referrer-Policy unsafe-url
+  warn, common.repo_root/read_target_file dedup), bounded ThreadPoolExecutor
+  fan-out in scan_links/scan_performance, and `run_review.py` one-command
+  pipeline (discover -> scan -> draft). Specs in PLAN.md sections 9-11. Suite
+  73 -> 90 tests, all pass; live smoke on example.com verified end to end. See
+  JOURNAL.md 2026-07-01 E1.
 - [x] **D1 (done)** Report-data generator. Added `tools/draft_report_data.py`:
   `draft(scan)` turns a `<slug>_scan.json` into a first-draft
   exec_report_data.json - measured scorecard rows and findings from fail/warn

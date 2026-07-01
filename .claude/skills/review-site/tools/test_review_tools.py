@@ -11,15 +11,20 @@ deterministic. Run from the tools directory:
 """
 
 import gzip
+import json
+import tempfile
 import unittest
 import zlib
+from pathlib import Path
 
 import common
 import discover_pages as disco
 import draft_report_data as drpt
 import htmlmeta
 import registry as reg
+import run_review
 import scan_accessibility as a11y
+import scan_crawl as crawl
 import scan_dns_email as dns
 import scan_http_security as sec
 import scan_links as links
@@ -283,6 +288,8 @@ class TestLinkChecks(unittest.TestCase):
         self.assertEqual(links._classify(403), "restricted")
         self.assertEqual(links._classify(401), "restricted")
         self.assertEqual(links._classify(429), "restricted")
+        # LinkedIn's non-standard 999 anti-bot code is restricted, not broken.
+        self.assertEqual(links._classify(999), "restricted")
         self.assertEqual(links._classify(200), "ok")
         self.assertEqual(links._classify(None), "unreachable")
 
@@ -482,11 +489,11 @@ class TestRegistry(unittest.TestCase):
     def test_registry_lists_all_scanners(self):
         ids = {e.tool_id for e in reg.REGISTRY}
         self.assertEqual(ids, {
-            "scan_http_security", "scan_tls", "scan_dns_email",
+            "scan_http_security", "scan_tls", "scan_dns_email", "scan_crawl",
             "scan_seo", "scan_accessibility", "scan_links",
             "scan_performance", "scan_readability", "scan_privacy",
         })
-        self.assertEqual(len(reg.host_tools()), 3)
+        self.assertEqual(len(reg.host_tools()), 4)
         self.assertEqual(len(reg.page_tools()), 6)
 
     def test_every_entry_exposes_a_callable_scan(self):
@@ -756,6 +763,157 @@ class TestDraftReportData(unittest.TestCase):
         big = {**self.SCAN, "issues": {"fail": [{"scan": "x", "check": "c", "verdict": "fail",
                "note": "n"}] * 40, "warn": []}}
         self.assertEqual(len(drpt.draft(big)["findings"]), drpt.MAX_FINDINGS)
+
+
+class TestTitleExtraction(unittest.TestCase):
+    def test_title_is_rcdata_with_charrefs_converted(self):
+        # Per HTML5, <title> is RCDATA: markup inside is literal text and
+        # character references are converted, matching what browsers show.
+        out = htmlmeta.parse_html("<html><head><title>Acme &amp; Co</title></head></html>")
+        self.assertEqual(out["title"], "Acme & Co")
+
+    def test_unclosed_title_does_not_swallow_the_page(self):
+        out = htmlmeta.parse_html("<html><head><title>Acme<meta name='x'></head>"
+                                  "<body><p>Body text should not become the title.</p></body></html>")
+        self.assertEqual(out["title"], "Acme")
+
+    def test_first_title_wins(self):
+        out = htmlmeta.parse_html("<title>First</title><title>Second</title>")
+        self.assertEqual(out["title"], "First")
+
+
+class TestViewportZoom(unittest.TestCase):
+    def _check(self, viewport):
+        return a11y._viewport_check({"meta_viewport": viewport})
+
+    def test_generous_maximum_scale_is_not_flagged(self):
+        # maximum-scale=10 contains the substring "maximum-scale=1"; the old
+        # substring test warned on it even though 10x zoom is allowed.
+        self.assertEqual(self._check("width=device-width, maximum-scale=10")["verdict"], "pass")
+        self.assertEqual(self._check("width=device-width, maximum-scale=5.0")["verdict"], "pass")
+
+    def test_restrictive_zoom_warns(self):
+        self.assertEqual(self._check("maximum-scale=1")["verdict"], "warn")
+        self.assertEqual(self._check("maximum-scale=1.5")["verdict"], "warn")
+        self.assertEqual(self._check("user-scalable=no")["verdict"], "warn")
+        self.assertEqual(self._check("user-scalable=0")["verdict"], "warn")
+
+    def test_plain_viewport_passes(self):
+        self.assertEqual(self._check("width=device-width, initial-scale=1")["verdict"], "pass")
+
+
+class TestReferrerPolicy(unittest.TestCase):
+    def test_matrix(self):
+        self.assertEqual(sec.check_referrer_policy({})["verdict"], "fail")
+        self.assertEqual(sec.check_referrer_policy(
+            {"referrer-policy": "strict-origin-when-cross-origin"})["verdict"], "pass")
+        self.assertEqual(sec.check_referrer_policy(
+            {"referrer-policy": "unsafe-url"})["verdict"], "warn")
+
+
+class TestPrivacyHostMatching(unittest.TestCase):
+    def test_suffix_not_substring(self):
+        self.assertTrue(privacy._host_matches("www.facebook.com", "facebook.com"))
+        self.assertTrue(privacy._host_matches("facebook.com", "facebook.com"))
+        self.assertFalse(privacy._host_matches("notfacebook.com", "facebook.com"))
+        self.assertFalse(privacy._host_matches("facebook.com.evil.example", "facebook.com"))
+
+    def test_match_trackers_ignores_lookalike_hosts(self):
+        self.assertEqual(privacy._match_trackers(["https://notfacebook.com/x.js"]), {})
+        found = privacy._match_trackers(["https://www.google-analytics.com/ga.js"])
+        self.assertEqual(found.get("google-analytics.com"), "analytics")
+
+
+class TestCrawl(unittest.TestCase):
+    """scan_crawl owns robots/sitemap; scan_seo no longer refetches them per page."""
+
+    def setUp(self):
+        self._orig = common.http_fetch
+
+    def tearDown(self):
+        common.http_fetch = self._orig
+
+    @staticmethod
+    def _fetch_returning(status, body):
+        def fetch(url, *a, **k):
+            return {"ok": status is not None, "error": None if status else "stubbed down",
+                    "requested_url": url, "hops": [{"url": url, "status": status, "headers": {}}]
+                    if status else [],
+                    "final_url": url, "final_status": status, "final_headers": {},
+                    "content_type": "text/plain", "content_encoding": "", "body": body,
+                    "body_bytes": len(body or ""), "uncompressed_bytes": len(body or ""),
+                    "elapsed_ms": 1}
+        return fetch
+
+    def test_robots_present_passes_and_reports_sitemaps(self):
+        common.http_fetch = self._fetch_returning(
+            200, "User-agent: *\nDisallow:\nSitemap: https://x.example/sm.xml\n")
+        c = crawl.check_robots_txt("https://x.example/")
+        self.assertEqual(c["verdict"], "pass")
+        self.assertEqual(c["sitemaps"], ["https://x.example/sm.xml"])
+
+    def test_robots_missing_warns_and_fetch_failure_is_info(self):
+        common.http_fetch = self._fetch_returning(404, "not found")
+        self.assertEqual(crawl.check_robots_txt("https://x.example/")["verdict"], "warn")
+        common.http_fetch = self._fetch_returning(None, None)
+        self.assertEqual(crawl.check_robots_txt("https://x.example/")["verdict"], "info")
+
+    def test_sitemap_verdicts(self):
+        common.http_fetch = self._fetch_returning(200, '<?xml version="1.0"?><urlset></urlset>')
+        self.assertEqual(crawl.check_sitemap("https://x.example/", [])["verdict"], "pass")
+        common.http_fetch = self._fetch_returning(200, "<html>soft 404</html>")
+        self.assertEqual(crawl.check_sitemap("https://x.example/", [])["verdict"], "warn")
+        common.http_fetch = self._fetch_returning(None, None)
+        self.assertEqual(crawl.check_sitemap("https://x.example/", [])["verdict"], "info")
+
+    def test_seo_scan_no_longer_carries_host_checks(self):
+        parsed = htmlmeta.parse_html(GOOD_PAGE)
+        render = htmlmeta.render_assessment(parsed, GOOD_PAGE)
+        ctx = {"url": "https://acme.example/", "parsed": parsed, "render": render,
+               "res": {"ok": True, "body": GOOD_PAGE, "final_url": "https://acme.example/",
+                       "error": None}}
+        r = seo.scan("https://acme.example/", page=ctx)
+        self.assertNotIn("robots_txt", r["checks"])
+        self.assertNotIn("sitemap", r["checks"])
+
+    def test_scorecard_merges_crawl_into_seo_category(self):
+        host = {"crawl": {"checks": {"robots_txt": {"verdict": "warn"},
+                                     "sitemap": {"verdict": "warn"}}}}
+        pages = [{"seo": {"ok": True, "checks": {"title": {"verdict": "pass"},
+                                                 "headings": {"verdict": "pass"}}}}]
+        sc = site.build_scorecard(host, pages)
+        g = sc["categories"]["seo"]
+        # 2 pass + 2 warn merged into one bucket -> score 0.75, no key overwrite.
+        self.assertEqual((g["pass"], g["warn"], g["fail"]), (2, 2, 0))
+        self.assertEqual(g["score"], 0.75)
+
+
+class TestRunReview(unittest.TestCase):
+    def test_choose_pages_excludes_target_and_homepage(self):
+        disco_result = {"homepage": "https://x.example/",
+                        "proposed_review_set": ["https://x.example/", "https://x.example/a",
+                                                "https://x.example/b"]}
+        out = run_review.choose_pages("https://x.example/", disco_result)
+        self.assertEqual(out, ["https://x.example/a", "https://x.example/b"])
+
+    def test_choose_pages_on_failed_discovery(self):
+        self.assertEqual(run_review.choose_pages("https://x.example/", {"ok": False}), [])
+
+    def test_pipeline_offline_writes_all_artifacts(self):
+        orig = (common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy)
+        common.http_fetch, common.tls_info, common.doh_query = _canned_fetch, _canned_tls, _canned_doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                out = run_review.pipeline("https://acme.example/", out_dir=td)
+                for key in ("json_path", "digest_path", "draft_path"):
+                    self.assertTrue(Path(out[key]).exists(), f"{key} not written")
+                draft = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
+                for key in ("site", "scorecard", "findings", "recommendations"):
+                    self.assertIn(key, draft)
+                self.assertGreaterEqual(len(out["scan"]["pages_scanned"]), 1)
+        finally:
+            common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy = orig
 
 
 if __name__ == "__main__":

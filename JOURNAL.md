@@ -361,3 +361,44 @@ verified; the working tree is clean; the build is green.
   auto-drafts the report data before the human refines it.
 
 RALPH: NOTHING TO DO
+
+## 2026-07-01 - E1: Architecture review pass (crawl extraction, scorecard merge, correctness fixes, concurrency, pipeline)
+
+**Task:** Full design/architecture review of the analyzer, fixing the defects
+found and closing the biggest capability gaps. Specs added to PLAN.md sections
+9-11 before implementation, per convention.
+
+**What I did:**
+- `scan_crawl.py` (new, host-scoped, CATEGORY "seo"): robots.txt and sitemap
+  checks moved out of the page-scoped `scan_seo`, which had been refetching both
+  files once per page, duplicating identical warnings per page, and skewing the
+  seo grade by page count. Registered as the 4th host tool.
+- `scan_site.build_scorecard`: buckets both scopes by `category` and merges,
+  fixing the latent key-vs-category inconsistency where a page bucket silently
+  overwrote a host bucket with the same name. crawl + seo now share "seo".
+- Correctness fixes: `scan_privacy` tracker matching is exact/suffix host match
+  (a substring test also matched lookalikes like notfacebook.com);
+  `scan_accessibility` viewport check parses maximum-scale and warns below 2
+  per WCAG 1.4.4 (the substring test false-positived on maximum-scale=10);
+  `htmlmeta` buffers <title> text, calls close() so an unclosed title is
+  flushed, and bounds the malformed case; `scan_http_security` warns on
+  Referrer-Policy: unsafe-url; `common.repo_root()`/`read_target_file()`
+  deduplicate target resolution (discover_pages no longer mkdirs the evidence
+  dir as a side effect of finding the repo root).
+- Concurrency: `scan_links` and `scan_performance` run their fan-out through a
+  bounded ThreadPoolExecutor (8 workers, executor.map preserves order), so a
+  page of slow links no longer takes minutes serially.
+- `run_review.py` (new): one-command pipeline discover -> scan -> digest ->
+  draft exec_report_data. Not a scanner; composes registered tools only.
+
+**What I verified:**
+- Suite grew 73 -> 90 tests, all pass, still offline and <0.1s.
+- Live smoke: `python run_review.py https://example.com` wrote scan JSON,
+  digest, and draft; draft rendered through build_exec_report.py (38KB docx).
+- Two-page live scan shows crawl issues once per run (not once per page) and a
+  merged seo bucket.
+
+**Next:** the docs (README, CLAUDE.md, SKILL.md) were stale before this pass
+(no privacy, registry, or draft generator mentions); updated in the same
+commit. Remaining candidate: per-run resource cache so shared assets are not
+re-measured on every page.

@@ -238,16 +238,27 @@ def tls_info(host, port=443, timeout=DEFAULT_TIMEOUT):
                 "protocol": None, "cipher": None, "cert": None}
 
 
-def evidence_dir():
-    """planning/_evidence relative to the repo root.
+def repo_root():
+    """This file lives at .claude/skills/review-site/tools/common.py, so the
+    repo root is four parents up (tools -> review-site -> skills -> .claude -> root)."""
+    return Path(__file__).resolve().parents[4]
 
-    This file lives at .claude/skills/review-site/tools/common.py, so the repo
-    root is four parents up (tools -> review-site -> skills -> .claude -> root).
-    """
-    repo_root = Path(__file__).resolve().parents[4]
-    d = repo_root / "planning" / "_evidence"
+
+def evidence_dir():
+    d = repo_root() / "planning" / "_evidence"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def read_target_file():
+    """First http line from TARGET.txt at the repo root, or None."""
+    path = repo_root() / "TARGET.txt"
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip().lower().startswith("http"):
+            return line.strip()
+    return None
 
 
 def write_json(path, obj):

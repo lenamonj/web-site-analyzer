@@ -13,6 +13,7 @@ Usage:
 
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlparse
 
 import common
@@ -20,6 +21,10 @@ import htmlmeta
 
 MAX_LINKS = 30          # bound total runtime; report when more exist
 LINK_TIMEOUT = 8
+# Bounded fan-out. Eight concurrent requests is comparable to a browser's
+# per-host connection pool, so the probe stays polite to the target while a
+# page full of slow or dead links no longer takes minutes serially.
+MAX_WORKERS = 8
 SKIP_SCHEMES = ("mailto:", "tel:", "javascript:", "data:", "#")
 
 CATEGORY = "links"
@@ -48,15 +53,15 @@ def _candidate_links(anchors, base):
 
 def _classify(status):
     """
-    Only a 404/410 or a 5xx is a defensible 'broken' verdict. A 401/403/429 is
-    access controlled or rate limited (frequently bot protection on a link that
-    works in a real browser), so it is reported as 'restricted', never broken. A
-    connection failure is 'unreachable' (ambiguous: could be a block or a real
-    outage), also not counted as broken.
+    Only a 404/410 or a real 5xx server error is a defensible 'broken' verdict. A
+    401/403/429, or a non-standard high code like LinkedIn's 999, is access
+    controlled or bot protection on a link that works in a real browser, so it is
+    reported as 'restricted', never broken. A connection failure is 'unreachable'
+    (ambiguous: could be a block or a real outage), also not counted as broken.
     """
     if status is None:
         return "unreachable"
-    if status in (404, 410) or status >= 500:
+    if status in (404, 410) or (500 <= status < 600):
         return "broken"
     if status >= 400:
         return "restricted"
@@ -118,7 +123,13 @@ def _scan(url, page=None):
 
     candidates = _candidate_links(parsed["anchors"], base)
     truncated = len(candidates) > MAX_LINKS
-    checked = [_check_one(u, common.host_of(base)) for u in candidates[:MAX_LINKS]]
+    sample = candidates[:MAX_LINKS]
+    page_host = common.host_of(base)
+    checked = []
+    if sample:
+        # executor.map preserves input order, so results stay deterministic.
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(sample))) as pool:
+            checked = list(pool.map(lambda u: _check_one(u, page_host), sample))
 
     broken = [c for c in checked if c["state"] == "broken"]
     unreachable = [c for c in checked if c["state"] == "unreachable"]

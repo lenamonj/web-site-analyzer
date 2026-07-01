@@ -15,6 +15,7 @@ Usage:
 
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlparse
 
 import common
@@ -23,6 +24,7 @@ import scan_dns_email as dns
 
 MAX_RESOURCES = 40
 RES_TIMEOUT = 8
+MAX_WORKERS = 8          # browser-like fan-out; polite but not serial
 
 CATEGORY = "performance"
 SCOPE = "page"
@@ -114,7 +116,12 @@ def _scan(url, page=None):
 
     resources = _collect_resources(html, parsed, base)
     truncated = len(resources) > MAX_RESOURCES
-    measured = [_measure(r) for r in resources[:MAX_RESOURCES]]
+    sample = resources[:MAX_RESOURCES]
+    measured = []
+    if sample:
+        # executor.map preserves input order, so results stay deterministic.
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(sample))) as pool:
+            measured = list(pool.map(_measure, sample))
 
     by_type = {}
     for r in measured:

@@ -77,6 +77,16 @@ def check_simple_header(headers, name, expected=None, fail_note="Header missing.
     return {"present": True, "value": val, **_verdict("pass", "Present.")}
 
 
+def check_referrer_policy(headers):
+    val = headers.get("referrer-policy")
+    if not val:
+        return {"present": False, "value": None, **_verdict("fail", "No Referrer-Policy set.")}
+    if "unsafe-url" in val.lower():
+        return {"present": True, "value": val,
+                **_verdict("warn", "Referrer-Policy is unsafe-url; full URLs leak to all destinations.")}
+    return {"present": True, "value": val, **_verdict("pass", "Present.")}
+
+
 def check_clickjacking(headers):
     xfo = headers.get("x-frame-options")
     csp = headers.get("content-security-policy", "")
@@ -169,8 +179,7 @@ def _scan(url):
         "x_content_type_options": check_simple_header(
             headers, "X-Content-Type-Options", "nosniff",
             "No X-Content-Type-Options. MIME sniffing possible."),
-        "referrer_policy": check_simple_header(
-            headers, "Referrer-Policy", None, "No Referrer-Policy set."),
+        "referrer_policy": check_referrer_policy(headers),
         "permissions_policy": check_simple_header(
             headers, "Permissions-Policy", None, "No Permissions-Policy set."),
         "cookies": check_cookies(headers),
