@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Claude Code local state (loop state, machine-local settings). The recursive
+# form also catches loop state accidentally written under a nested .claude dir.
+.claude/*.local.md
+**/.claude/*.local.md
+.claude/settings.local.json
+
+# Generated review outputs. They are reproducible per run and may contain
+# findings about third-party sites that should not enter git history.
+planning/*_GAMEPLAN.md
+planning/*_Executive_Report.docx
+planning/_evidence/*_scan.json
+planning/_evidence/*_scan_summary.md
+planning/_evidence/exec_report_data.json
+planning/_evidence/*.png
+planning/_evidence/*.jpg
+planning/_evidence/*.jpeg
+# Keep the folder placeholder tracked: planning/_evidence/README.txt
+
+# OS cruft
+Thumbs.db
+.DS_Store

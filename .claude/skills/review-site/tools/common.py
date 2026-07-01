@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""
+Shared helpers for the passive website evaluation tools.
+
+Pure standard library so the scanners install nothing beyond Python itself.
+Everything here is passive: plain GET/HEAD requests, a TLS handshake, and
+DNS-over-HTTPS lookups. No logins, no form posts, no path brute forcing.
+"""
+
+import gzip
+import json
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.request
+import zlib
+from pathlib import Path
+from urllib.parse import urlparse, urljoin
+
+# A truthful, identifiable user agent. Do not impersonate a real browser.
+USER_AGENT = "website-review-bot/1.0 (+passive-audit; contact via site owner)"
+DEFAULT_TIMEOUT = 15
+MAX_BODY_BYTES = 3_000_000  # cap downloads so a huge page cannot stall a run
+
+
+def normalize_url(url):
+    """Add a scheme if the target was given bare (example.com -> https://example.com)."""
+    url = url.strip()
+    if not url:
+        return url
+    if not urlparse(url).scheme:
+        url = "https://" + url
+    return url
+
+
+def host_of(url):
+    return urlparse(normalize_url(url)).hostname or ""
+
+
+def slug_of(url):
+    """Match the slug rule in CLAUDE.md: drop scheme and leading www., dots to hyphens."""
+    host = host_of(url)
+    if host.startswith("www."):
+        host = host[4:]
+    return host.replace(".", "-")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Disable urllib's automatic redirect following so we can record each hop."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _opener():
+    return urllib.request.build_opener(_NoRedirect)
+
+
+def _headers_to_dict(msg):
+    """Fold an HTTPMessage into a JSON-friendly dict. Repeated keys become lists."""
+    out = {}
+    for key, value in msg.items():
+        lk = key.lower()
+        if lk in out:
+            if isinstance(out[lk], list):
+                out[lk].append(value)
+            else:
+                out[lk] = [out[lk], value]
+        else:
+            out[lk] = value
+    return out
+
+
+def _decompress(raw, encoding):
+    """Decode gzip or deflate bodies. Servers may compress even when not asked."""
+    enc = (encoding or "").lower().strip()
+    try:
+        if enc == "gzip" or (not enc and raw[:2] == b"\x1f\x8b"):
+            return gzip.decompress(raw)
+        if enc == "deflate":
+            try:
+                return zlib.decompress(raw)
+            except zlib.error:
+                return zlib.decompress(raw, -zlib.MAX_WBITS)  # raw deflate stream
+        if enc == "br":
+            try:
+                import brotli
+                return brotli.decompress(raw)
+            except Exception:
+                return raw  # brotli is not stdlib; leave the body as-is if unavailable
+    except (OSError, zlib.error):
+        return raw
+    return raw
+
+
+def _decode_body(raw, content_type):
+    charset = "utf-8"
+    if content_type and "charset=" in content_type.lower():
+        charset = content_type.lower().split("charset=", 1)[1].split(";")[0].strip() or "utf-8"
+    try:
+        return raw.decode(charset, errors="replace")
+    except (LookupError, TypeError):
+        return raw.decode("utf-8", errors="replace")
+
+
+def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want_body=True,
+               extra_headers=None):
+    """
+    Fetch a URL, following redirects manually so the full chain is visible.
+
+    Advertises gzip/deflate and decompresses the body, since some servers
+    compress regardless. body_bytes is the transfer size over the wire (still
+    compressed when the server compressed); uncompressed_bytes is the decoded
+    size. Returns a dict with: ok, error, hops, final_url, final_status,
+    final_headers, body, body_bytes, uncompressed_bytes, content_type,
+    content_encoding, elapsed_ms.
+    """
+    url = normalize_url(url)
+    opener = _opener()
+    hops = []
+    current = url
+    started = time.perf_counter()
+    body = None
+    body_bytes = 0
+    uncompressed_bytes = 0
+    content_type = ""
+    content_encoding = ""
+    base_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"}
+    if extra_headers:
+        base_headers.update(extra_headers)
+
+    try:
+        for _ in range(max_redirects + 1):
+            req = urllib.request.Request(current, method=method, headers=base_headers)
+            try:
+                resp = opener.open(req, timeout=timeout)
+                status = resp.status
+                headers = resp.headers
+            except urllib.error.HTTPError as e:
+                # A 3xx with redirects disabled surfaces here; still a valid response.
+                resp = e
+                status = e.code
+                headers = e.headers
+
+            hop_headers = _headers_to_dict(headers)
+            hops.append({"url": current, "status": status, "headers": hop_headers})
+
+            location = headers.get("Location")
+            if status in (301, 302, 303, 307, 308) and location:
+                current = urljoin(current, location)
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                continue
+
+            content_type = headers.get("Content-Type", "")
+            content_encoding = headers.get("Content-Encoding", "")
+            if want_body and method != "HEAD":
+                raw = resp.read(MAX_BODY_BYTES)
+                body_bytes = len(raw)
+                decompressed = _decompress(raw, content_encoding)
+                uncompressed_bytes = len(decompressed)
+                body = _decode_body(decompressed, content_type)
+            try:
+                resp.close()
+            except Exception:
+                pass
+            break
+
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        final = hops[-1]
+        return {
+            "ok": True,
+            "error": None,
+            "requested_url": url,
+            "hops": hops,
+            "final_url": final["url"],
+            "final_status": final["status"],
+            "final_headers": final["headers"],
+            "content_type": content_type,
+            "content_encoding": content_encoding,
+            "body": body,
+            "body_bytes": body_bytes,
+            "uncompressed_bytes": uncompressed_bytes,
+            "elapsed_ms": elapsed_ms,
+        }
+    except Exception as e:
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "requested_url": url,
+            "hops": hops,
+            "final_url": hops[-1]["url"] if hops else url,
+            "final_status": hops[-1]["status"] if hops else None,
+            "final_headers": hops[-1]["headers"] if hops else {},
+            "content_type": content_type,
+            "content_encoding": content_encoding,
+            "body": body,
+            "body_bytes": body_bytes,
+            "uncompressed_bytes": uncompressed_bytes,
+            "elapsed_ms": elapsed_ms,
+        }
+
+
+def doh_query(name, rtype, timeout=DEFAULT_TIMEOUT):
+    """
+    Resolve a DNS record over HTTPS (Google public resolver).
+
+    Passive and cross-platform: no local resolver library needed. Returns a dict
+    with status and the raw answer list, or an error string.
+    """
+    q = f"https://dns.google/resolve?name={urllib.parse.quote(name)}&type={rtype}"
+    req = urllib.request.Request(q, headers={"accept": "application/dns-json", "User-Agent": USER_AGENT})
+    try:
+        data = json.load(urllib.request.urlopen(req, timeout=timeout))
+        answers = [a.get("data", "") for a in data.get("Answer", [])]
+        return {"ok": True, "error": None, "status": data.get("Status"),
+                "ad": data.get("AD", False), "answers": answers, "raw": data.get("Answer", [])}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "status": None,
+                "ad": False, "answers": [], "raw": []}
+
+
+def tls_info(host, port=443, timeout=DEFAULT_TIMEOUT):
+    """Complete one TLS handshake and report the negotiated protocol and certificate."""
+    import socket
+    ctx = ssl.create_default_context()
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as ss:
+                return {"ok": True, "error": None, "protocol": ss.version(),
+                        "cipher": ss.cipher(), "cert": ss.getpeercert()}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "protocol": None, "cipher": None, "cert": None}
+
+
+def evidence_dir():
+    """planning/_evidence relative to the repo root.
+
+    This file lives at .claude/skills/review-site/tools/common.py, so the repo
+    root is four parents up (tools -> review-site -> skills -> .claude -> root).
+    """
+    repo_root = Path(__file__).resolve().parents[4]
+    d = repo_root / "planning" / "_evidence"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def write_json(path, obj):
+    Path(path).write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def enable_utf8_stdout():
+    """Windows consoles default to cp1252 and choke on site content. Force UTF-8."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+
+def print_json(obj):
+    """Print JSON to stdout as UTF-8 bytes so non-ASCII page content never crashes the tool."""
+    text = json.dumps(obj, indent=2, ensure_ascii=False)
+    try:
+        sys.stdout.buffer.write((text + "\n").encode("utf-8"))
+        sys.stdout.buffer.flush()
+    except Exception:
+        print(json.dumps(obj, indent=2, ensure_ascii=True))

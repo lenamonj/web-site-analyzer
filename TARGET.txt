@@ -1,0 +1,3 @@
+# The website to analyze. Change the URL below, then run /review-site.
+# Only the first line beginning with http is used. The leading comment lines are ignored.
+https://www.contoso.com

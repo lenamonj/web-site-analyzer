@@ -1,0 +1,193 @@
+# Website Review
+
+> Point Claude Code at any website and get two deliverables: a full prioritized gameplan and a CEO-level Word report. Retargeting is a one-line change.
+
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Scanners](https://img.shields.io/badge/scanners-zero%20dependencies-2ea44f)
+![Tests](https://img.shields.io/badge/tests-unittest%20passing-2ea44f)
+![Scope](https://img.shields.io/badge/scope-passive%20%26%20external-orange)
+![Report](https://img.shields.io/badge/report-python--docx-informational)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+
+---
+
+## What you get
+
+Every run produces two files in `planning\`, named by the target's domain so runs on different sites never overwrite each other:
+
+| File | What it is |
+| --- | --- |
+| `planning\<slug>_GAMEPLAN.md` | The full working plan: findings by category, prioritized recommendations, quick wins, strategic initiatives, open questions. |
+| `planning\<slug>_Executive_Report.docx` | A one-to-two page CEO-level Word summary: bottom line, severity-ranked findings, preferred fixes, quick wins. |
+
+`<slug>` is the host with the scheme and any leading `www.` removed and dots turned into hyphens (for example `example.com` becomes `example-com`).
+
+The review covers six categories: Content, Design, Accessibility, Navigation and IA, SEO and Technical, and a passive Security posture pass (TLS, security headers, cookie flags, information disclosure, SPF and DMARC).
+
+---
+
+## How it works
+
+Claude Code reads `CLAUDE.md` and the `review-site` skill, resolves the target, then runs a bundled suite of passive evaluation tools that produce hard, reproducible measurements. It reads those measurements plus the in-scope page content, forms the findings, and writes both deliverables. The Word report's formatting is owned by a bundled `python-docx` builder, so the report looks identical on every run regardless of the target or who invokes it.
+
+```
+TARGET.txt  ->  scanner suite (measured evidence)  ->  gameplan  ->  executive report
+                        |                                  ^
+                   WebFetch + optional browser ------------+
+```
+
+---
+
+## Evaluation tools
+
+The review does not rely on the model eyeballing headers or markup. A pure standard-library, strictly passive scanner suite runs first and writes its results to `planning\_evidence\<slug>_scan.json` (plus a readable `<slug>_scan_summary.md`). Each check carries a `pass`, `warn`, `fail`, or `info` verdict and a short note that findings cite directly. Run it by hand any time:
+
+```
+python .claude\skills\review-site\tools\discover_pages.py                             (propose an in-scope page set)
+python .claude\skills\review-site\tools\scan_site.py                                 (reads TARGET.txt)
+python .claude\skills\review-site\tools\scan_site.py https://example.com https://example.com/about
+```
+
+| Tool | Measures (passively) |
+| --- | --- |
+| `discover_pages.py` | Reads the sitemap and homepage nav to propose a representative in-scope review set (scoping helper; fetches only the homepage and sitemaps) |
+| `scan_http_security.py` | HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners |
+| `scan_tls.py` | Negotiated TLS protocol, certificate issuer, days to expiry, hostname coverage, legacy TLS 1.0/1.1 probe |
+| `scan_dns_email.py` | SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, over DNS-over-HTTPS |
+| `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt, robots.txt, sitemap.xml |
+| `scan_accessibility.py` | Document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons |
+| `scan_links.py` | Broken links (404/410/5xx only), redirects, access-restricted links, and insecure http resources on an https page (mixed content) |
+| `scan_performance.py` | Initial HTML transfer size, static resource-weight floor, render-blocking head scripts, third-party origins, gzip/brotli compression, Cache-Control posture |
+| `scan_readability.py` | Flesch Reading Ease, Flesch-Kincaid grade level, average sentence length (heuristic, on visible text) |
+| `scan_site.py` | Orchestrates all of the above across the target and extra pages, rolls the results into a per-category scorecard, writes the evidence JSON and digest |
+
+Each run also produces a **scorecard**: every category is rolled up into a posture band (Strong, Adequate, Weak, Poor, or Not measured) from its own pass/warn/fail checks, plus an overall band. It is a transparent aggregation of measured checks, not an invented benchmark, and the raw counts always travel with it. The executive report renders this scorecard when present. A multi-page run adds a **cross-page** check for titles or meta descriptions reused across pages. Each page is fetched and parsed once and shared across all page-level scanners, so scanning stays light on the target, and one scanner failing never aborts the run.
+
+The scanners detect client-rendered (JavaScript) pages and mark their structural SEO, accessibility, and readability checks inconclusive rather than reporting an empty static body as clean. Those pages need the optional browser pass for real content.
+
+---
+
+## Prerequisites
+
+- Claude Code (this is a Claude Code project, not a standalone script).
+- Python 3.10 or later on your PATH. Verify with `python --version`.
+- The scanner suite needs nothing beyond the standard library.
+- `python-docx`, for the Word report only (installed in the Install step below).
+- Optional: Playwright MCP, for real visual and screenshot analysis. Without it the design section is limited to what is inferable from HTML and CSS (structural-only). Everything else still runs. Playwright MCP needs Node.js 18 or later.
+
+---
+
+## Install (Windows)
+
+1. Extract the zip into a working folder, for example `website-review\`. It merges with any existing `planning\` folder rather than replacing it. Confirm the hidden folder landed with `dir /a` (you should see `.claude`).
+
+2. Install the report dependency:
+
+   ```
+   pip install python-docx
+   ```
+
+3. Optional, for visual analysis. Requires Node.js 18 or later:
+
+   ```
+   claude mcp add playwright npx @playwright/mcp@latest
+   claude mcp list
+   ```
+
+4. Open Claude Code in that folder:
+
+   ```
+   cd website-review
+   claude
+   ```
+
+---
+
+## Usage
+
+1. Set the target. Open `TARGET.txt` and put your URL on the line beginning with `http`:
+
+   ```
+   https://www.example.com
+   ```
+
+2. Run the review inside Claude Code:
+
+   ```
+   /review-site
+   ```
+
+   Or ask directly: "Run the website review against the URL in TARGET.txt, write the gameplan, and build the executive report."
+
+3. Collect the outputs from `planning\`.
+
+If Claude Code stops after writing the gameplan on the first run, tell it explicitly to build the executive report.
+
+---
+
+## Run it on a different site
+
+Edit the one URL line in `TARGET.txt` and run `/review-site` again. That is the only change needed to retarget.
+
+To point at a site for a single run without editing the file, give Claude Code the URL in chat ("run the review against https://another.com"). A URL given in chat overrides `TARGET.txt` for that run.
+
+---
+
+## Tests
+
+The scanner suite ships with an offline, zero-dependency regression suite (Python `unittest`). It drives the HTML parser and every pure grading function with inline fixtures, so it needs no network and runs in well under a second:
+
+```
+cd .claude\skills\review-site\tools
+python -m unittest test_review_tools
+```
+
+---
+
+## Scope and safety
+
+- The review is passive and external. It inspects what any browser or DNS resolver already receives: page HTML, response headers, cookies, TLS, and public DNS records.
+- It does not log in, submit forms, brute force paths, or port scan.
+- Only run this against sites you own or are authorized to assess. The gameplan states the target and the authorization assumption at the top.
+- "Any website" is subject to that authorization and to the site not hard-blocking automated fetches. Pages behind a login wall or aggressive bot protection may return limited or no data, and the report will say so rather than guess.
+
+---
+
+## Project structure
+
+```
+CLAUDE.md                                    Project context and output contract
+TARGET.txt                                   The URL to analyze (edit this to retarget)
+README.md                                    This file
+.claude\
+  settings.json                              Permission allowlist for the skill
+  skills\review-site\
+    SKILL.md                                 The review workflow and rules
+    build_exec_report.py                     Deterministic python-docx report builder
+    tools\                                   Passive evaluation tools (pure standard library)
+      common.py                              Shared fetch (gzip-aware), DoH, TLS, JSON helpers
+      htmlmeta.py                            Single-pass HTML extractor (SEO and a11y share it)
+      discover_pages.py                      Sitemap/nav page-discovery scoping helper
+      scan_http_security.py                  Security-header and cookie posture
+      scan_tls.py                            TLS and certificate posture
+      scan_dns_email.py                      SPF, DMARC, DKIM, MX, DNSSEC
+      scan_seo.py                            On-page SEO and technical structure
+      scan_accessibility.py                  Static accessibility checks
+      scan_links.py                          Link health and mixed content
+      scan_performance.py                    Page-weight and resource analysis
+      scan_readability.py                    Readability metrics on visible text
+      scan_site.py                           Orchestrator + scorecard, writes the evidence JSON
+      test_review_tools.py                   Offline unit tests for the suite
+planning\
+  _evidence\                                 Scan JSON and digest, screenshots, notes, exec_report_data.json
+    README.txt
+```
+
+---
+
+## Notes
+
+- If `python` is not found, the skill falls back to `py`.
+- All generated output avoids em dashes and en dashes by design.
+- To rebrand the Word report, change the single `ACCENT_HEX` constant near the top of `build_exec_report.py`.
+- Findings never carry fabricated metrics, scores, or vulnerabilities. Anything not measured is labeled as such.

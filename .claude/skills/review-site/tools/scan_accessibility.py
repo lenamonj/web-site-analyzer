@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""
+Static accessibility scanner (WCAG-informed, structural subset).
+
+Checks the accessibility signals that are decidable from HTML alone: document
+language and title, image alt coverage, form controls with a programmatic
+label, heading order, landmark structure, generic or empty link text, positive
+tabindex, and empty buttons. Colour contrast and focus order need a rendered
+page and are out of scope here; the browser pass covers those. Client-rendered
+pages are flagged so an empty body is not scored as accessible.
+
+Usage:
+    python scan_accessibility.py <url> [output.json]
+"""
+
+import sys
+
+import common
+import htmlmeta
+
+
+def _accessible_name(control, labels_for):
+    if control["id"] and control["id"] in labels_for:
+        return "label[for]"
+    if control["wrapped_by_label"]:
+        return "wrapping label"
+    if control["aria_label"]:
+        return "aria-label"
+    if control["aria_labelledby"]:
+        return "aria-labelledby"
+    if control["title"]:
+        return "title"
+    return None
+
+
+def _lang_check(parsed):
+    if parsed["html_lang"]:
+        return {"value": parsed["html_lang"], "verdict": "pass", "note": "Document language declared."}
+    return {"value": None, "verdict": "fail", "note": "No lang attribute; screen readers cannot pick a voice."}
+
+
+def _title_check(parsed):
+    if parsed["title"]:
+        return {"value": parsed["title"], "verdict": "pass", "note": "Document has a title."}
+    return {"value": None, "verdict": "fail", "note": "No document title."}
+
+
+def _viewport_check(parsed):
+    vp = parsed["meta_viewport"] or ""
+    if "user-scalable=no" in vp.replace(" ", "").lower() or "maximum-scale=1" in vp.replace(" ", "").lower():
+        return {"value": vp, "verdict": "warn", "note": "Viewport blocks zoom; pinch-zoom disabled."}
+    if vp:
+        return {"value": vp, "verdict": "pass", "note": "Viewport allows zoom."}
+    return {"value": None, "verdict": "warn", "note": "No viewport meta."}
+
+
+def _alt_check(parsed, inconclusive):
+    images = parsed["images"]
+    if inconclusive or not images:
+        note = ("Images client-rendered; not assessable statically."
+                if inconclusive else "No images in static HTML.")
+        return {"count": len(images), "missing_alt": 0, "verdict": "info", "note": note}
+    missing = [i["src"] for i in images if not i["has_alt"]]
+    if missing:
+        return {"count": len(images), "missing_alt": len(missing), "examples": missing[:5],
+                "verdict": "fail", "note": f"{len(missing)} of {len(images)} images have no alt attribute."}
+    return {"count": len(images), "missing_alt": 0, "verdict": "pass",
+            "note": "Every static image has an alt attribute."}
+
+
+def _form_check(parsed, inconclusive):
+    controls = parsed["form_controls"]
+    if inconclusive or not controls:
+        note = ("Forms client-rendered; not assessable statically."
+                if inconclusive else "No form controls in static HTML.")
+        return {"count": len(controls), "unlabeled": 0, "verdict": "info", "note": note}
+    unlabeled, placeholder_only = [], []
+    for c in controls:
+        src = _accessible_name(c, set(parsed["labels_for"]))
+        if not src:
+            if c["placeholder"]:
+                placeholder_only.append(c.get("name") or c.get("id") or c["type"])
+            else:
+                unlabeled.append(c.get("name") or c.get("id") or c["type"])
+    if unlabeled:
+        return {"count": len(controls), "unlabeled": len(unlabeled),
+                "examples": unlabeled[:5], "placeholder_only": placeholder_only,
+                "verdict": "fail", "note": f"{len(unlabeled)} control(s) have no programmatic label."}
+    if placeholder_only:
+        return {"count": len(controls), "unlabeled": 0, "placeholder_only": placeholder_only,
+                "verdict": "warn", "note": f"{len(placeholder_only)} control(s) rely on placeholder only."}
+    return {"count": len(controls), "unlabeled": 0, "verdict": "pass",
+            "note": "All form controls have a programmatic label."}
+
+
+def _heading_check(parsed, inconclusive):
+    if inconclusive:
+        return {"verdict": "info", "note": "Headings client-rendered; not assessable statically."}
+    levels = [h["level"] for h in parsed["headings"]]
+    if not levels:
+        return {"verdict": "warn", "note": "No headings found; content structure is flat."}
+    h1 = levels.count(1)
+    skips, prev = [], 0
+    for lv in levels:
+        if prev and lv > prev + 1:
+            skips.append(f"h{prev}->h{lv}")
+        prev = lv
+    if h1 != 1 or skips:
+        issues = []
+        if h1 != 1:
+            issues.append(f"{h1} H1 elements")
+        if skips:
+            issues.append("skipped levels " + ", ".join(skips))
+        return {"h1_count": h1, "skips": skips, "verdict": "warn",
+                "note": "Heading order issues: " + "; ".join(issues) + "."}
+    return {"h1_count": h1, "skips": [], "verdict": "pass", "note": "Logical heading order."}
+
+
+def _landmark_check(parsed, inconclusive):
+    if inconclusive:
+        return {"verdict": "info", "note": "Landmarks client-rendered; not assessable statically."}
+    landmarks = set(parsed["landmarks"])
+    roles = set(r.lower() for r in parsed["roles"])
+    has_main = "main" in landmarks or "main" in roles
+    has_nav = "nav" in landmarks or "navigation" in roles
+    if has_main and has_nav:
+        return {"landmarks": sorted(landmarks), "verdict": "pass",
+                "note": "Main and navigation landmarks present."}
+    missing = [x for x, ok in (("main", has_main), ("nav", has_nav)) if not ok]
+    return {"landmarks": sorted(landmarks), "verdict": "warn",
+            "note": f"Missing landmark(s): {', '.join(missing)}."}
+
+
+def _link_text_check(parsed, inconclusive):
+    anchors = parsed["anchors"]
+    if inconclusive or not anchors:
+        note = ("Links client-rendered; not assessable statically."
+                if inconclusive else "No links in static HTML.")
+        return {"count": len(anchors), "verdict": "info", "note": note}
+    generic = set(parsed["generic_link_text_set"])
+    empty, vague = [], []
+    for a in anchors:
+        text = (a["text"] or "").strip().lower()
+        if not text and not a["aria_label"]:
+            empty.append(a["href"])
+        elif text in generic and not a["aria_label"]:
+            vague.append(text)
+    if empty:
+        return {"count": len(anchors), "empty_links": len(empty), "vague_links": len(vague),
+                "examples": empty[:5], "verdict": "fail",
+                "note": f"{len(empty)} link(s) have no discernible text."}
+    if vague:
+        return {"count": len(anchors), "empty_links": 0, "vague_links": len(vague),
+                "verdict": "warn", "note": f"{len(vague)} link(s) use generic text like 'click here'."}
+    return {"count": len(anchors), "empty_links": 0, "vague_links": 0,
+            "verdict": "pass", "note": "Link text is descriptive."}
+
+
+def scan(url, page=None):
+    url = common.normalize_url(url)
+    if page is None:
+        page = htmlmeta.fetch_page(url)
+    res, parsed, render = page["res"], page["parsed"], page["render"]
+    if not res["ok"] and not res["body"]:
+        return {"tool": "scan_accessibility", "target": url, "ok": False, "error": res["error"]}
+
+    inconclusive = render["likely_client_rendered"]
+
+    checks = {
+        "document_language": _lang_check(parsed),
+        "document_title": _title_check(parsed),
+        "viewport_zoom": _viewport_check(parsed),
+        "image_alt": _alt_check(parsed, inconclusive),
+        "form_labels": _form_check(parsed, inconclusive),
+        "heading_order": _heading_check(parsed, inconclusive),
+        "landmarks": _landmark_check(parsed, inconclusive),
+        "link_text": _link_text_check(parsed, inconclusive),
+        "positive_tabindex": {
+            "count": parsed["positive_tabindex"],
+            "verdict": "warn" if parsed["positive_tabindex"] else "pass",
+            "note": (f"{parsed['positive_tabindex']} element(s) use a positive tabindex."
+                     if parsed["positive_tabindex"] else "No positive tabindex values.")},
+        "empty_buttons": {
+            "count": parsed["buttons_empty"],
+            "verdict": "warn" if parsed["buttons_empty"] and not inconclusive else "info" if inconclusive else "pass",
+            "note": (f"{parsed['buttons_empty']} button(s) have no accessible text."
+                     if parsed["buttons_empty"] else "No empty buttons in static HTML.")},
+    }
+
+    tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
+    for c in checks.values():
+        tally[c["verdict"]] = tally.get(c["verdict"], 0) + 1
+
+    return {
+        "tool": "scan_accessibility",
+        "target": url,
+        "final_url": res["final_url"],
+        "ok": True,
+        "render": render,
+        "note": "Structural subset only. Colour contrast and focus order require the browser pass.",
+        "summary": tally,
+        "checks": checks,
+    }
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python scan_accessibility.py <url> [output.json]")
+        sys.exit(1)
+    result = scan(sys.argv[1])
+    if len(sys.argv) >= 3:
+        common.write_json(sys.argv[2], result)
+        print(f"Wrote {sys.argv[2]}")
+    else:
+        common.print_json(result)
+
+
+if __name__ == "__main__":
+    main()
