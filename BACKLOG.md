@@ -13,12 +13,18 @@ serves.
 
 ## Phase D - Reporting automation
 
-- [ ] **D1 (todo, P3)** Spec and prototype generating a first-draft
-  `exec_report_data.json` from `<slug>_scan.json` (scorecard + top fails/warns as
-  findings), leaving human-authored findings to be layered on top. Design in
-  PLAN.md first. Depends on A1.
+_No unblocked todo items remain. See the LOOP COMPLETE entry in JOURNAL.md._
 
 ## Done
+- [x] **D1 (done)** Report-data generator. Added `tools/draft_report_data.py`:
+  `draft(scan)` turns a `<slug>_scan.json` into a first-draft
+  exec_report_data.json - measured scorecard rows and findings from fail/warn
+  checks (draft severity fail->High, warn->Medium), leaving recommendations,
+  quick_wins, and the CEO narrative for a human. Default output is a
+  `.draft.json` so it never clobbers hand-authored data. Spec in PLAN.md section
+  8. Added 5 unit tests; end-to-end smoke verified scan -> draft -> rendered docx
+  (build_exec_report.py consumed it, wrote a valid 38KB Word file). Suite 73
+  tests, all pass. See JOURNAL.md 2026-07-01 D1.
 - [x] **C2 (done)** Implement `scan_privacy.py`. Built to the PLAN.md section 7
   spec: page scope, CATEGORY="privacy", regex extraction of script/iframe/img,
   reuse of `scan_dns_email.registrable_domain`, embedded KNOWN_TRACKERS/

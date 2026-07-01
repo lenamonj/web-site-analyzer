@@ -16,6 +16,7 @@ import zlib
 
 import common
 import discover_pages as disco
+import draft_report_data as drpt
 import htmlmeta
 import registry as reg
 import scan_accessibility as a11y
@@ -703,6 +704,58 @@ class TestPrivacy(unittest.TestCase):
         r = privacy.scan("https://acme.example/", page=self._ctx(SPA_SHELL))
         self.assertEqual(r["checks"]["known_trackers"]["verdict"], "info")
         self.assertEqual(r["checks"]["third_party_origins"]["verdict"], "info")
+
+
+class TestDraftReportData(unittest.TestCase):
+    SCAN = {
+        "host": "example.com", "slug": "example-com", "target": "https://example.com",
+        "measured_at_utc": "2026-07-01T12:00:00Z",
+        "pages_scanned": ["https://example.com"],
+        "totals": {"fail": 2, "warn": 1},
+        "scorecard": {"overall": {"band": "Weak"},
+                      "categories": {
+                          "security": {"band": "Poor", "pass": 0, "warn": 1, "fail": 6, "score": 0.07},
+                          "seo": {"band": "Adequate", "pass": 4, "warn": 3, "fail": 0, "score": 0.79}}},
+        "issues": {
+            "fail": [{"scan": "http_security", "check": "hsts", "verdict": "fail", "note": "No HSTS."},
+                     {"scan": "a11y:https://example.com", "check": "image_alt",
+                      "verdict": "fail", "note": "Images missing alt."}],
+            "warn": [{"scan": "seo:https://example.com", "check": "title",
+                      "verdict": "warn", "note": "Title short."}]},
+    }
+
+    def test_top_level_fields(self):
+        d = drpt.draft(self.SCAN)
+        self.assertEqual(d["site"], "example.com")
+        self.assertEqual(d["target_url"], "https://example.com")
+        self.assertEqual(d["date"], "2026-07-01")
+        self.assertEqual(d["recommendations"], [])
+        self.assertEqual(d["quick_wins"], [])
+        self.assertTrue(d["bottom_line"].startswith("DRAFT"))
+
+    def test_scorecard_overall_is_a_band_string(self):
+        d = drpt.draft(self.SCAN)
+        self.assertEqual(d["scorecard"]["overall"], "Weak")
+        self.assertEqual({r["category"] for r in d["scorecard"]["rows"]}, {"security", "seo"})
+
+    def test_findings_map_severity_ordering_and_evidence(self):
+        d = drpt.draft(self.SCAN)
+        self.assertEqual([f["severity"] for f in d["findings"]], ["High", "High", "Medium"])
+        a11y = next(f for f in d["findings"] if f["area"] == "a11y")
+        self.assertEqual(a11y["evidence"], "https://example.com")
+        host = next(f for f in d["findings"] if f["area"] == "http_security")
+        self.assertIn("example-com_scan.json", host["evidence"])
+
+    def test_schema_has_every_builder_key(self):
+        d = drpt.draft(self.SCAN)
+        for key in ("site", "target_url", "date", "bottom_line", "scorecard",
+                    "findings", "recommendations", "quick_wins"):
+            self.assertIn(key, d)
+
+    def test_findings_are_capped(self):
+        big = {**self.SCAN, "issues": {"fail": [{"scan": "x", "check": "c", "verdict": "fail",
+               "note": "n"}] * 40, "warn": []}}
+        self.assertEqual(len(drpt.draft(big)["findings"]), drpt.MAX_FINDINGS)
 
 
 if __name__ == "__main__":

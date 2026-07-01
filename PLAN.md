@@ -241,7 +241,48 @@ Non-goals: no JS execution, no network calls to trackers, no downloaded
 blocklists, no attempt to verify actual cookie writes (a static scan cannot). The
 tool reports what the static HTML reveals and labels the limitation.
 
-## 8. Open design questions
+## 8. Design: draft_report_data (Phase D; task D1)
+Purpose: cut the manual transcription between the passive scan and the executive
+report by drafting `exec_report_data.json` from `<slug>_scan.json`. It fills only
+the mechanical, measured parts and leaves judgement to a human, so it never
+fabricates severities, recommendations, or a narrative.
+
+Tool: `tools/draft_report_data.py`, `draft(scan) -> dict` plus a CLI
+`python draft_report_data.py <scan.json> [output.json]`. Default output is
+`<slug>_exec_report_data.draft.json` in the evidence dir, a distinct name so it
+never clobbers a hand-authored `exec_report_data.json`.
+
+What it fills (all copied or derived from measured scan data):
+- `site` = scan `host`; `target_url` = scan `target`; `date` = date part of
+  `measured_at_utc`.
+- `scorecard`: `overall` mapped to the band STRING (the builder expects a string,
+  not the scan's nested dict), and one `row` per scorecard category with
+  `{category, band, detail}` where detail is the measured `pass/warn/fail` counts
+  and score.
+- `findings`: from `issues.fail` then `issues.warn` (fails first, capped at
+  MAX_FINDINGS). Each issue becomes `{area, finding, evidence, severity}`. Area
+  and evidence are split from the issue's `scan` label ("label:url" -> area label
+  + url; a host label -> area label + a `<slug>_scan.json` reference). Severity is
+  a transparent DRAFT default (fail -> High, warn -> Medium) for a human to
+  adjust; this is a stated mapping, not a fabricated score.
+- `bottom_line`: a factual, measured one-liner explicitly prefixed "DRAFT
+  (rewrite for the CEO)" so no invented narrative ships by accident.
+
+What it leaves empty for the human: `recommendations` and `quick_wins` (both
+`[]`). `build_exec_report.py` uses `data.get(...)` with defaults and skips empty
+sections, so a draft renders cleanly and the human layers judgement on top.
+
+Non-goals: no severity/priority inference beyond the stated fail/warn default, no
+recommendation text, no competitor or benchmark data. The generator is a
+transcription aid, not an analyst.
+
+Tests (ship with D1): offline unit tests over a synthetic scan dict for the
+top-level fields, the overall-band-as-string mapping, the findings severity and
+evidence mapping and ordering, and schema completeness; plus a smoke run that
+drafts from a real `<slug>_scan.json` and renders it through
+`build_exec_report.py`.
+
+## 9. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

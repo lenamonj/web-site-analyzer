@@ -290,3 +290,74 @@ local-only.
 `exec_report_data.json` from `<slug>_scan.json` (scorecard + top fails/warns as
 findings), leaving human-authored findings to layer on top. Design in PLAN.md
 first, then a minimal generator with tests.
+
+---
+
+## 2026-07-01 - D1: Report-data generator (spec + build)
+
+**Task:** D1. Spec and build a generator that drafts `exec_report_data.json` from
+a scan result, filling the mechanical parts and leaving judgement to a human.
+Small and well-bounded (smaller than C2), so spec + build fit one iteration; not
+split.
+
+**What I did:**
+- Read `build_exec_report.py` first to pin the exact consumed schema: it uses
+  `data.get(...)` with defaults and skips empty sections, and `scorecard.overall`
+  must be a band STRING (not the scan's nested dict). That drove the design.
+- Wrote PLAN.md section 8 (spec) and added `tools/draft_report_data.py`:
+  `draft(scan)` maps scan `host`/`target`/`measured_at_utc` to site/target/date,
+  the scorecard categories to `{category, band, detail}` rows with the overall
+  band as a string, and `issues.fail`+`issues.warn` (fails first, capped at
+  MAX_FINDINGS=15) to findings with a transparent draft severity
+  (fail->High, warn->Medium) and evidence split from the issue's `scan` label.
+  `recommendations` and `quick_wins` are left `[]` for a human. `bottom_line` is a
+  measured one-liner explicitly marked DRAFT. Default output is a `.draft.json`
+  so it never clobbers hand-authored data.
+- Added `TestDraftReportData` (5 tests): top-level fields, overall-band-as-string,
+  findings severity/ordering/evidence, schema completeness, and the findings cap.
+
+**What I verified:**
+- `python -m unittest test_review_tools` -> `Ran 73 tests ... OK` (was 68).
+- End-to-end smoke (in scratchpad): `scan_site.py` -> `draft_report_data.py` ->
+  `build_exec_report.py` produced a valid 38 KB .docx from the draft (12 findings,
+  9 scorecard rows including privacy, overall Adequate). The builder consumed the
+  draft with no missing keys, which is the real schema-conformance proof.
+
+**Notes:** D1 was the last backlog item. Git still local-only.
+
+---
+
+## 2026-07-01 - LOOP COMPLETE
+
+BACKLOG.md has no unblocked `todo` items remaining, so per the stop condition I am
+not inventing busywork. Summary for the human reviewer:
+
+**Delivered this loop (A0 -> D1), each verified and committed atomically:**
+- A0 bootstrap: PLAN.md / BACKLOG.md / JOURNAL.md seeded; git initialized.
+- A1: central tool registry; the orchestrator discovers scanners instead of
+  hardcoding them.
+- A2: offline contract-conformance test across the whole registry.
+- B1: tools declare their own `CATEGORY`/`SCOPE`; a `scan()` wrapper makes output
+  self-describing.
+- B2: single band logic in `common.grade`; every tool emits its own grade.
+- C1/C2: designed and built `scan_privacy`, a new passive dimension, added with
+  one new file plus one registry line (orchestrator untouched) - proof the
+  Phase A/B design met its goal.
+- D1: `draft_report_data.py`, drafting the executive-report JSON from the scan.
+
+**State:** 73 offline tests pass; a full scan -> draft -> docx pipeline is smoke-
+verified; the working tree is clean; the build is green.
+
+**No blocked items.**
+
+**Open design questions (PLAN.md section 9), for a human to decide:**
+- Whether to unify the host vs page `scan` signatures (currently kept split).
+- Configuring a git remote so the loop can push (commits are local-only today).
+
+**Candidate future work (NOT added as tasks; a human should prioritize):**
+- More passive dimensions noted in Phase C: content/IA structural checks,
+  robots/sitemap depth.
+- Wire `draft_report_data.py` into the `review-site` SKILL.md process so a run
+  auto-drafts the report data before the human refines it.
+
+RALPH: NOTHING TO DO
