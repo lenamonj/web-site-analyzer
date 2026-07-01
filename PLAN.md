@@ -73,9 +73,12 @@ Interface
 Output on success (check-based tools)
 ```
 {
-  "tool":   "<tool id, e.g. scan_seo>",   # required
-  "target": "<normalized url>",            # required
-  "ok":     true,                          # required
+  "tool":   "<tool id, e.g. scan_seo>",   # required; equals the registry tool_id
+  "target": "<normalized url>",            # required (host tools use "host")
+  "ok":     true,                          # page tools + scan_tls emit this;
+                                           # check-based host tools (http_security,
+                                           # dns_email) omit it and denote success
+                                           # by returning a non-empty "checks" map
   "checks": {                              # required for check-based tools
     "<check_name>": {
       "verdict": "pass" | "warn" | "fail" | "info",   # required per check
@@ -88,6 +91,14 @@ Output on success (check-based tools)
 ```
 A tool that cannot express per-check results (for example a failed TLS
 handshake) may instead return a single top-level `"verdict"`.
+
+Enforced (A2): `test_review_tools.TestToolContract` iterates the registry and
+asserts, offline, that every tool returns a dict, matches its `tool_id`, has
+valid per-check verdicts and notes (or a top-level verdict, or an `ok:false`
+failure with a non-empty `error`), and never raises on a network failure. The
+universal success invariant is "returns a non-empty `checks` map", not
+"`ok:true`", because the two host check tools degrade to warn/fail verdicts
+rather than failing hard.
 
 Output on failure
 ```
@@ -108,8 +119,8 @@ Registration: the tool must be discoverable through the central registry
    scorecard categories from it. Adding a tool no longer edits the orchestrator.
 2. Category and grade are assigned centrally in `scan_site.py`, not owned by
    the tool. A tool's output is therefore not fully self-describing. (Phase B.)
-3. The contract is not enforced by a test. A new tool can silently violate it.
-   (Phase A, task A2.)
+3. ~~The contract is not enforced by a test.~~ CLOSED (A2).
+   `TestToolContract` enforces section 4 across the whole registry, offline.
 
 ## 5. Tool registry design (implemented in A1)
 `tools/registry.py` is the single source of tool discovery:

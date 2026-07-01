@@ -84,3 +84,45 @@ remote, so commit is local only.
 
 **Next step:** Implement A2 (contract-conformance test) using `registry.REGISTRY`
 to enforce the section-4 contract for every current and future tool.
+
+---
+
+## 2026-07-01 - A2: Contract-conformance test
+
+**Task:** A2. Enforce the PLAN.md section-4 contract for every registered tool
+with an offline test, so a new or edited scanner that breaks the shape fails
+locally instead of silently.
+
+**What I did:**
+- Added `TestToolContract` to `test_review_tools.py` with canned network stubs
+  (`_canned_fetch`/`_canned_tls`/`_canned_doh` and `_down_*` variants). All
+  scanners reach the network only via `common.http_fetch`/`common.tls_info`/
+  `common.doh_query` (plus `scan_tls._probe_legacy`, a raw socket), so patching
+  those four in setUp/tearDown makes the whole suite run with zero real requests.
+- Three tests, each iterating `registry.REGISTRY` (all 8 tools):
+  1. success shape - stubbed-healthy target, asserts dict, `tool == tool_id`,
+     every check has a verdict in {pass,warn,fail,info} and a string note, and a
+     non-empty `checks` map.
+  2. no tool raises on network failure - stubbed-down primitives, asserts each
+     tool returns a conformant dict without raising.
+  3. `_safe_scan` wraps a raising tool as `ok:false` + error, for all 8 ids.
+
+**Design correction recorded:** the test surfaced that PLAN.md section 4
+overstated the contract. `scan_http_security` and `scan_dns_email` do NOT emit a
+top-level `ok` on success; they always return a `checks` map and degrade to
+warn/fail verdicts rather than failing hard. Amended section 4 so the universal
+success invariant is "non-empty `checks`", not "`ok:true`". No scanner code
+changed - the contract now matches the implementation instead of the reverse.
+
+**What I verified:**
+- `python -m unittest test_review_tools` -> `Ran 59 tests ... OK` (was 56).
+- Negative check (throwaway, not committed): confirmed `_assert_conformant`
+  rejects an invalid verdict, an `ok:false` without an error, and a mismatched
+  tool id. The test is not vacuous.
+
+**Notes:** Phase A (registry + contract enforcement) is now complete (A0, A1,
+A2 done). Git still local-only (no remote).
+
+**Next step:** B1 - make each scanner declare its own `CATEGORY` and `SCOPE`
+module constants and surface `category` in its return, with the registry reading
+that metadata from the module instead of restating it.

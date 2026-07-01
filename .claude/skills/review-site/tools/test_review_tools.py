@@ -507,5 +507,119 @@ class TestRegistry(unittest.TestCase):
         self.assertIsNone(reg.by_id("scan_nonexistent"))
 
 
+# Canned network responses so the contract test runs offline and fast. Every
+# scanner reaches the network only through common.http_fetch / common.tls_info /
+# common.doh_query (and scan_tls._probe_legacy), so stubbing those four covers
+# every tool without a single real request.
+VERDICTS = {"pass", "warn", "fail", "info"}
+
+
+def _canned_fetch(url, *args, **kwargs):
+    return {
+        "ok": True, "error": None, "requested_url": url,
+        "hops": [{"url": url, "status": 200, "headers": {}}],
+        "final_url": url, "final_status": 200,
+        "final_headers": {"content-type": "text/html; charset=utf-8",
+                          "cache-control": "max-age=3600"},
+        "content_type": "text/html; charset=utf-8", "content_encoding": "",
+        "body": GOOD_PAGE, "body_bytes": len(GOOD_PAGE),
+        "uncompressed_bytes": len(GOOD_PAGE), "elapsed_ms": 1,
+    }
+
+
+def _canned_tls(host, *args, **kwargs):
+    return {"ok": True, "error": None, "protocol": "TLSv1.3",
+            "cipher": ("TLS_AES_256_GCM_SHA384", "TLSv1.3", 256),
+            "cert": {"subject": ((("commonName", host),),),
+                     "issuer": ((("organizationName", "Test CA"),),),
+                     "subjectAltName": (("DNS", host),),
+                     "notAfter": "Jan 15 12:00:00 2035 GMT",
+                     "notBefore": "Jan 15 12:00:00 2024 GMT"}}
+
+
+def _canned_doh(name, rtype, *args, **kwargs):
+    return {"ok": True, "error": None, "status": 0, "ad": True,
+            "answers": ["v=spf1 -all"], "raw": [{"data": "v=spf1 -all"}]}
+
+
+def _down_fetch(url, *args, **kwargs):
+    return {"ok": False, "error": "stubbed offline", "requested_url": url,
+            "hops": [], "final_url": url, "final_status": None, "final_headers": {},
+            "content_type": "", "content_encoding": "", "body": None,
+            "body_bytes": 0, "uncompressed_bytes": 0, "elapsed_ms": 0}
+
+
+def _down_tls(host, *args, **kwargs):
+    return {"ok": False, "error": "stubbed offline", "protocol": None,
+            "cipher": None, "cert": None}
+
+
+def _down_doh(name, rtype, *args, **kwargs):
+    return {"ok": False, "error": "stubbed offline", "status": None,
+            "ad": False, "answers": [], "raw": []}
+
+
+class TestToolContract(unittest.TestCase):
+    """Every registered tool must satisfy the PLAN.md section 4 contract. Checked
+    offline by stubbing the network primitives, so a new tool that breaks the
+    shape (missing verdict, wrong tool id, raising on failure) fails CI here."""
+
+    TARGET = "https://acme.example/"
+
+    def setUp(self):
+        self._orig = (common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy)
+
+    def tearDown(self):
+        common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy = self._orig
+
+    def _patch(self, fetch, tlsinfo, doh):
+        common.http_fetch = fetch
+        common.tls_info = tlsinfo
+        common.doh_query = doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+
+    def _assert_conformant(self, entry, result):
+        self.assertIsInstance(result, dict, f"{entry.tool_id} did not return a dict")
+        self.assertEqual(result.get("tool"), entry.tool_id,
+                         f"{entry.tool_id} 'tool' field does not match its registry id")
+        if "checks" in result:
+            for name, c in result["checks"].items():
+                self.assertIn(c.get("verdict"), VERDICTS,
+                              f"{entry.tool_id}.{name} has an invalid verdict {c.get('verdict')!r}")
+                self.assertIsInstance(c.get("note"), str,
+                                      f"{entry.tool_id}.{name} has no string note")
+        else:
+            failed = result.get("ok") is False and bool(result.get("error"))
+            self.assertTrue(result.get("verdict") in VERDICTS or failed,
+                            f"{entry.tool_id} has no checks, no top-level verdict, and is not a failure")
+        if result.get("ok") is False:
+            self.assertTrue(result.get("error"),
+                            f"{entry.tool_id} reported ok:false without an error string")
+
+    def test_success_shape_for_every_registered_tool(self):
+        self._patch(_canned_fetch, _canned_tls, _canned_doh)
+        for entry in reg.REGISTRY:
+            result = entry.module.scan(self.TARGET)
+            self._assert_conformant(entry, result)
+            self.assertIn("checks", result, f"{entry.tool_id} produced no checks on a healthy target")
+
+    def test_no_tool_raises_on_network_failure(self):
+        self._patch(_down_fetch, _down_tls, _down_doh)
+        for entry in reg.REGISTRY:
+            try:
+                result = entry.module.scan(self.TARGET)
+            except Exception as e:
+                self.fail(f"{entry.tool_id} raised on network failure: {type(e).__name__}: {e}")
+            self._assert_conformant(entry, result)
+
+    def test_safe_scan_wraps_a_raising_tool_as_ok_false(self):
+        def boom(*a, **k):
+            raise RuntimeError("kaboom")
+        for entry in reg.REGISTRY:
+            wrapped = site._safe_scan(boom, self.TARGET, tool_name=entry.tool_id)
+            self.assertFalse(wrapped["ok"])
+            self.assertIn("RuntimeError", wrapped["error"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

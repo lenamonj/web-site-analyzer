@@ -7,14 +7,6 @@ serves.
 
 ## Phase A - Foundation (registry + contract enforcement)
 
-- [ ] **A2 (todo, P1)** Contract-conformance test. Add a test that iterates the
-  registry (A1, done) and, for each tool, calls `scan` against a canned in-memory page
-  context and asserts the section-4 contract: returns a dict, never raises,
-  `ok` present, on success has `tool` and either a `checks` map whose every
-  entry has a `verdict` in {pass,warn,fail,info} plus a `note`, or a valid
-  top-level `verdict`; on a forced failure returns `ok:false` with an `error`
-  string. Depends on A1.
-
 ## Phase B - Self-describing tools
 
 - [ ] **B1 (todo, P2)** Tool-owned category and scope. Give each scanner
@@ -46,6 +38,13 @@ serves.
   PLAN.md first. Depends on A1.
 
 ## Done
+- [x] **A2 (done)** Contract-conformance test. Added
+  `test_review_tools.TestToolContract` (3 tests, each sweeping all 8 registered
+  tools): offline success-shape check via stubbed network primitives,
+  no-tool-raises-on-network-failure, and `_safe_scan` wrapping. Suite now 59
+  tests, all pass. Amended PLAN.md section 4 to record the honest contract (the
+  two host check tools omit `ok` on success; success is denoted by a non-empty
+  `checks` map). See JOURNAL.md 2026-07-01 A2.
 - [x] **A1 (done)** Central tool registry. Added `tools/registry.py` (8 entries:
   3 host, 5 page). Refactored `scan_site.py` to build its host-scan set,
   `PAGE_SCANNERS`, and scorecard categories from the registry; removed the
