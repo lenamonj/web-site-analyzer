@@ -139,9 +139,9 @@ Registration: the tool must be discoverable through the central registry
 - `scan_site.py` builds its host-scan set, `PAGE_SCANNERS`, and scorecard
   categories by reading the registry instead of importing and listing scanners
   by hand. (Done in A1.)
-- Still to do (A2): a contract-conformance test that iterates the registry and
-  asserts every tool meets section 4 (callable `scan`, required keys, valid
-  verdicts, no raise on a canned page context).
+- Contract-conformance test (A2, done): `TestToolContract` iterates the registry
+  and asserts every tool meets section 4 (callable `scan`, required keys, valid
+  verdicts, surfaced category and grade, no raise on a canned page context).
 Adding a dimension then means: write the scanner to the contract, add one
 registry entry, add its tests. The orchestrator does not change.
 
@@ -152,15 +152,93 @@ behavior. (Highest priority.)
 Phase B - Self-describing tools: each tool declares its own `category` and
 scope, and emits its own `grade` via a shared helper, so output is
 self-contained. Registry reads metadata from the module.
-Phase C - Expansion: new passive dimensions, each spec'd here first. Candidates:
-privacy/tracker origins from static HTML, cookie-consent presence, basic
-content/IA structural checks, robots/sitemap depth. Visual design remains a
-browser-assisted manual step per SKILL.md, not a scanner.
+Phase C - Expansion: new passive dimensions, each spec'd here first. First
+dimension designed: `scan_privacy` (section 7 below; task C1 spec, C2 build).
+Later candidates: basic content/IA structural checks, robots/sitemap depth.
+Visual design remains a browser-assisted manual step per SKILL.md, not a scanner.
 Phase D - Reporting automation: optionally generate a first-draft
 `exec_report_data.json` directly from the scan JSON to cut manual transcription,
 keeping the human-authored findings on top.
 
-## 7. Open design questions
+## 7. Design: scan_privacy (Phase C; task C1 spec, implemented in C2)
+Purpose: passively surface third-party data-sharing and tracking exposure that is
+visible in a page's static HTML. It answers: which third-party origins does the
+page load resources from, which of those are known trackers, are there tracking
+pixels, and is a cookie-consent mechanism present.
+
+Contract conformance:
+- `scope = "page"`, `CATEGORY = "privacy"`, registry `label = "privacy"`. Module
+  constants `SCOPE`/`CATEGORY`; the public `scan()` wrapper stamps `category` and
+  `grade` (B1/B2 pattern).
+- `scan(url, page=None)`: reuse the shared htmlmeta snapshot; when `page` is None,
+  fetch once via `htmlmeta.fetch_page`.
+- Success returns `{tool:"scan_privacy", target, final_url, ok, render, summary,
+  checks}`; fetch failure returns `{tool, target, ok:false, error}`. Register one
+  page entry in `registry.py`.
+
+Passive, static-only extraction (no JS execution, no calls to trackers):
+- Resource hosts come from `<script src>` and `<iframe src>` (regex over
+  `res["body"]`, the same technique as `scan_performance._script_resources`; add
+  an iframe regex), plus `parsed["images"]` (src) and `parsed["links"]` (href
+  where rel is in {stylesheet, preconnect, dns-prefetch, prefetch, preload}).
+- `<img>` width/height are read by a small regex over the body to spot 1x1 or
+  zero-dimension pixels; `parsed["images"]` does not carry dimensions, so the
+  scanner owns this extraction rather than modifying the shared parser.
+- Third-party = the resource host's registrable domain differs from the page's.
+  Reuse `scan_dns_email.registrable_domain` (already reused by
+  `scan_performance`); no Public Suffix List dependency.
+
+Embedded reference lists (curated, small, explicit constants; a match is reported
+as a factual observation, never as a fabricated score or benchmark):
+- `KNOWN_TRACKERS`: map of tracker host substring -> category (analytics,
+  advertising, social, session-replay), covering widely used endpoints
+  (google-analytics.com, googletagmanager.com, doubleclick.net,
+  connect.facebook.net, hotjar.com, segment.[io|com], mixpanel.com,
+  fullstory.com, clarity.ms, bat.bing.com, and similar).
+- `CMP_HOSTS`: known consent-manager hosts (cookiebot.com, cookielaw.org /
+  onetrust, osano.com, trustarc.com, usercentrics, iubenda.com, cookieyes.com,
+  termly.io, quantcast).
+- `CONSENT_MARKERS`: id/class/text markers matched case-insensitively in the body
+  ("cookie-consent", "cookie-banner", "cookie-notice", "onetrust", "cmp",
+  "gdpr-consent", and similar).
+
+Checks (each a discrete finding with a verdict and an evidence note):
+1. `third_party_origins` (info): distinct third-party registrable domains found;
+   note lists the count and the domains (capped). Verdict is info because a raw
+   count has no authoritative threshold, so it is reported, not graded.
+2. `known_trackers` (pass|warn): warn if any `KNOWN_TRACKERS` host is present,
+   listing each matched host and its category; pass if none.
+3. `tracking_pixels` (pass|warn): warn if any `<img>` is 1x1 / zero-dimension or
+   loads from a `KNOWN_TRACKERS` host, with capped examples; pass if none. Note
+   the static limitation: JS-injected pixels are not visible.
+4. `cookie_consent` (pass|warn|info):
+   - detected (CMP host or consent marker) -> pass, noting static detection
+     cannot confirm the banner actually gates tracking before consent.
+   - not detected while known trackers or third-party resources are present ->
+     warn: trackers present without a detectable consent mechanism; review the
+     consent obligation.
+   - not detected and none present -> info.
+
+Client-rendered pages: if `render.likely_client_rendered`, set the
+resource-derived checks to info with a note that third-party resources load via
+JS and are absent from static HTML (mirrors `scan_seo`/`scan_accessibility`). An
+empty static body is never reported as privacy-clean.
+
+Grade: the shared wrapper derives it from the check verdicts via `common.grade`,
+so a page with known trackers and no consent grades lower, a clean page grades
+Strong, and an all-info (inconclusive) page grades Not measured.
+
+Tests (ship with C2): offline unit tests over inline HTML fixtures for
+first-vs-third-party detection, known-tracker matching, 1x1 pixel detection,
+CMP/marker detection, the `cookie_consent` verdict matrix, and the client-rendered
+inconclusive path. `TestToolContract` covers `scan_privacy` automatically once it
+is registered.
+
+Non-goals: no JS execution, no network calls to trackers, no downloaded
+blocklists, no attempt to verify actual cookie writes (a static scan cannot). The
+tool reports what the static HTML reveals and labels the limitation.
+
+## 8. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

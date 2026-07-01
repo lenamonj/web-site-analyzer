@@ -211,3 +211,41 @@ local-only.
 PLAN.md (third-party script/pixel origins and known-tracker hosts from static
 HTML, cookie-consent detection, per-origin findings). Design only; the
 implementation is C2. Keep it within the passive, stdlib-only constraints.
+
+---
+
+## 2026-07-01 - C1: Spec scan_privacy (design only)
+
+**Task:** C1. Design the first Phase C dimension - a passive privacy/tracker
+scanner - in PLAN.md before any code, per the loop's design-precedes-build rule.
+
+**What I did (design only, no scanner code):**
+- Confirmed data dependencies against the real code first (no fabrication):
+  `htmlmeta.parse_html` exposes `links` (rel/href) and `images` (src, no
+  dimensions) but not `<script>`/`<iframe>` srcs; `scan_performance` already
+  extracts scripts by regex over the raw body and reuses
+  `scan_dns_email.registrable_domain` for first-vs-third-party. So `scan_privacy`
+  can own small regex extractors (script/iframe/img dimensions) and reuse
+  `registrable_domain`, with no change to the shared parser.
+- Wrote PLAN.md section 7: full `scan_privacy` spec - page scope,
+  CATEGORY="privacy", contract-conformant returns, passive static-only
+  extraction, curated KNOWN_TRACKERS/CMP_HOSTS/CONSENT_MARKERS constants (matches
+  reported as observations, not benchmarks), four checks (third_party_origins
+  info; known_trackers pass/warn; tracking_pixels pass/warn; cookie_consent
+  pass/warn/info matrix), client-rendered inconclusive handling, grade via the
+  shared wrapper, the C2 test list, and explicit non-goals.
+- Renumbered "Open design questions" to section 8 and refreshed the stale A2 note
+  in section 5.
+
+**What I verified:**
+- Design task, so no scanner behavior to run. Ran `python -m unittest
+  test_review_tools` -> `Ran 60 tests ... OK` to confirm the docs-only change
+  broke nothing.
+- Cross-checked every data source the spec relies on exists (htmlmeta fields,
+  scan_performance regex pattern, `registrable_domain`).
+
+**Notes:** C2 is now unblocked. Git still local-only.
+
+**Next step:** C2 - implement `scan_privacy.py` to the section 7 spec and the
+shared contract, register it as a page tool (label "privacy"), and ship the
+offline unit tests plus a smoke run on example.com.

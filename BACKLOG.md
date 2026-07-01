@@ -11,13 +11,14 @@ serves.
 
 ## Phase C - Expansion (new passive dimensions, spec in PLAN.md first)
 
-- [ ] **C1 (todo, P3)** Spec a privacy/tracker scanner in PLAN.md: count
-  third-party script and pixel origins and known-tracker hosts from static HTML,
-  detect a cookie-consent mechanism, emit per-origin findings. Design only; no
-  code this task. Depends on A1, A2 (contract must be enforceable first).
-
-- [ ] **C2 (todo, P3, blocked-by C1)** Implement `scan_privacy.py` to the C1
-  spec and the shared contract, register it, add tests and a smoke run.
+- [ ] **C2 (todo, P3)** Implement `scan_privacy.py` to the PLAN.md section 7
+  spec and the shared contract (page scope, CATEGORY="privacy", regex-based
+  script/iframe/img extraction, reuse `scan_dns_email.registrable_domain`,
+  embedded KNOWN_TRACKERS/CMP_HOSTS/CONSENT_MARKERS, the four checks). Register
+  one page entry in `registry.py` as label "privacy". Ship offline unit tests
+  (first-vs-third-party, tracker match, 1x1 pixel, CMP/marker, consent matrix,
+  client-rendered inconclusive). Verify: full suite green (TestToolContract picks
+  it up automatically) and a smoke run on example.com. Unblocked by C1.
 
 ## Phase D - Reporting automation
 
@@ -27,6 +28,15 @@ serves.
   PLAN.md first. Depends on A1.
 
 ## Done
+- [x] **C1 (done)** Spec a privacy/tracker scanner. Wrote the full `scan_privacy`
+  design as PLAN.md section 7: page scope, CATEGORY="privacy", passive static-only
+  extraction (regex for script/iframe/img + reuse of `parsed` links/images),
+  first-vs-third-party via `scan_dns_email.registrable_domain`, embedded
+  KNOWN_TRACKERS/CMP_HOSTS/CONSENT_MARKERS, four checks (third_party_origins,
+  known_trackers, tracking_pixels, cookie_consent), client-rendered handling, and
+  non-goals. Confirmed data dependencies against htmlmeta and scan_performance
+  (no shared-parser change needed). Design only; C2 implements. See JOURNAL.md
+  2026-07-01 C1.
 - [x] **B2 (done)** Tool-owned grade. Moved the band/score logic and verdict
   extraction into `common.grade(verdicts)` and `common.verdicts_of(result)`
   (verbatim). `scan_site.build_scorecard` and each tool's `scan()` wrapper now
