@@ -23,6 +23,9 @@ SKIP_TAGS = {"script", "style", "noscript", "template"}
 MIN_WORDS = 100          # below this, readability metrics are not meaningful
 LONG_SENTENCE_WORDS = 25
 
+CATEGORY = "readability"
+SCOPE = "page"
+
 
 class _TextExtractor(HTMLParser):
     def __init__(self):
@@ -68,7 +71,7 @@ def _sentences(text):
     return parts
 
 
-def scan(url, page=None):
+def _scan(url, page=None):
     url = common.normalize_url(url)
     if page is None:
         page = htmlmeta.fetch_page(url)
@@ -133,6 +136,14 @@ def scan(url, page=None):
         "summary": tally,
         "checks": checks,
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():

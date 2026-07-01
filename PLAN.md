@@ -117,8 +117,10 @@ Registration: the tool must be discoverable through the central registry
 1. ~~No central registry.~~ CLOSED (A1). `tools/registry.py` is the single source
    of tool discovery; `scan_site.py` builds its host set, `PAGE_SCANNERS`, and
    scorecard categories from it. Adding a tool no longer edits the orchestrator.
-2. Category and grade are assigned centrally in `scan_site.py`, not owned by
-   the tool. A tool's output is therefore not fully self-describing. (Phase B.)
+2. Category ownership: CLOSED (B1). Each scanner declares `CATEGORY` and `SCOPE`
+   module constants; a thin public `scan()` wrapper stamps `category` onto every
+   result, and the registry reads scope/category from the module. Grade is still
+   computed centrally in `scan_site.py`, not owned by the tool. (Grade -> B2.)
 3. ~~The contract is not enforced by a test.~~ CLOSED (A2).
    `TestToolContract` enforces section 4 across the whole registry, offline.
 

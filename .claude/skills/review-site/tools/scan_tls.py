@@ -23,6 +23,9 @@ import common
 
 EXPIRY_WARN_DAYS = 21
 
+CATEGORY = "tls"
+SCOPE = "host"
+
 
 def _flatten_name(rdn_sequence):
     out = {}
@@ -71,7 +74,7 @@ def _probe_legacy(host, port=443, timeout=10):
                 "note": "Server refused legacy TLS 1.0/1.1 (or the local client blocked it)."}
 
 
-def scan(target):
+def _scan(target):
     host = common.host_of(target) or target.strip()
     info = common.tls_info(host)
     if not info["ok"]:
@@ -129,6 +132,14 @@ def scan(target):
             "hostname_coverage": {"verdict": coverage_verdict, "note": coverage_note},
         },
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():

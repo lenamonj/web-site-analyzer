@@ -126,3 +126,48 @@ A2 done). Git still local-only (no remote).
 **Next step:** B1 - make each scanner declare its own `CATEGORY` and `SCOPE`
 module constants and surface `category` in its return, with the registry reading
 that metadata from the module instead of restating it.
+
+---
+
+## 2026-07-01 - B1: Tool-owned category and scope
+
+**Task:** B1. Move category/scope from the registry into the scanner modules and
+surface `category` in each tool's output, so tools are self-describing (closes
+PLAN.md section 4 gap #2 for category; the contract requires a category in the
+output).
+
+**What I did:**
+- Added `CATEGORY` and `SCOPE` module constants to all 8 scanners
+  (security/tls/dns_email = host; seo/accessibility/links/performance/
+  readability = page).
+- Made each scanner self-describing without editing its many return sites:
+  renamed the existing `scan(...)` to `_scan(...)` and added a uniform thin
+  public wrapper `scan(*args, **kwargs)` that calls `_scan` and stamps
+  `result["category"] = CATEGORY`. One wrapper per module stamps every return
+  path (for example scan_readability's three returns) with no per-return edits.
+- Refactored `registry.py`: a `_entry(tool_id, key, module, label)` helper builds
+  each `ToolEntry` reading `module.SCOPE` and `module.CATEGORY`, so the registry
+  no longer restates scope/category.
+- Tests: strengthened `TestToolContract.test_success_shape...` to assert the
+  surfaced `category` matches the registry, and added
+  `TestRegistry.test_scope_and_category_are_read_from_the_module`.
+
+**Why the wrapper (not editing each return):** returns vary in shape (single-line
+failures, multiline successes, the 12-space inline readability case). A single
+wrapper is lower-risk than ~16 return edits and guarantees uniform stamping. The
+wrapper does not catch exceptions - that stays the orchestrator's `_safe_scan`
+job - so a raising `_scan` still surfaces as ok:false via the existing path.
+
+**What I verified:**
+- `python -m unittest test_review_tools` -> `Ran 60 tests ... OK` (was 59).
+- Smoke run `scan_site.py https://example.com`: scorecard categories unchanged
+  (8, identical set), and every tool's JSON now carries `category`
+  (http_security->security, tls->tls, dns_email->dns_email, page tools direct).
+
+**Notes:** Grade is still computed centrally in `scan_site.build_scorecard`;
+moving it to a shared helper the tools also emit is B2. Git still local-only.
+
+**Next step:** B2 - extract the band/score logic into `common.grade(verdicts)`,
+have each tool emit its own `grade`, and have `scan_site.build_scorecard` reuse
+the same helper so no band logic is duplicated. Verify identical bands before and
+after on a sample run.

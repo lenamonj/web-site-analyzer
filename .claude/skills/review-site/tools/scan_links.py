@@ -21,6 +21,9 @@ import htmlmeta
 MAX_LINKS = 30          # bound total runtime; report when more exist
 LINK_TIMEOUT = 8
 SKIP_SCHEMES = ("mailto:", "tel:", "javascript:", "data:", "#")
+
+CATEGORY = "links"
+SCOPE = "page"
 # Insecure resource or link references on a page: tag plus the http URL.
 MIXED_RE = re.compile(r'<(script|img|iframe|link|source|audio|video)\b[^>]*?'
                       r'(?:src|href)\s*=\s*["\'](http://[^"\']+)', re.I)
@@ -102,7 +105,7 @@ def _mixed_content(html, is_https):
     return {"count": len(found), "items": found[:15], "verdict": verdict, "note": note}
 
 
-def scan(url, page=None):
+def _scan(url, page=None):
     url = common.normalize_url(url)
     if page is None:
         page = htmlmeta.fetch_page(url)
@@ -167,6 +170,14 @@ def scan(url, page=None):
         "summary": tally,
         "checks": checks,
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():

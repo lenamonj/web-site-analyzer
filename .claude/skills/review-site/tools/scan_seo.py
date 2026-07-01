@@ -22,6 +22,9 @@ import htmlmeta
 TITLE_MIN, TITLE_MAX = 10, 65
 DESC_MIN, DESC_MAX = 50, 165
 
+CATEGORY = "seo"
+SCOPE = "page"
+
 
 def _len_verdict(value, lo, hi, label):
     if not value:
@@ -113,7 +116,7 @@ def _sitemap_check(base, robots_sitemaps):
             "note": "No XML sitemap found at the expected location."}
 
 
-def scan(url, page=None):
+def _scan(url, page=None):
     url = common.normalize_url(url)
     if page is None:
         page = htmlmeta.fetch_page(url)
@@ -175,6 +178,14 @@ def scan(url, page=None):
         "summary": tally,
         "checks": checks,
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():

@@ -12,9 +12,12 @@ Each entry:
   tool_id  - stable id, matches the module's own "tool" field (e.g. scan_seo)
   key      - key the result is stored under in the combined scan JSON
   module   - the imported scanner module; must expose scan(...)
-  scope    - "host" (scan(target)) or "page" (scan(url, page=None))
-  category - scorecard bucket the result rolls up into
+  scope    - read from module.SCOPE: "host" (scan(target)) or "page" (scan(url, page=None))
+  category - read from module.CATEGORY: scorecard bucket the result rolls up into
   label    - short tag used in the flat issue list
+
+scope and category live on the scanner module (self-describing tools), so this
+registry only names the id, JSON key, and issue label for each tool.
 """
 
 from collections import namedtuple
@@ -30,15 +33,21 @@ import scan_tls
 
 ToolEntry = namedtuple("ToolEntry", ["tool_id", "key", "module", "scope", "category", "label"])
 
+
+def _entry(tool_id, key, module, label):
+    """Build an entry, reading scope and category from the module itself."""
+    return ToolEntry(tool_id, key, module, module.SCOPE, module.CATEGORY, label)
+
+
 REGISTRY = [
-    ToolEntry("scan_http_security", "http_security", scan_http_security, "host", "security", "http_security"),
-    ToolEntry("scan_tls", "tls", scan_tls, "host", "tls", "tls"),
-    ToolEntry("scan_dns_email", "dns_email", scan_dns_email, "host", "dns_email", "dns_email"),
-    ToolEntry("scan_seo", "seo", scan_seo, "page", "seo", "seo"),
-    ToolEntry("scan_accessibility", "accessibility", scan_accessibility, "page", "accessibility", "a11y"),
-    ToolEntry("scan_links", "links", scan_links, "page", "links", "links"),
-    ToolEntry("scan_performance", "performance", scan_performance, "page", "performance", "perf"),
-    ToolEntry("scan_readability", "readability", scan_readability, "page", "readability", "readability"),
+    _entry("scan_http_security", "http_security", scan_http_security, "http_security"),
+    _entry("scan_tls", "tls", scan_tls, "tls"),
+    _entry("scan_dns_email", "dns_email", scan_dns_email, "dns_email"),
+    _entry("scan_seo", "seo", scan_seo, "seo"),
+    _entry("scan_accessibility", "accessibility", scan_accessibility, "a11y"),
+    _entry("scan_links", "links", scan_links, "links"),
+    _entry("scan_performance", "performance", scan_performance, "perf"),
+    _entry("scan_readability", "readability", scan_readability, "readability"),
 ]
 
 

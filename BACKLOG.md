@@ -9,11 +9,6 @@ serves.
 
 ## Phase B - Self-describing tools
 
-- [ ] **B1 (todo, P2)** Tool-owned category and scope. Give each scanner
-  module-level `CATEGORY` and `SCOPE` constants and surface `category` in the
-  returned dict. Registry reads these from the module rather than restating
-  them. Verify: scorecard categories unchanged; tests updated. Depends on A1.
-
 - [ ] **B2 (todo, P2)** Tool-owned grade. Move the band/score logic into a
   shared `common.grade(verdicts)` helper and have both each tool (emitting its
   own `grade`) and `scan_site.build_scorecard` use it, so no band logic is
@@ -38,6 +33,14 @@ serves.
   PLAN.md first. Depends on A1.
 
 ## Done
+- [x] **B1 (done)** Tool-owned category and scope. Added `CATEGORY`/`SCOPE`
+  constants to all 8 scanner modules; each `scan()` is now a thin wrapper over an
+  internal `_scan()` that stamps `category` onto every result, so tool output is
+  self-describing. `registry.py` reads scope/category from the module via a
+  `_entry()` helper. Scorecard categories verified unchanged on example.com; each
+  scan's JSON now carries its category. Added 1 registry test and strengthened
+  the contract test to assert surfaced category. Suite 60 tests, all pass. See
+  JOURNAL.md 2026-07-01 B1.
 - [x] **A2 (done)** Contract-conformance test. Added
   `test_review_tools.TestToolContract` (3 tests, each sweeping all 8 registered
   tools): offline success-shape check via stubbed network primitives,

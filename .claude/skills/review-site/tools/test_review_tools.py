@@ -506,6 +506,14 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(reg.by_id("scan_tls").key, "tls")
         self.assertIsNone(reg.by_id("scan_nonexistent"))
 
+    def test_scope_and_category_are_read_from_the_module(self):
+        for e in reg.REGISTRY:
+            self.assertEqual(e.scope, e.module.SCOPE,
+                             f"{e.tool_id} scope not sourced from module.SCOPE")
+            self.assertEqual(e.category, e.module.CATEGORY,
+                             f"{e.tool_id} category not sourced from module.CATEGORY")
+            self.assertIn(e.scope, ("host", "page"))
+
 
 # Canned network responses so the contract test runs offline and fast. Every
 # scanner reaches the network only through common.http_fetch / common.tls_info /
@@ -602,6 +610,8 @@ class TestToolContract(unittest.TestCase):
             result = entry.module.scan(self.TARGET)
             self._assert_conformant(entry, result)
             self.assertIn("checks", result, f"{entry.tool_id} produced no checks on a healthy target")
+            self.assertEqual(result.get("category"), entry.category,
+                             f"{entry.tool_id} did not surface its category in the result")
 
     def test_no_tool_raises_on_network_failure(self):
         self._patch(_down_fetch, _down_tls, _down_doh)

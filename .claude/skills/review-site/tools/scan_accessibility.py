@@ -18,6 +18,9 @@ import sys
 import common
 import htmlmeta
 
+CATEGORY = "accessibility"
+SCOPE = "page"
+
 
 def _accessible_name(control, labels_for):
     if control["id"] and control["id"] in labels_for:
@@ -156,7 +159,7 @@ def _link_text_check(parsed, inconclusive):
             "verdict": "pass", "note": "Link text is descriptive."}
 
 
-def scan(url, page=None):
+def _scan(url, page=None):
     url = common.normalize_url(url)
     if page is None:
         page = htmlmeta.fetch_page(url)
@@ -201,6 +204,14 @@ def scan(url, page=None):
         "summary": tally,
         "checks": checks,
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():

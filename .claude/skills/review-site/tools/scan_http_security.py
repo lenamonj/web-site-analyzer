@@ -18,6 +18,9 @@ import common
 # Recommended HSTS floor: 180 days in seconds.
 HSTS_MIN_AGE = 15552000
 
+CATEGORY = "security"
+SCOPE = "host"
+
 
 def _verdict(status, note):
     return {"verdict": status, "note": note}
@@ -152,7 +155,7 @@ def check_disclosure(headers):
     return {"banners": findings, **_verdict("info", "Server banners present without versions.")}
 
 
-def scan(url):
+def _scan(url):
     url = common.normalize_url(url)
     host = common.host_of(url)
     res = common.http_fetch(url, want_body=False)
@@ -189,6 +192,14 @@ def scan(url):
         "summary": tally,
         "checks": checks,
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():

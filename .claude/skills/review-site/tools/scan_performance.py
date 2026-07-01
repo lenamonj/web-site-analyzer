@@ -23,6 +23,9 @@ import scan_dns_email as dns
 
 MAX_RESOURCES = 40
 RES_TIMEOUT = 8
+
+CATEGORY = "performance"
+SCOPE = "page"
 HTML_WARN_BYTES = 150_000        # a shipped HTML doc heavier than this is notable
 TOTAL_WARN_BYTES = 1_500_000     # measured static weight floor for a warning
 TOTAL_FAIL_BYTES = 3_500_000
@@ -97,7 +100,7 @@ def _caching_check(headers):
             "note": "No Cache-Control on the HTML document" + (" (ETag present)." if etag else ".")}
 
 
-def scan(url, page=None):
+def _scan(url, page=None):
     url = common.normalize_url(url)
     if page is None:
         page = htmlmeta.fetch_page(url)
@@ -172,6 +175,14 @@ def scan(url, page=None):
         "summary": tally,
         "checks": checks,
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():

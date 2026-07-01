@@ -27,6 +27,9 @@ MULTI_SUFFIXES = {
     "co.jp", "co.nz", "co.za", "com.br", "com.cn", "com.mx",
 }
 
+CATEGORY = "dns_email"
+SCOPE = "host"
+
 
 def registrable_domain(host):
     """Best-effort organizational domain (no Public Suffix List dependency)."""
@@ -114,7 +117,7 @@ def check_dnssec(domain):
     return {"signed": False, "verdict": "info", "note": "No DNSKEY; zone is not DNSSEC-signed."}
 
 
-def scan(target):
+def _scan(target):
     host = common.host_of(target) or target.strip()
     domain = registrable_domain(host)
     checks = {
@@ -135,6 +138,14 @@ def scan(target):
         "summary": tally,
         "checks": checks,
     }
+
+
+def scan(*args, **kwargs):
+    """Public entry: run the scan and stamp the tool's own category so the
+    result is self-describing (see PLAN.md section 4)."""
+    result = _scan(*args, **kwargs)
+    result["category"] = CATEGORY
+    return result
 
 
 def main():
