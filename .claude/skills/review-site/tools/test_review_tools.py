@@ -23,6 +23,7 @@ import scan_dns_email as dns
 import scan_http_security as sec
 import scan_links as links
 import scan_performance as perf
+import scan_privacy as privacy
 import scan_readability as rd
 import scan_seo as seo
 import scan_site as site
@@ -477,15 +478,15 @@ class TestPerfCompressionCaching(unittest.TestCase):
 
 
 class TestRegistry(unittest.TestCase):
-    def test_registry_lists_all_eight_scanners(self):
+    def test_registry_lists_all_scanners(self):
         ids = {e.tool_id for e in reg.REGISTRY}
         self.assertEqual(ids, {
             "scan_http_security", "scan_tls", "scan_dns_email",
             "scan_seo", "scan_accessibility", "scan_links",
-            "scan_performance", "scan_readability",
+            "scan_performance", "scan_readability", "scan_privacy",
         })
         self.assertEqual(len(reg.host_tools()), 3)
-        self.assertEqual(len(reg.page_tools()), 5)
+        self.assertEqual(len(reg.page_tools()), 6)
 
     def test_every_entry_exposes_a_callable_scan(self):
         for e in reg.REGISTRY:
@@ -634,6 +635,74 @@ class TestToolContract(unittest.TestCase):
             wrapped = site._safe_scan(boom, self.TARGET, tool_name=entry.tool_id)
             self.assertFalse(wrapped["ok"])
             self.assertIn("RuntimeError", wrapped["error"])
+
+
+class TestPrivacy(unittest.TestCase):
+    def _ctx(self, html):
+        parsed = htmlmeta.parse_html(html)
+        render = htmlmeta.render_assessment(parsed, html)
+        return {"url": "https://acme.example/", "parsed": parsed, "render": render,
+                "res": {"ok": True, "body": html, "final_url": "https://acme.example/",
+                        "error": None}}
+
+    def test_third_parties_by_registrable_domain(self):
+        urls = ["https://cdn.acme.example/a.js",
+                "https://www.google-analytics.com/ga.js",
+                "https://acme.example/local.js"]
+        tp = privacy._third_parties(urls, "acme.example")
+        self.assertIn("google-analytics.com", tp)
+        self.assertNotIn("acme.example", tp)
+
+    def test_known_tracker_match(self):
+        found = privacy._match_trackers(["https://www.googletagmanager.com/gtm.js",
+                                         "https://cdn.acme.example/x.js"])
+        self.assertEqual(found.get("googletagmanager.com"), "analytics")
+
+    def test_tracking_pixel_detection(self):
+        body = ('<img src="https://x.example/p.gif" width="1" height="1">'
+                '<img src="/logo.png" width="200" height="50">')
+        pixels = privacy._tracking_pixels(body, "https://acme.example/")
+        self.assertEqual(len(pixels), 1)
+        self.assertIn("p.gif", pixels[0])
+
+    def test_consent_detected_by_host_and_marker(self):
+        self.assertTrue(privacy._consent_detected(
+            '<script src="https://consent.cookiebot.com/uc.js"></script>'))
+        self.assertTrue(privacy._consent_detected('<div class="cookie-consent-banner">'))
+        self.assertFalse(privacy._consent_detected('<div>no banner here</div>'))
+
+    def test_consent_verdict_matrix(self):
+        self.assertEqual(privacy._consent_verdict(True, True)["verdict"], "pass")
+        self.assertEqual(privacy._consent_verdict(False, True)["verdict"], "warn")
+        self.assertEqual(privacy._consent_verdict(False, False)["verdict"], "info")
+
+    def test_full_scan_flags_trackers_pixels_and_missing_consent(self):
+        html = ('<!doctype html><html lang="en"><head><title>Home page</title></head>'
+                '<body><h1>Hi</h1><p>Some real body text for the page content here.</p>'
+                '<script src="https://www.google-analytics.com/analytics.js"></script>'
+                '<img src="https://acme.example/pixel.gif" width="1" height="1">'
+                '</body></html>')
+        r = privacy.scan("https://acme.example/", page=self._ctx(html))
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["checks"]["known_trackers"]["verdict"], "warn")
+        self.assertEqual(r["checks"]["tracking_pixels"]["verdict"], "warn")
+        self.assertEqual(r["checks"]["cookie_consent"]["verdict"], "warn")
+        self.assertEqual(r["category"], "privacy")
+        self.assertIn(r["grade"]["band"],
+                      {"Strong", "Adequate", "Weak", "Poor", "Not measured"})
+
+    def test_clean_page_passes(self):
+        html = ('<!doctype html><html lang="en"><head><title>Home page</title></head>'
+                '<body><h1>Hi</h1><p>Plain first-party content only, nothing external.</p>'
+                '</body></html>')
+        r = privacy.scan("https://acme.example/", page=self._ctx(html))
+        self.assertEqual(r["checks"]["known_trackers"]["verdict"], "pass")
+        self.assertEqual(r["checks"]["tracking_pixels"]["verdict"], "pass")
+
+    def test_client_rendered_is_inconclusive(self):
+        r = privacy.scan("https://acme.example/", page=self._ctx(SPA_SHELL))
+        self.assertEqual(r["checks"]["known_trackers"]["verdict"], "info")
+        self.assertEqual(r["checks"]["third_party_origins"]["verdict"], "info")
 
 
 if __name__ == "__main__":

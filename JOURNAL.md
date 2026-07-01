@@ -249,3 +249,44 @@ scanner - in PLAN.md before any code, per the loop's design-precedes-build rule.
 **Next step:** C2 - implement `scan_privacy.py` to the section 7 spec and the
 shared contract, register it as a page tool (label "privacy"), and ship the
 offline unit tests plus a smoke run on example.com.
+
+---
+
+## 2026-07-01 - C2: Implement scan_privacy
+
+**Task:** C2. Build the privacy/tracker scanner designed in PLAN.md section 7.
+
+**What I did:**
+- Added `tools/scan_privacy.py` (page scope, CATEGORY="privacy"), following the
+  spec and the B1/B2 wrapper pattern. Pure, passive, stdlib-only: regex extractors
+  for `<script>`/`<iframe>`/`<img>` over the raw body (dimensions for pixels),
+  reuse of `parsed` links/images, `scan_dns_email.registrable_domain` for
+  first-vs-third-party, and embedded KNOWN_TRACKERS/CMP_HOSTS/CONSENT_MARKERS
+  constants. Four checks: `third_party_origins` (info), `known_trackers`
+  (pass/warn), `tracking_pixels` (pass/warn), `cookie_consent` (pass/warn/info
+  matrix). Client-rendered pages mark the resource checks inconclusive.
+- Registered it in `registry.py` as a page tool (import + one `_entry`, label
+  "privacy"). No orchestrator edit needed - the registry seam from A1 did its job.
+- Tests: added `TestPrivacy` (8 tests) covering first-vs-third-party, tracker
+  match, 1x1 pixel detection, CMP/marker detection, the consent matrix, a full
+  flagged scan, a clean scan, and the client-rendered path. Renamed the registry
+  count test and updated it to 9 tools / 6 page tools.
+
+**What I verified:**
+- `python -m unittest test_review_tools` -> `Ran 68 tests ... OK` (was 60).
+  `TestToolContract` now sweeps 9 tools and scan_privacy conforms.
+- Smoke: standalone `scan_privacy.py https://example.com` -> ok, category privacy,
+  grade Strong, checks {third_party_origins info, known_trackers pass,
+  tracking_pixels pass, cookie_consent info} (correct for a resource-free page).
+  Via `scan_site.py`: scorecard now lists a 9th "privacy" category and the
+  page_scan carries the privacy result with grade Strong.
+
+**Notes:** Phase C's first dimension is complete (C1 spec, C2 build). Adding this
+dimension touched exactly one new file plus one registry line plus tests - the
+orchestrator was untouched, confirming the Phase A/B design goals. Git still
+local-only.
+
+**Next step:** D1 (Phase D) - spec and prototype generating a first-draft
+`exec_report_data.json` from `<slug>_scan.json` (scorecard + top fails/warns as
+findings), leaving human-authored findings to layer on top. Design in PLAN.md
+first, then a minimal generator with tests.

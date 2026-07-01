@@ -27,6 +27,7 @@ import scan_dns_email
 import scan_http_security
 import scan_links
 import scan_performance
+import scan_privacy
 import scan_readability
 import scan_seo
 import scan_tls
@@ -48,6 +49,7 @@ REGISTRY = [
     _entry("scan_links", "links", scan_links, "links"),
     _entry("scan_performance", "performance", scan_performance, "perf"),
     _entry("scan_readability", "readability", scan_readability, "readability"),
+    _entry("scan_privacy", "privacy", scan_privacy, "privacy"),
 ]
 
 

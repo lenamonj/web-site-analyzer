@@ -11,15 +11,6 @@ serves.
 
 ## Phase C - Expansion (new passive dimensions, spec in PLAN.md first)
 
-- [ ] **C2 (todo, P3)** Implement `scan_privacy.py` to the PLAN.md section 7
-  spec and the shared contract (page scope, CATEGORY="privacy", regex-based
-  script/iframe/img extraction, reuse `scan_dns_email.registrable_domain`,
-  embedded KNOWN_TRACKERS/CMP_HOSTS/CONSENT_MARKERS, the four checks). Register
-  one page entry in `registry.py` as label "privacy". Ship offline unit tests
-  (first-vs-third-party, tracker match, 1x1 pixel, CMP/marker, consent matrix,
-  client-rendered inconclusive). Verify: full suite green (TestToolContract picks
-  it up automatically) and a smoke run on example.com. Unblocked by C1.
-
 ## Phase D - Reporting automation
 
 - [ ] **D1 (todo, P3)** Spec and prototype generating a first-draft
@@ -28,6 +19,16 @@ serves.
   PLAN.md first. Depends on A1.
 
 ## Done
+- [x] **C2 (done)** Implement `scan_privacy.py`. Built to the PLAN.md section 7
+  spec: page scope, CATEGORY="privacy", regex extraction of script/iframe/img,
+  reuse of `scan_dns_email.registrable_domain`, embedded KNOWN_TRACKERS/
+  CMP_HOSTS/CONSENT_MARKERS, four checks (third_party_origins info; known_trackers
+  and tracking_pixels pass/warn; cookie_consent matrix), client-rendered
+  inconclusive path. Registered as a page tool (label "privacy"); scorecard now
+  has a 9th "privacy" category. Added 8 offline tests; TestToolContract covers it
+  automatically. Suite 68 tests, all pass. Smoke-verified standalone and via the
+  orchestrator on example.com (grade Strong, no trackers). See JOURNAL.md
+  2026-07-01 C2.
 - [x] **C1 (done)** Spec a privacy/tracker scanner. Wrote the full `scan_privacy`
   design as PLAN.md section 7: page scope, CATEGORY="privacy", passive static-only
   extraction (regex for script/iframe/img + reuse of `parsed` links/images),

@@ -160,7 +160,10 @@ Phase D - Reporting automation: optionally generate a first-draft
 `exec_report_data.json` directly from the scan JSON to cut manual transcription,
 keeping the human-authored findings on top.
 
-## 7. Design: scan_privacy (Phase C; task C1 spec, implemented in C2)
+## 7. Design: scan_privacy (Phase C; spec C1, implemented C2)
+Status: IMPLEMENTED (C2). `tools/scan_privacy.py` is registered as a page tool
+(label "privacy") and appears in the scorecard as the "privacy" category. The
+design below is the spec it was built to and remains the reference.
 Purpose: passively surface third-party data-sharing and tracking exposure that is
 visible in a page's static HTML. It answers: which third-party origins does the
 page load resources from, which of those are known trackers, are there tracking
