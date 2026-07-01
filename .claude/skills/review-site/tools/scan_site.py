@@ -60,36 +60,6 @@ def _collect_issues(label, checks):
     return issues
 
 
-def _verdicts_of(scan_result):
-    """Every gradable verdict a scan produced. A scan that failed to run contributes nothing."""
-    if not scan_result:
-        return []
-    if "checks" in scan_result:
-        return [c.get("verdict") for c in scan_result["checks"].values() if c.get("verdict")]
-    # A scanner that fell back to a single top-level verdict (for example a failed TLS handshake).
-    top = scan_result.get("verdict")
-    return [top] if top in ("pass", "warn", "fail") else []
-
-
-def _grade(verdicts):
-    """
-    Transparent posture band from the scanners' own verdicts. This is an
-    aggregation of measured pass/warn/fail checks, not an invented benchmark:
-    pass counts 1.0, warn 0.5, fail 0.0, info is not graded, and the raw counts
-    always travel with the band.
-    """
-    counts = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
-    for v in verdicts:
-        counts[v] = counts.get(v, 0) + 1
-    graded = counts["pass"] + counts["warn"] + counts["fail"]
-    if graded == 0:
-        return {**counts, "graded": 0, "score": None, "band": "Not measured"}
-    score = (counts["pass"] + counts["warn"] * 0.5) / graded
-    band = ("Strong" if score >= 0.85 else "Adequate" if score >= 0.65
-            else "Weak" if score >= 0.4 else "Poor")
-    return {**counts, "graded": graded, "score": round(score, 2), "band": band}
-
-
 def _dup_check(mapping, label, n_pages):
     if n_pages < 2:
         return {"verdict": "info", "note": f"Single page; cross-page {label} comparison not applicable."}
@@ -124,18 +94,18 @@ def check_cross_page(page_scans):
 
 def build_scorecard(host_scans, page_scans):
     """Roll the per-check verdicts up into one band per category plus an overall band."""
-    cats = {e.category: _verdicts_of(host_scans.get(e.key)) for e in registry.host_tools()}
+    cats = {e.category: common.verdicts_of(host_scans.get(e.key)) for e in registry.host_tools()}
     page_keys = tuple(e.key for e in registry.page_tools())
     for key in page_keys:
         acc = []
         for ps in page_scans:
             sr = ps.get(key)
             if sr and sr.get("ok"):
-                acc += _verdicts_of(sr)
+                acc += common.verdicts_of(sr)
         if acc:
             cats[key] = acc
-    categories = {name: _grade(v) for name, v in cats.items()}
-    overall = _grade([v for lst in cats.values() for v in lst])
+    categories = {name: common.grade(v) for name, v in cats.items()}
+    overall = common.grade([v for lst in cats.values() for v in lst])
     return {"overall": overall, "categories": categories}
 
 

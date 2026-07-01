@@ -9,12 +9,6 @@ serves.
 
 ## Phase B - Self-describing tools
 
-- [ ] **B2 (todo, P2)** Tool-owned grade. Move the band/score logic into a
-  shared `common.grade(verdicts)` helper and have both each tool (emitting its
-  own `grade`) and `scan_site.build_scorecard` use it, so no band logic is
-  duplicated. Verify: identical scorecard bands before and after on a sample
-  run. Depends on A1.
-
 ## Phase C - Expansion (new passive dimensions, spec in PLAN.md first)
 
 - [ ] **C1 (todo, P3)** Spec a privacy/tracker scanner in PLAN.md: count
@@ -33,6 +27,12 @@ serves.
   PLAN.md first. Depends on A1.
 
 ## Done
+- [x] **B2 (done)** Tool-owned grade. Moved the band/score logic and verdict
+  extraction into `common.grade(verdicts)` and `common.verdicts_of(result)`
+  (verbatim). `scan_site.build_scorecard` and each tool's `scan()` wrapper now
+  share them, so no band logic is duplicated; every tool stamps its own `grade`.
+  Verified scorecard bands identical before/after on example.com (overall
+  Adequate 0.74). Suite 60 tests, all pass. See JOURNAL.md 2026-07-01 B2.
 - [x] **B1 (done)** Tool-owned category and scope. Added `CATEGORY`/`SCOPE`
   constants to all 8 scanner modules; each `scan()` is now a thin wrapper over an
   internal `_scan()` that stamps `category` onto every result, so tool output is

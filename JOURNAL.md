@@ -171,3 +171,43 @@ moving it to a shared helper the tools also emit is B2. Git still local-only.
 have each tool emit its own `grade`, and have `scan_site.build_scorecard` reuse
 the same helper so no band logic is duplicated. Verify identical bands before and
 after on a sample run.
+
+---
+
+## 2026-07-01 - B2: Tool-owned grade
+
+**Task:** B2. Put the band/score logic in one place and have every tool emit its
+own grade, so a tool's output is fully self-describing (category + grade +
+findings + evidence) and no band logic is duplicated. Closes the rest of PLAN
+section 4 gap #2.
+
+**What I did:**
+- Moved `_grade` and `_verdicts_of` from `scan_site.py` into `common.py` verbatim
+  as `common.grade(verdicts)` and `common.verdicts_of(scan_result)`.
+- Updated `scan_site.build_scorecard` to call `common.grade`/`common.verdicts_of`
+  and deleted the local copies.
+- Extended each scanner's `scan()` wrapper (from B1) to also stamp
+  `result["grade"] = common.grade(common.verdicts_of(result))`. One line per
+  wrapper; every tool now carries its own grade on every return path.
+- Tests: repointed `test_grade_bands` and `test_verdicts_of...` from
+  `site._grade`/`site._verdicts_of` to the `common.*` functions, and
+  strengthened the contract test to assert each tool surfaces a `grade` dict with
+  a band in {Strong, Adequate, Weak, Poor, Not measured}.
+
+**What I verified:**
+- `python -m unittest test_review_tools` -> `Ran 60 tests ... OK`.
+- Smoke run `scan_site.py https://example.com`: scorecard bands byte-identical to
+  the B1 run (overall Adequate 0.74; security Poor, tls/dns_email/links/
+  performance Strong, seo Adequate, accessibility Strong, readability Not
+  measured). Each tool's JSON now carries a matching `grade` (single-page run, so
+  per-tool grade equals its category grade, e.g. http_security Poor 0.07).
+
+**Notes:** Phase B (self-describing tools) is complete (B1, B2 done). The band
+logic now lives once in `common.grade`; the scorecard and the per-tool grades
+grade different verdict sets but share that single function. Git still
+local-only.
+
+**Next step:** Phase C. Start with C1 - spec a privacy/tracker scanner in
+PLAN.md (third-party script/pixel origins and known-tracker hosts from static
+HTML, cookie-consent detection, per-origin findings). Design only; the
+implementation is C2. Keep it within the passive, stdlib-only constraints.

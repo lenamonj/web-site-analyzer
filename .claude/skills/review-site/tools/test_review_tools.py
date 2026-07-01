@@ -338,19 +338,19 @@ class TestTlsAndDns(unittest.TestCase):
 
 class TestScorecard(unittest.TestCase):
     def test_grade_bands(self):
-        self.assertEqual(site._grade(["pass", "pass"])["band"], "Strong")
-        self.assertEqual(site._grade(["pass", "warn"])["band"], "Adequate")   # 0.75
-        self.assertEqual(site._grade(["pass", "warn", "warn", "fail"])["band"], "Weak")  # 0.5
-        self.assertEqual(site._grade(["fail", "fail"])["band"], "Poor")
-        not_measured = site._grade(["info", "info"])
+        self.assertEqual(common.grade(["pass", "pass"])["band"], "Strong")
+        self.assertEqual(common.grade(["pass", "warn"])["band"], "Adequate")   # 0.75
+        self.assertEqual(common.grade(["pass", "warn", "warn", "fail"])["band"], "Weak")  # 0.5
+        self.assertEqual(common.grade(["fail", "fail"])["band"], "Poor")
+        not_measured = common.grade(["info", "info"])
         self.assertEqual(not_measured["band"], "Not measured")
         self.assertIsNone(not_measured["score"])
 
     def test_verdicts_of_prefers_checks_then_top_level(self):
-        self.assertEqual(site._verdicts_of({"checks": {"a": {"verdict": "pass"},
+        self.assertEqual(common.verdicts_of({"checks": {"a": {"verdict": "pass"},
                          "b": {"verdict": "fail"}}}), ["pass", "fail"])
-        self.assertEqual(site._verdicts_of({"verdict": "fail"}), ["fail"])
-        self.assertEqual(site._verdicts_of({"ok": False}), [])
+        self.assertEqual(common.verdicts_of({"verdict": "fail"}), ["fail"])
+        self.assertEqual(common.verdicts_of({"ok": False}), [])
 
     def test_build_scorecard_rolls_up(self):
         host = {"http_security": {"checks": {"a": {"verdict": "pass"}, "b": {"verdict": "fail"}}},
@@ -612,6 +612,11 @@ class TestToolContract(unittest.TestCase):
             self.assertIn("checks", result, f"{entry.tool_id} produced no checks on a healthy target")
             self.assertEqual(result.get("category"), entry.category,
                              f"{entry.tool_id} did not surface its category in the result")
+            grade = result.get("grade")
+            self.assertIsInstance(grade, dict, f"{entry.tool_id} did not surface a grade")
+            self.assertIn(grade.get("band"),
+                          {"Strong", "Adequate", "Weak", "Poor", "Not measured"},
+                          f"{entry.tool_id} grade has an invalid band")
 
     def test_no_tool_raises_on_network_failure(self):
         self._patch(_down_fetch, _down_tls, _down_doh)

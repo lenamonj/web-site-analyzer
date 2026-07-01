@@ -255,6 +255,37 @@ def write_json(path, obj):
     return path
 
 
+def verdicts_of(scan_result):
+    """Every gradable verdict a scan produced. A scan that failed to run contributes nothing."""
+    if not scan_result:
+        return []
+    if "checks" in scan_result:
+        return [c.get("verdict") for c in scan_result["checks"].values() if c.get("verdict")]
+    # A scanner that fell back to a single top-level verdict (for example a failed TLS handshake).
+    top = scan_result.get("verdict")
+    return [top] if top in ("pass", "warn", "fail") else []
+
+
+def grade(verdicts):
+    """
+    Transparent posture band from the scanners' own verdicts. This is an
+    aggregation of measured pass/warn/fail checks, not an invented benchmark:
+    pass counts 1.0, warn 0.5, fail 0.0, info is not graded, and the raw counts
+    always travel with the band. Shared by each tool (which grades its own
+    checks) and the orchestrator scorecard, so the band logic lives in one place.
+    """
+    counts = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
+    for v in verdicts:
+        counts[v] = counts.get(v, 0) + 1
+    graded = counts["pass"] + counts["warn"] + counts["fail"]
+    if graded == 0:
+        return {**counts, "graded": 0, "score": None, "band": "Not measured"}
+    score = (counts["pass"] + counts["warn"] * 0.5) / graded
+    band = ("Strong" if score >= 0.85 else "Adequate" if score >= 0.65
+            else "Weak" if score >= 0.4 else "Poor")
+    return {**counts, "graded": graded, "score": round(score, 2), "band": band}
+
+
 def enable_utf8_stdout():
     """Windows consoles default to cp1252 and choke on site content. Force UTF-8."""
     try:

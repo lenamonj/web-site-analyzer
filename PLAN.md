@@ -73,9 +73,12 @@ Interface
 Output on success (check-based tools)
 ```
 {
-  "tool":   "<tool id, e.g. scan_seo>",   # required; equals the registry tool_id
-  "target": "<normalized url>",            # required (host tools use "host")
-  "ok":     true,                          # page tools + scan_tls emit this;
+  "tool":     "<tool id, e.g. scan_seo>", # required; equals the registry tool_id
+  "target":   "<normalized url>",          # required (host tools use "host")
+  "category": "<scorecard bucket>",        # stamped by the scan() wrapper (B1)
+  "grade":    {"band": "...", "score": 0.0-1.0 | null, "pass": n, ...},
+                                           # stamped by the scan() wrapper (B2)
+  "ok":       true,                        # page tools + scan_tls emit this;
                                            # check-based host tools (http_security,
                                            # dns_email) omit it and denote success
                                            # by returning a non-empty "checks" map
@@ -117,10 +120,13 @@ Registration: the tool must be discoverable through the central registry
 1. ~~No central registry.~~ CLOSED (A1). `tools/registry.py` is the single source
    of tool discovery; `scan_site.py` builds its host set, `PAGE_SCANNERS`, and
    scorecard categories from it. Adding a tool no longer edits the orchestrator.
-2. Category ownership: CLOSED (B1). Each scanner declares `CATEGORY` and `SCOPE`
-   module constants; a thin public `scan()` wrapper stamps `category` onto every
-   result, and the registry reads scope/category from the module. Grade is still
-   computed centrally in `scan_site.py`, not owned by the tool. (Grade -> B2.)
+2. CLOSED (B1 + B2). Each scanner declares `CATEGORY`/`SCOPE` module constants;
+   a thin public `scan()` wrapper stamps both `category` and its own `grade`
+   (`common.grade(common.verdicts_of(result))`) onto every result, and the
+   registry reads scope/category from the module. The band/score logic lives once
+   in `common.grade`; `scan_site.build_scorecard` and every tool share it, so no
+   band logic is duplicated. Tools are now fully self-describing per the contract
+   (category + numeric grade + findings + evidence).
 3. ~~The contract is not enforced by a test.~~ CLOSED (A2).
    `TestToolContract` enforces section 4 across the whole registry, offline.
 
