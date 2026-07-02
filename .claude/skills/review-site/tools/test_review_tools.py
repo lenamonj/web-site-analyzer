@@ -990,6 +990,79 @@ class TestHostCanonicalization(unittest.TestCase):
         self.assertIn("subdomain", c["note"])
 
 
+class TestIssueGroupingAndDelta(unittest.TestCase):
+    ISSUES = [
+        {"scan": "a11y:https://x/a", "check": "landmarks", "verdict": "warn", "note": "Missing landmark(s): main."},
+        {"scan": "a11y:https://x/b", "check": "landmarks", "verdict": "warn", "note": "Missing landmark(s): main."},
+        {"scan": "a11y:https://x/c", "check": "landmarks", "verdict": "warn", "note": "Missing landmark(s): main."},
+        {"scan": "seo:https://x/a", "check": "headings", "verdict": "fail", "note": "No H1 on the page."},
+        {"scan": "http_security", "check": "hsts", "verdict": "fail", "note": "No HSTS header."},
+    ]
+
+    def test_grouping_collapses_per_page_repeats(self):
+        groups = site.group_issues(self.ISSUES)
+        self.assertEqual(len(groups), 3)
+        landmarks = next(g for g in groups if g["check"] == "landmarks")
+        self.assertEqual(landmarks["scan"], "a11y")
+        self.assertEqual(landmarks["page_count"], 3)
+        self.assertEqual(landmarks["pages"], ["https://x/a", "https://x/b", "https://x/c"])
+
+    def test_host_issue_passes_through_without_pages(self):
+        groups = site.group_issues(self.ISSUES)
+        hsts = next(g for g in groups if g["check"] == "hsts")
+        self.assertEqual(hsts["pages"], [])
+        self.assertEqual(hsts["page_count"], 0)
+
+    def test_distinct_verdicts_stay_apart(self):
+        issues = [dict(self.ISSUES[0]), {**self.ISSUES[1], "verdict": "fail"}]
+        self.assertEqual(len(site.group_issues(issues)), 2)
+
+    def test_issue_line_names_pages(self):
+        groups = site.group_issues(self.ISSUES)
+        line = site.issue_line(next(g for g in groups if g["check"] == "landmarks"))
+        self.assertIn("on 3 page(s)", line)
+        self.assertIn("+1 more", line)
+
+    def test_diff_issues_reports_new_and_resolved(self):
+        prev = {"measured_at_utc": "2026-07-01T00:00:00Z",
+                "issues": {"fail": [self.ISSUES[3]], "warn": [self.ISSUES[0]]}}
+        curr = {"issues": {"fail": [self.ISSUES[4]], "warn": [self.ISSUES[0]]}}
+        delta = site.diff_issues(prev, curr)
+        self.assertEqual(delta["previous_measured_at"], "2026-07-01T00:00:00Z")
+        self.assertEqual([i["check"] for i in delta["new"]], ["hsts"])
+        self.assertEqual([i["check"] for i in delta["resolved"]], ["headings"])
+
+    def test_attach_delta_reads_previous_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x_scan.json"
+            prev = {"measured_at_utc": "2026-07-01T00:00:00Z",
+                    "issues": {"fail": [self.ISSUES[3]], "warn": []}}
+            path.write_text(json.dumps(prev), encoding="utf-8")
+            result = {"issues": {"fail": [], "warn": []}}
+            site.attach_delta(result, path)
+            self.assertEqual(len(result["delta"]["resolved"]), 1)
+            fresh = {"issues": {"fail": [], "warn": []}}
+            site.attach_delta(fresh, Path(tmp) / "missing.json")
+            self.assertNotIn("delta", fresh)
+
+    def test_draft_consumes_grouped_issues(self):
+        scan = {
+            "slug": "x", "host": "x", "target": "https://x/",
+            "measured_at_utc": "2026-07-02T00:00:00Z",
+            "totals": {"fail": 4, "warn": 0},
+            "pages_scanned": ["https://x/a"],
+            "scorecard": {"overall": {"band": "Weak"}, "categories": {}},
+            "issues": {"fail": self.ISSUES[:4], "warn": []},
+            "issues_grouped": {"fail": site.group_issues(self.ISSUES[:4]), "warn": []},
+        }
+        data = drpt.draft(scan)
+        landmarks = next(f for f in data["findings"] if "landmarks" in f["finding"])
+        self.assertEqual(landmarks["area"], "a11y")
+        self.assertIn("3 page(s)", landmarks["evidence"])
+        # One grouped finding, not three per-page duplicates.
+        self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
+
+
 class TestEmailTransportPosture(unittest.TestCase):
     STS_POLICY = "version: STSv1\nmode: enforce\nmx: mail.acme.example\nmax_age: 86400"
 

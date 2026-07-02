@@ -53,6 +53,7 @@ def pipeline(target, out_dir=None):
     slug = result["slug"]
     json_path = out_dir / f"{slug}_scan.json"
     md_path = out_dir / f"{slug}_scan_summary.md"
+    scan_site.attach_delta(result, json_path)
     common.write_json(json_path, result)
     scan_site.write_digest_md(result, md_path)
 

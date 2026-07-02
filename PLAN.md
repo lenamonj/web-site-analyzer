@@ -597,7 +597,45 @@ warn-free, disallow in a non-* group ignored), id collection including
 `<a name>`, and the fragment matrix (resolved, missing, bare `#`,
 client-rendered).
 
-## 20. Open design questions
+## 20. Design: issue aggregation (task F9)
+Problem: page-scoped checks emit one identical issue per affected page. A
+site-wide template defect therefore repeats through the digest, and because
+`draft_report_data` caps findings at 15, one such defect floods every slot
+and crowds all other findings out of the executive draft.
+
+Design: a pure `scan_site.group_issues(issues)` groups the flat issue list by
+(tool label, check, verdict); the "label:url" convention already separates
+label and page. Each group keeps the first note as representative, the list
+of affected pages, and a page_count. Host issues pass through with no pages.
+The combined JSON gains `issues_grouped` = {fail: [...], warn: [...]} while
+the raw per-page `issues` stay for evidence fidelity; `totals` gains grouped
+counts. The digest renders grouped entries ("note (on N pages: url1, url2,
++K more)"). `draft_report_data` consumes `issues_grouped` when present (raw
+`issues` as fallback for old scan files), so one template defect is one
+finding whose evidence names the affected pages.
+
+Tests: grouping across pages, host pass-through, distinct verdicts kept
+apart, representative note, digest rendering, draft consumption of grouped
+issues plus the old-scan fallback.
+
+## 21. Design: run-over-run delta (task F10)
+Purpose: the tool's real usage loop is scan, fix, re-scan. Make the re-scan
+state the change: which issues are new since the previous run and which were
+resolved.
+
+Design: a pure `scan_site.diff_issues(prev_result, result)` compares the
+(scan, check, verdict) key sets of both runs' raw issues and returns
+{previous_measured_at, new: [current issue dicts], resolved: [previous issue
+dicts]}. The writers (`scan_site.main`, `run_review.pipeline`) load the
+existing `<slug>_scan.json` before overwriting it and attach the diff as
+`result["delta"]`; a first run has no delta. The digest gains a "Changes
+since previous scan" section listing new and resolved issues. No history
+archive: one previous run is the comparison window, deliberately simple.
+
+Tests: the pure diff (new, resolved, unchanged, first-run None), and the
+writer path attaching a delta when a previous JSON exists (tmp dir).
+
+## 22. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

@@ -639,6 +639,33 @@ google.com: MTA-STS enforce pass, TLS-RPT pass, BIMI absent info - all
 verified true observations. README and SKILL.md check lists updated in the
 same commits.
 
+---
+
+## 2026-07-02 - F9 + F10: issue aggregation and run-over-run delta
+
+**Task:** F9 and F10 per PLAN.md sections 20 and 21. Both target the
+analyst-facing output rather than new measurements.
+
+**F9 (aggregation):** page-scoped checks emitted one identical issue per
+affected page, so a single template defect repeated through the digest and,
+because draft_report_data caps findings at 15, flooded every slot of the
+executive draft. `scan_site.group_issues` collapses identical (label, check,
+verdict) findings into one group carrying the affected pages; the JSON gains
+`issues_grouped` plus grouped totals (raw issues kept for evidence fidelity),
+the digest and console print one line per distinct defect with page
+attribution, and the draft consumes groups (falling back to raw issues for
+older scan files).
+
+**F10 (delta):** `diff_issues` compares (scan, check, verdict) key sets
+between the previous `<slug>_scan.json` and the current run;
+`attach_delta` loads the old file before overwriting. JSON, digest, and
+console now state what is new and what was resolved since the prior scan,
+matching the tool's actual usage loop (scan, fix, re-scan).
+
+**What I verified:** suite 154 -> 161 tests, all pass. Live: two consecutive
+scans of example.com produce grouped issue lines with page counts and a
+correct "0 new, 0 resolved" delta citing the previous run's timestamp.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

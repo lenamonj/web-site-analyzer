@@ -68,6 +68,8 @@ python .claude\skills\review-site\tools\scan_site.py https://example.com https:/
 | `draft_report_data.py` | Drafts the executive-report data file from the scan JSON: measured scorecard and findings filled in, judgement fields left empty |
 | `run_review.py` | One command for the whole evidence pass: discovery, full scan of the proposed page set, digest, and draft report data |
 
+Issues are **aggregated**: an identical finding repeated across pages (a template-level defect) collapses into one entry naming the affected pages, so the digest and the drafted report state "missing landmarks on 12 pages" once instead of twelve times. Each run also **diffs itself against the previous scan** of the same target and reports what is new and what was resolved, so the fix-and-rescan loop shows progress explicitly.
+
 Each run also produces a **scorecard**: every category is rolled up into a posture band (Strong, Adequate, Weak, Poor, or Not measured) from its own pass/warn/fail checks, plus an overall band. It is a transparent aggregation of measured checks, not an invented benchmark, and the raw counts always travel with it. The executive report renders this scorecard when present. A multi-page run adds a **cross-page** check for titles or meta descriptions reused across pages. Each page is fetched and parsed once and shared across all page-level scanners, so scanning stays light on the target, and one scanner failing never aborts the run.
 
 The scanners detect client-rendered (JavaScript) pages and mark their structural SEO, accessibility, and readability checks inconclusive rather than reporting an empty static body as clean. Those pages need the optional browser pass for real content.

@@ -43,7 +43,15 @@ def _finding_from_issue(issue, slug):
     scan_label = issue.get("scan", "")
     check = issue.get("check", "")
     note = issue.get("note", "")
-    if ":" in scan_label:
+    pages = issue.get("pages")
+    if pages:
+        # A grouped issue: one finding whose evidence names the affected pages.
+        area = scan_label
+        shown = ", ".join(pages[:3])
+        more = len(pages) - 3
+        evidence = (f"{len(pages)} page(s): {shown}" + (f", +{more} more" if more > 0 else "")
+                    if len(pages) > 1 else pages[0])
+    elif ":" in scan_label:
         area, url = scan_label.split(":", 1)
         evidence = url
     else:
@@ -61,7 +69,9 @@ def draft(scan):
     """Build a first-draft exec_report_data dict from a scan_site result dict."""
     slug = scan.get("slug", "site")
     scorecard = _scorecard(scan)
-    issues = scan.get("issues", {}) or {}
+    # Grouped issues (one finding per site-wide defect) when the scan provides
+    # them; raw per-page issues as the fallback for older scan files.
+    issues = scan.get("issues_grouped") or scan.get("issues", {}) or {}
     ordered = list(issues.get("fail", [])) + list(issues.get("warn", []))
     findings = [_finding_from_issue(i, slug) for i in ordered[:MAX_FINDINGS]]
 

@@ -14,6 +14,16 @@ serves.
 ## Phase D - Reporting automation
 
 ## Phase F - World-class pass (2026-07-02 loop)
+- [x] **F9 (done)** Issue aggregation. Spec: PLAN.md section 20. group_issues
+  collapses identical (label, check, verdict) findings across pages into one
+  group with the affected-page list; JSON gains issues_grouped and grouped
+  totals; digest, console, and draft_report_data consume groups (raw issues
+  kept for evidence fidelity and old-scan fallback). Fixes the real defect
+  where one template-level issue flooded all 15 draft finding slots.
+- [x] **F10 (done)** Run-over-run delta. Spec: PLAN.md section 21.
+  diff_issues + attach_delta compare against the previous <slug>_scan.json
+  before overwriting; JSON, digest, and console report new vs resolved
+  issues. Suite 154 -> 161; live double-run on example.com shows the delta.
 - [x] **F7 (done)** Email transport posture. Spec: PLAN.md section 18.
   scan_dns_email gains mta_sts (record via DoH plus the well-known policy
   file and its mode; enforce -> pass), tls_rpt, and bimi checks; all three
