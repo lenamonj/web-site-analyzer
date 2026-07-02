@@ -31,14 +31,16 @@ INLINE_STYLE_WARN = 30
 FONT_FAMILY_WARN = 4
 
 DEPRECATED_RE = re.compile(r"<(font|center|marquee|blink|frameset|frame|big|strike)\b", re.I)
-STYLE_ATTR_RE = re.compile(r"""\bstyle\s*=\s*["']""", re.I)
+# (?<![-\w]) instead of \b so hyphenated attributes (data-src, data-width,
+# lazy-load patterns) never satisfy the real attribute's regex.
+STYLE_ATTR_RE = re.compile(r"""(?<![-\w])style\s*=\s*["']""", re.I)
 STYLE_BLOCK_RE = re.compile(r"<style\b[^>]*>(.*?)</style>", re.I | re.S)
 FONT_FAMILY_RE = re.compile(r"font-family\s*:\s*([^;}{]+)", re.I)
-IMG_RE = re.compile(r"<img\b([^>]*)>", re.I)
-SRC_RE = re.compile(r"""\bsrc\s*=\s*["']([^"']+)["']""", re.I)
-WIDTH_ATTR_RE = re.compile(r"\bwidth\s*=", re.I)
-HEIGHT_ATTR_RE = re.compile(r"\bheight\s*=", re.I)
-STYLE_DIM_RE = re.compile(r"""\bstyle\s*=\s*["'][^"']*(width|aspect-ratio)""", re.I)
+IMG_RE = common.tag_attrs_re("img")
+SRC_RE = re.compile(r"""(?<![-\w])src\s*=\s*["']([^"']+)["']""", re.I)
+WIDTH_ATTR_RE = re.compile(r"(?<![-\w])width\s*=", re.I)
+HEIGHT_ATTR_RE = re.compile(r"(?<![-\w])height\s*=", re.I)
+STYLE_DIM_RE = re.compile(r"""(?<![-\w])style\s*=\s*["'][^"']*(width|aspect-ratio)""", re.I)
 
 GENERIC_FONTS = {
     "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
@@ -55,6 +57,9 @@ def check_favicon(parsed, base):
         return {"verdict": "pass", "declared": len(declared),
                 "note": f"{len(declared)} icon link(s) declared (favicon or touch icon)."}
     res = common.http_fetch(urljoin(base, "/favicon.ico"), method="HEAD", want_body=False)
+    if res.get("final_status") in (405, 501):
+        # Some servers reject HEAD; do not report a missing favicon off that.
+        res = common.http_fetch(urljoin(base, "/favicon.ico"), method="GET", want_body=False)
     if res.get("final_status") == 200:
         return {"verdict": "pass", "declared": 0,
                 "note": "No icon link declared, but the default /favicon.ico exists."}

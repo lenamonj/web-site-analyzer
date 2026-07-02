@@ -1037,6 +1037,38 @@ class TestPageSecurity(unittest.TestCase):
         self.assertEqual(r["checks"]["insecure_form_action"]["verdict"], "info")
         self.assertEqual(r["category"], "security")
 
+    def test_lazy_load_data_src_is_not_mixed_content(self):
+        # <img data-src="http://..."> is not fetched by the browser, so it is
+        # not mixed content; and a '>' inside a quoted attribute value must
+        # not hide a real insecure src later in the same tag.
+        clean = links._mixed_content(
+            '<img data-src="http://cdn.acme.example/lazy.jpg" src="/real.jpg">', True)
+        self.assertEqual(clean["verdict"], "pass")
+        flagged = links._mixed_content(
+            '<script data-cfg="a->b" src="http://cdn.acme.example/x.js"></script>', True)
+        self.assertEqual(flagged["verdict"], "fail")
+        self.assertEqual(flagged["items"][0]["url"], "http://cdn.acme.example/x.js")
+
+    def test_data_action_does_not_shadow_the_real_insecure_action(self):
+        # Stimulus/Turbo forms put data-action before action; a \b-anchored
+        # regex matched data-action first and reported a false pass.
+        html = self.BASE.format(
+            '<form data-action="submit->checkout#go" action="http://acme.example/pay">'
+            '<input name="card"></form>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        c = r["checks"]["insecure_form_action"]
+        self.assertEqual(c["verdict"], "fail")
+        self.assertIn("http://acme.example/pay", c["insecure_actions"])
+
+    def test_consent_gated_data_src_script_is_not_a_live_resource(self):
+        # Cookiebot/OneTrust gate trackers as <script type="text/plain"
+        # data-src=...>; the browser loads nothing until consent, so SRI must
+        # not count it as an active cross-origin script.
+        html = self.BASE.format(
+            '<script type="text/plain" data-src="https://www.googletagmanager.com/gtag/js"></script>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        self.assertEqual(r["checks"]["subresource_integrity"]["verdict"], "info")
+
 
 class TestDesign(unittest.TestCase):
     def _ctx(self, html, final_url="https://acme.example/"):
@@ -1086,6 +1118,29 @@ class TestDesign(unittest.TestCase):
         finally:
             common.http_fetch = orig
         self.assertEqual(r["checks"]["favicon"]["verdict"], "pass")
+
+    def test_favicon_head_rejection_falls_back_to_get(self):
+        html = self.BASE.format(head="", body="")
+        seen = []
+
+        def fetch(url, method="GET", *a, **k):
+            seen.append(method)
+            status = 405 if method == "HEAD" else 200
+            return {"ok": True, "error": None,
+                    "hops": [{"url": url, "status": status, "headers": {}}],
+                    "final_url": url, "final_status": status, "final_headers": {},
+                    "body": None, "content_type": "", "content_encoding": "",
+                    "body_bytes": 0, "uncompressed_bytes": 0, "elapsed_ms": 1,
+                    "requested_url": url}
+
+        orig = common.http_fetch
+        common.http_fetch = fetch
+        try:
+            r = design.scan("https://acme.example/", page=self._ctx(html))
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(r["checks"]["favicon"]["verdict"], "pass")
+        self.assertEqual(seen, ["HEAD", "GET"])
 
     def test_theme_color(self):
         r = self._scan(head='<meta name="theme-color" content="#0b1f3a">')
@@ -1138,6 +1193,15 @@ class TestDesign(unittest.TestCase):
         good = self._scan(body='<img src="/a.png" width="10" height="10">')
         self.assertEqual(good["checks"]["image_dimensions"]["verdict"], "pass")
         bad = self._scan(body='<img src="/a.png"><img src="/b.png"><img src="/c.png" width="1" height="1">')
+        c = bad["checks"]["image_dimensions"]
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["missing_dimensions"], 2)
+
+    def test_data_width_does_not_count_as_a_declared_dimension(self):
+        # Lazy-load libraries ship <img data-src data-width data-height>; the
+        # real width/height attributes are still absent, so layout shifts.
+        bad = self._scan(body='<img src="/a.png" data-width="10" data-height="10">'
+                              '<img src="/b.png" data-width="20" data-height="20">')
         c = bad["checks"]["image_dimensions"]
         self.assertEqual(c["verdict"], "warn")
         self.assertEqual(c["missing_dimensions"], 2)

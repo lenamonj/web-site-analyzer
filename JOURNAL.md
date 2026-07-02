@@ -545,3 +545,56 @@ separately and an adversarial review of the F2-F4 code by a reviewer agent.
   opener raise NameError, which http_fetch also treats as failure).
 - Live `run_review.py https://example.com` end to end with the cache on:
   scan, digest, and draft all written; scorecard unchanged.
+
+---
+
+## 2026-07-02 - Review pass: dedup integration proof + favicon fallback fix
+
+**Task:** close the loop with verification work: an orchestrator-level
+integration test for the fetch cache, plus both a hand review and a reviewer
+agent pass over the F2-F4 code (regex robustness on messy HTML, crash paths,
+wrong verdicts, contract violations).
+
+**What I did:**
+- `TestRunLevelDedup`: runs the real `http_fetch` over a fake counting opener
+  (TLS and DoH stubbed) through a full two-page `scan_site.run` and asserts
+  no HEAD request is ever repeated within the run, and that the cache is
+  disabled afterward. This is the orchestrator-level proof the unit tests
+  could not give (they stub above the cached layer).
+- Fixed the one real defect the review found: `scan_design.check_favicon`
+  would falsely warn "no favicon" on servers that reject HEAD (405/501) when
+  no icon link is declared; it now falls back to GET, the same pattern
+  scan_links uses. Test added.
+- Reviewed the remaining flagged spots: quoted-attribute regexes miss
+  unquoted attributes (false negatives only, acceptable for a passive
+  scanner), list-valued headers are handled, DoH CAA/NXDOMAIN paths degrade
+  to info, IP-literal hosts degrade to info in canonicalization, and
+  scheme-relative and data: URLs resolve or are skipped correctly. No crash
+  paths or false-positive verdicts found.
+
+**Reviewer-confirmed defect, fixed (the important one):** every regex-based
+scanner anchored attribute names with `\b`, which also matches after a
+hyphen, so `data-action` / `data-src` / `data-width` satisfied the regex for
+`action` / `src` / `width`. Concrete impact: a Stimulus-style
+`<form data-action="submit->x" action="http://...">` reported a false PASS
+on a form posting over plain HTTP (the `data-action` match shadowed the real
+action), and consent-gated `<script type="text/plain" data-src=...>` tags
+(the standard Cookiebot/OneTrust pattern) were counted as live cross-origin
+scripts. Fixing it exposed a second layer the suggestion missed: tag-capture
+regexes used `[^>]*`, so a `>` inside a quoted attribute value truncated the
+attribute region entirely. Both fixed everywhere: attribute names are now
+anchored `(?<![-\w])`, and all tag-attribute captures go through the new
+quote-aware `common.tag_attrs_re` (page_security, privacy, design,
+performance) including the mixed-content regex in scan_links (which had both
+defects: `data-src="http://..."` lazy-loads flagged as mixed content).
+Five regression tests reproduce the reviewer's exact failing inputs.
+
+**What I verified:** suite 132 -> 138 tests, all pass; builder suite 9/9;
+working tree clean after commit.
+
+**State at loop end:** 12 registered scanners across 10 scorecard categories
+(security host+page, tls, dns_email, seo+crawl, accessibility, links,
+performance+delivery, readability, privacy, design), a per-run fetch cache,
+a professionally designed executive report with its own test suite, 143
+total offline tests, and docs in sync. Open: the user's visual verdict on
+the redesigned report docx files.

@@ -66,12 +66,14 @@ CONSENT_MARKERS = (
     "cookie-policy",
 )
 
-SCRIPT_RE = re.compile(r"<script\b([^>]*)>", re.I)
-IFRAME_RE = re.compile(r"<iframe\b([^>]*)>", re.I)
-IMG_RE = re.compile(r"<img\b([^>]*)>", re.I)
-SRC_RE = re.compile(r"""\bsrc\s*=\s*["']([^"']+)["']""", re.I)
-WIDTH_RE = re.compile(r"""\bwidth\s*=\s*["']?\s*(\d+)""", re.I)
-HEIGHT_RE = re.compile(r"""\bheight\s*=\s*["']?\s*(\d+)""", re.I)
+SCRIPT_RE = common.tag_attrs_re("script")
+IFRAME_RE = common.tag_attrs_re("iframe")
+IMG_RE = common.tag_attrs_re("img")
+# (?<![-\w]) not \b: data-src / data-width lazy-load attributes must not
+# satisfy the real attribute's regex (\b matches after a hyphen).
+SRC_RE = re.compile(r"""(?<![-\w])src\s*=\s*["']([^"']+)["']""", re.I)
+WIDTH_RE = re.compile(r"""(?<![-\w])width\s*=\s*["']?\s*(\d+)""", re.I)
+HEIGHT_RE = re.compile(r"""(?<![-\w])height\s*=\s*["']?\s*(\d+)""", re.I)
 LINK_RESOURCE_RELS = ("stylesheet", "preconnect", "dns-prefetch", "prefetch", "preload")
 
 

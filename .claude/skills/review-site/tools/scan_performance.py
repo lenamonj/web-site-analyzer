@@ -33,8 +33,10 @@ TOTAL_WARN_BYTES = 1_500_000     # measured static weight floor for a warning
 TOTAL_FAIL_BYTES = 3_500_000
 BLOCKING_SCRIPTS_WARN = 3
 
-SCRIPT_RE = re.compile(r'<script\b([^>]*)>', re.I)
-SRC_RE = re.compile(r'\bsrc\s*=\s*["\']([^"\']+)["\']', re.I)
+SCRIPT_RE = common.tag_attrs_re("script")
+# (?<![-\w]) not \b: a consent-gated <script data-src=...> must not be
+# measured as a live resource (a bare \b matches inside data-src).
+SRC_RE = re.compile(r'(?<![-\w])src\s*=\s*["\']([^"\']+)["\']', re.I)
 
 
 def _kb(n):

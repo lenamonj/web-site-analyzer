@@ -30,8 +30,12 @@ SKIP_SCHEMES = ("mailto:", "tel:", "javascript:", "data:", "#")
 CATEGORY = "links"
 SCOPE = "page"
 # Insecure resource or link references on a page: tag plus the http URL.
-MIXED_RE = re.compile(r'<(script|img|iframe|link|source|audio|video)\b[^>]*?'
-                      r'(?:src|href)\s*=\s*["\'](http://[^"\']+)', re.I)
+# The attribute region tolerates '>' inside quoted values, and the attribute
+# name is anchored so data-src / data-href lazy-load attributes (which the
+# browser does not fetch) are not reported as mixed content.
+MIXED_RE = re.compile(r"<(script|img|iframe|link|source|audio|video)\b"
+                      r"(?:[^>\"']|\"[^\"]*\"|'[^']*')*?"
+                      r"(?<![-\w])(?:src|href)\s*=\s*[\"'](http://[^\"']+)", re.I)
 ACTIVE_TAGS = {"script", "iframe", "link"}
 
 

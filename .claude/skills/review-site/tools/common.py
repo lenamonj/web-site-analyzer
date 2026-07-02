@@ -9,6 +9,7 @@ DNS-over-HTTPS lookups. No logins, no form posts, no path brute forcing.
 
 import gzip
 import json
+import re
 import ssl
 import sys
 import threading
@@ -23,6 +24,19 @@ from urllib.parse import urlparse, urljoin
 USER_AGENT = "website-review-bot/1.0 (+passive-audit; contact via site owner)"
 DEFAULT_TIMEOUT = 15
 MAX_BODY_BYTES = 3_000_000  # cap downloads so a huge page cannot stall a run
+
+
+# One attribute-region pattern for every regex-based scanner: sequences of
+# plain chars or COMPLETE quoted strings. A bare [^>]* would truncate at a '>'
+# inside a quoted value (data-action="a->b", alt="x > y") and hide the
+# attributes after it from the check.
+_TAG_ATTRS = r"""((?:[^>"']|"[^"]*"|'[^']*')*)"""
+
+
+def tag_attrs_re(tag):
+    """Compiled regex capturing one tag's full attribute string, tolerating
+    '>' inside quoted attribute values."""
+    return re.compile(r"<%s\b%s>" % (tag, _TAG_ATTRS), re.I)
 
 
 def normalize_url(url):

@@ -26,14 +26,18 @@ CATEGORY = "security"
 SCOPE = "page"
 MAX_EXAMPLES = 5
 
-SCRIPT_RE = re.compile(r"<script\b([^>]*)>", re.I)
-LINK_RE = re.compile(r"<link\b([^>]*)>", re.I)
-FORM_RE = re.compile(r"<form\b([^>]*)>", re.I)
-SRC_RE = re.compile(r"""\bsrc\s*=\s*["']([^"']+)["']""", re.I)
-HREF_RE = re.compile(r"""\bhref\s*=\s*["']([^"']+)["']""", re.I)
-ACTION_RE = re.compile(r"""\baction\s*=\s*["']([^"']+)["']""", re.I)
-REL_RE = re.compile(r"""\brel\s*=\s*["']([^"']*)["']""", re.I)
-INTEGRITY_RE = re.compile(r"\bintegrity\s*=", re.I)
+SCRIPT_RE = common.tag_attrs_re("script")
+LINK_RE = common.tag_attrs_re("link")
+FORM_RE = common.tag_attrs_re("form")
+# Attribute names are anchored with (?<![-\w]) instead of \b: a plain \b also
+# matches the tail of hyphenated attributes (data-src, data-action, ng-href),
+# which flipped real verdicts (a form's data-action shadowing its insecure
+# action, consent-gated data-src scripts counted as live resources).
+SRC_RE = re.compile(r"""(?<![-\w])src\s*=\s*["']([^"']+)["']""", re.I)
+HREF_RE = re.compile(r"""(?<![-\w])href\s*=\s*["']([^"']+)["']""", re.I)
+ACTION_RE = re.compile(r"""(?<![-\w])action\s*=\s*["']([^"']+)["']""", re.I)
+REL_RE = re.compile(r"""(?<![-\w])rel\s*=\s*["']([^"']*)["']""", re.I)
+INTEGRITY_RE = re.compile(r"(?<![-\w])integrity\s*=", re.I)
 # on<event>= attributes (onclick, onload, ...). Word boundary keeps this from
 # matching words like "money=" inside attribute values.
 INLINE_HANDLER_RE = re.compile(r"\son[a-z]+\s*=\s*[\"']", re.I)
@@ -134,9 +138,9 @@ def check_target_blank(anchors, inconclusive):
             "note": f"All {len(blank)} target=_blank link(s) carry rel=noopener or noreferrer."}
 
 
-A_TAG_RE = re.compile(r"<a\b([^>]*)>", re.I)
-TARGET_BLANK_RE = re.compile(r"""\btarget\s*=\s*["']?_blank""", re.I)
-NOOPENER_RE = re.compile(r"""\brel\s*=\s*["'][^"']*(noopener|noreferrer)""", re.I)
+A_TAG_RE = common.tag_attrs_re("a")
+TARGET_BLANK_RE = re.compile(r"""(?<![-\w])target\s*=\s*["']?_blank""", re.I)
+NOOPENER_RE = re.compile(r"""(?<![-\w])rel\s*=\s*["'][^"']*(noopener|noreferrer)""", re.I)
 
 
 def _anchor_targets(body):
