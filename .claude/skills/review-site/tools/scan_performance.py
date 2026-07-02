@@ -76,9 +76,65 @@ def _collect_resources(html, parsed, base):
 
 def _measure(resource):
     res = common.http_fetch(resource["url"], method="HEAD", want_body=False, timeout=RES_TIMEOUT)
-    length = res["final_headers"].get("content-length") if res.get("final_headers") else None
+    headers = res.get("final_headers") or {}
+    length = headers.get("content-length")
     size = int(length) if length and str(length).isdigit() else None
-    return {**resource, "bytes": size, "status": res.get("final_status")}
+    return {**resource, "bytes": size, "status": res.get("final_status"),
+            "cache_control": headers.get("cache-control")}
+
+
+def _cache_max_age(cc):
+    """max-age seconds from a Cache-Control value, or None when absent."""
+    if not cc:
+        return None
+    if isinstance(cc, list):
+        cc = ", ".join(cc)
+    m = re.search(r"max-age\s*=\s*(\d+)", cc, re.I)
+    return int(m.group(1)) if m else None
+
+
+def _asset_caching_check(measured, inconclusive):
+    """Grade caching on the declared static assets that answered 200. An asset
+    with no freshness lifetime (no max-age and not immutable, or no-store /
+    no-cache) is redownloaded on every repeat visit."""
+    ok_assets = [r for r in measured if r.get("status") == 200]
+    if inconclusive or not ok_assets:
+        note = ("Page is client-rendered; declared assets are not representative."
+                if inconclusive else "No declared assets answered to measure caching.")
+        return {"verdict": "info", "measured": len(ok_assets), "note": note}
+    uncached = []
+    for r in ok_assets:
+        cc = r.get("cache_control")
+        low = (", ".join(cc) if isinstance(cc, list) else cc or "").lower()
+        max_age = _cache_max_age(cc)
+        cached = (("immutable" in low or (max_age is not None and max_age > 0))
+                  and "no-store" not in low and "no-cache" not in low)
+        if not cached:
+            uncached.append(r["url"])
+    if len(uncached) * 2 > len(ok_assets):
+        return {"verdict": "warn", "measured": len(ok_assets), "uncached": len(uncached),
+                "examples": uncached[:5],
+                "note": (f"{len(uncached)} of {len(ok_assets)} measured static asset(s) have no "
+                         "usable caching lifetime (no max-age or marked no-store); repeat visits "
+                         "redownload them.")}
+    return {"verdict": "pass", "measured": len(ok_assets), "uncached": len(uncached),
+            "note": (f"{len(ok_assets) - len(uncached)} of {len(ok_assets)} measured static "
+                     "asset(s) carry a caching lifetime.")}
+
+
+def _redirect_chain_check(res):
+    """Each redirect before the final URL adds a full round trip before the
+    first byte of content."""
+    hops = res.get("hops", [])
+    redirects = max(0, len(hops) - 1)
+    chain = [f'{h["status"]} {h["url"]}' for h in hops]
+    if redirects >= 2:
+        return {"verdict": "warn", "redirects": redirects, "chain": chain,
+                "note": f"{redirects} redirects before the final URL; each adds a round trip."}
+    if redirects == 1:
+        return {"verdict": "pass", "redirects": 1, "chain": chain,
+                "note": "One redirect to the final URL."}
+    return {"verdict": "pass", "redirects": 0, "note": "No redirects; the URL serves directly."}
 
 
 def _compression_check(res):
@@ -162,6 +218,8 @@ def _scan(url, page=None):
             "note": f"{len(third_party)} third-party resource origin(s)."},
         "compression": _compression_check(res),
         "caching": _caching_check(res.get("final_headers", {}) or {}),
+        "asset_caching": _asset_caching_check(measured, render["likely_client_rendered"]),
+        "redirect_chain": _redirect_chain_check(res),
     }
     if render["likely_client_rendered"]:
         checks["static_weight"]["note"] += " Page is client-rendered, so most weight is not visible here."
