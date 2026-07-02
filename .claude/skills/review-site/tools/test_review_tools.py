@@ -1063,6 +1063,34 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
 
 
+class TestHttp2Alpn(unittest.TestCase):
+    def _scan_with_alpn(self, alpn):
+        orig = (common.tls_info, common.doh_query, tls._probe_legacy)
+        canned = dict(_canned_tls("acme.example"))
+        canned["alpn"] = alpn
+        common.tls_info = lambda host, *a, **k: canned
+        common.doh_query = _canned_doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+        try:
+            return tls.scan("https://acme.example/")
+        finally:
+            common.tls_info, common.doh_query, tls._probe_legacy = orig
+
+    def test_h2_passes(self):
+        c = self._scan_with_alpn("h2")["checks"]["http2"]
+        self.assertEqual(c["verdict"], "pass")
+
+    def test_http11_only_warns(self):
+        c = self._scan_with_alpn("http/1.1")["checks"]["http2"]
+        self.assertEqual(c["verdict"], "warn")
+        self.assertIn("http/1.1", c["note"])
+
+    def test_no_alpn_warns(self):
+        c = self._scan_with_alpn(None)["checks"]["http2"]
+        self.assertEqual(c["verdict"], "warn")
+        self.assertIn("no ALPN", c["note"])
+
+
 class TestEmailTransportPosture(unittest.TestCase):
     STS_POLICY = "version: STSv1\nmode: enforce\nmx: mail.acme.example\nmax_age: 86400"
 

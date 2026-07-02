@@ -26,7 +26,7 @@ It writes:
 What it measures, passively, with a citable verdict per check:
 - HTTP security: HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners, security.txt (RFC 9116).
 - Page-level security hygiene: Subresource Integrity coverage on cross-origin scripts and stylesheets, forms posting to plain HTTP from an HTTPS page, inline event handlers (they block a strict CSP), target=_blank rel hygiene.
-- TLS: negotiated protocol, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe.
+- TLS and transport: negotiated protocol, HTTP/2 support via ALPN, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe.
 - DNS email-auth and transport: SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, MTA-STS (record and policy mode), TLS-RPT, BIMI, over DNS-over-HTTPS.
 - Crawlability (host-level, checked once per run): robots.txt presence and its sitemap references, site-wide Disallow detection (a production robots.txt blocking all crawlers is a fail), XML sitemap reachability, apex vs www canonicalization.
 - SEO and on-page: title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD structured data, hreflang, image alt.

@@ -14,6 +14,13 @@ serves.
 ## Phase D - Reporting automation
 
 ## Phase F - World-class pass (2026-07-02 loop)
+- [x] **F11 (done)** HTTP/2 detection via ALPN. Spec: PLAN.md section 22.
+  common.tls_info offers h2/http1.1 via ALPN on the existing handshake;
+  scan_tls's new http2 check passes on h2, warns on HTTP/1.1-only or no ALPN.
+  No extra network traffic. Suite +3 tests; wikipedia.org negotiates h2 live.
+- [x] **F12 (done)** Parallel DKIM probes. Spec: PLAN.md section 23. The 14
+  selector queries fan out through a bounded ThreadPoolExecutor (order
+  preserved); a full dns_email scan now completes in under a second live.
 - [x] **F9 (done)** Issue aggregation. Spec: PLAN.md section 20. group_issues
   collapses identical (label, check, verdict) findings across pages into one
   group with the affected-page list; JSON gains issues_grouped and grouped

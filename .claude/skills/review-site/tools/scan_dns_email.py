@@ -12,6 +12,7 @@ Usage:
 """
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 import common
 
@@ -89,11 +90,16 @@ def check_dmarc(domain):
 
 
 def check_dkim(domain):
-    found = []
-    for sel in DKIM_SELECTORS:
+    def probe(sel):
         records, _ = _txt_records(f"{sel}._domainkey.{domain}")
-        if any("dkim1" in r.lower() or "k=rsa" in r.lower() or "p=" in r.lower() for r in records):
-            found.append(sel)
+        return any("dkim1" in r.lower() or "k=rsa" in r.lower() or "p=" in r.lower()
+                   for r in records)
+
+    # Bounded fan-out over the selector list (14 serial DoH round trips
+    # otherwise); executor.map preserves order so output stays deterministic.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        hits = list(pool.map(probe, DKIM_SELECTORS))
+    found = [sel for sel, hit in zip(DKIM_SELECTORS, hits) if hit]
     if found:
         return {"selectors_found": found, "selectors_probed": DKIM_SELECTORS,
                 "verdict": "pass", "note": f"DKIM key published for selector(s): {', '.join(found)}."}

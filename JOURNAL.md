@@ -666,6 +666,24 @@ matching the tool's actual usage loop (scan, fix, re-scan).
 scans of example.com produce grouped issue lines with page counts and a
 correct "0 new, 0 resolved" delta citing the previous run's timestamp.
 
+---
+
+## 2026-07-02 - F11 + F12: HTTP/2 via ALPN, parallel DKIM probes
+
+**F11:** `common.tls_info` now offers h2/http1.1 through ALPN on the one
+handshake the analyzer already performs and reports the negotiated protocol;
+`scan_tls` gains an `http2` check (h2 -> pass; HTTP/1.1-only or no ALPN ->
+warn, requests serialize without multiplexing). Zero additional network
+traffic. Guarded for OpenSSL builds without ALPN.
+
+**F12:** the 14 DKIM selector queries fan out through a bounded
+ThreadPoolExecutor (order preserved via executor.map), the same pattern as
+the link/resource fan-outs. A full dns_email scan (8 checks, 14 selector
+probes plus the transport checks) measured 0.4s live against google.com.
+
+**Verified:** suite 161 -> 164 tests, all pass; wikipedia.org negotiates h2
+live; README/SKILL check lists updated.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

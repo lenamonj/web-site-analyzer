@@ -53,7 +53,7 @@ python .claude\skills\review-site\tools\scan_site.py https://example.com https:/
 | --- | --- |
 | `discover_pages.py` | Reads the sitemap and homepage nav to propose a representative in-scope review set (scoping helper; fetches only the homepage and sitemaps) |
 | `scan_http_security.py` | HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners, security.txt (RFC 9116) |
-| `scan_tls.py` | Negotiated TLS protocol, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe |
+| `scan_tls.py` | Negotiated TLS protocol, HTTP/2 support via ALPN, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe |
 | `scan_dns_email.py` | SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, MTA-STS (record plus policy mode), TLS-RPT, BIMI, over DNS-over-HTTPS |
 | `scan_crawl.py` | robots.txt presence and sitemap references, site-wide Disallow detection, XML sitemap reachability, apex vs www canonicalization (host-level, checked once per run) |
 | `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt |

@@ -276,17 +276,27 @@ def doh_query(name, rtype, timeout=DEFAULT_TIMEOUT):
 
 
 def tls_info(host, port=443, timeout=DEFAULT_TIMEOUT):
-    """Complete one TLS handshake and report the negotiated protocol and certificate."""
+    """Complete one TLS handshake and report the negotiated protocol,
+    certificate, and ALPN result (offers h2 so HTTP/2 support is visible)."""
     import socket
     ctx = ssl.create_default_context()
     try:
+        ctx.set_alpn_protocols(["h2", "http/1.1"])
+    except NotImplementedError:
+        pass  # ALPN unavailable in this OpenSSL; alpn stays None below
+    try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as ss:
+                alpn = None
+                try:
+                    alpn = ss.selected_alpn_protocol()
+                except NotImplementedError:
+                    pass
                 return {"ok": True, "error": None, "protocol": ss.version(),
-                        "cipher": ss.cipher(), "cert": ss.getpeercert()}
+                        "alpn": alpn, "cipher": ss.cipher(), "cert": ss.getpeercert()}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
-                "protocol": None, "cipher": None, "cert": None}
+                "protocol": None, "alpn": None, "cipher": None, "cert": None}
 
 
 def repo_root():

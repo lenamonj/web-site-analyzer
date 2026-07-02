@@ -635,7 +635,24 @@ archive: one previous run is the comparison window, deliberately simple.
 Tests: the pure diff (new, resolved, unchanged, first-run None), and the
 writer path attaching a delta when a previous JSON exists (tmp dir).
 
-## 22. Open design questions
+## 22. Design: HTTP/2 detection via ALPN (task F11)
+Purpose: whether the server offers HTTP/2 is a real delivery-architecture
+fact (multiplexing, header compression) and is visible passively in the TLS
+handshake the analyzer already performs. `common.tls_info` offers
+`["h2", "http/1.1"]` via ALPN and reports `alpn` = the negotiated protocol.
+`scan_tls` gains a `http2` check: `h2` negotiated -> pass; anything else
+(http/1.1 or no ALPN) -> warn, because requests then serialize per
+connection. No extra network traffic: it rides the existing handshake.
+Tests: stubbed tls_info with alpn h2 / http1.1 / absent.
+
+## 23. Design: parallel DKIM selector probes (task F12)
+`check_dkim` queries 14 selectors serially (14 round trips to the DoH
+resolver on every scan). Run them through the same bounded
+ThreadPoolExecutor pattern as the fan-out scanners (section 11), max 8
+workers, `executor.map` preserving selector order so output stays
+deterministic. Behavior unchanged; existing tests cover it.
+
+## 24. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

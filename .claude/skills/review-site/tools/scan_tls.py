@@ -127,6 +127,14 @@ def _scan(target):
     coverage_note = ("Certificate covers the hostname." if covered
                      else "Certificate SAN list does not cover this hostname.")
 
+    alpn = info.get("alpn")
+    if alpn == "h2":
+        http2 = {"verdict": "pass", "alpn": alpn, "note": "HTTP/2 negotiated via ALPN."}
+    else:
+        http2 = {"verdict": "warn", "alpn": alpn,
+                 "note": (f"Server negotiated {alpn or 'no ALPN protocol'}; requests "
+                          "serialize over HTTP/1.1 without multiplexing.")}
+
     return {
         "tool": "scan_tls",
         "host": host,
@@ -144,6 +152,7 @@ def _scan(target):
         "legacy_probe": _probe_legacy(host),
         "checks": {
             "protocol": {"verdict": proto_verdict, "note": proto_note},
+            "http2": http2,
             "expiry": {"verdict": expiry_verdict, "note": expiry_note},
             "hostname_coverage": {"verdict": coverage_verdict, "note": coverage_note},
             "caa": check_caa(dns.registrable_domain(host)),
