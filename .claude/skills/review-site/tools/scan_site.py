@@ -285,18 +285,18 @@ def _page_check(ps, tool_key, check_name):
 def collect_metrics(result):
     """Site-level numeric rollups for the trend ledger. Medians for
     continuous metrics so page-set drift between runs cannot masquerade as
-    change; sums and unions for counts, with the sample size stored beside
-    sampled counts. A metric nobody measured stays None: a gap in the trend,
-    never a fabricated zero."""
+    change; sums, unions, or per-page maxima for counts, with the sample
+    size stored beside sampled counts. A metric nobody measured stays None:
+    a gap in the trend, never a fabricated zero."""
     sc = result.get("scorecard", {}) or {}
     scores = {"overall": (sc.get("overall") or {}).get("score")}
     for name, g in (sc.get("categories") or {}).items():
         scores[name] = g.get("score")
 
     lcp, cls_vals, tbt, weight, ease = [], [], [], [], []
-    broken_counts, checked_counts, mixed_counts = [], [], []
-    third_party, trackers = set(), set()
-    tp_seen = trk_seen = vitals_captured = False
+    broken_counts, checked_counts, mixed_counts, tp_counts = [], [], [], []
+    trackers = set()
+    trk_seen = vitals_captured = False
     for ps in result.get("page_scans", []) or []:
         if (ps.get("vitals") or {}).get("captured"):
             vitals_captured = True
@@ -317,10 +317,12 @@ def collect_metrics(result):
         mc = _page_check(ps, "links", "mixed_content")
         if isinstance(mc.get("count"), (int, float)):
             mixed_counts.append(mc["count"])
-        tpo = _page_check(ps, "privacy", "third_party_origins")
-        if "domains" in tpo:
-            tp_seen = True
-            third_party.update(tpo.get("domains") or [])
+        # The scanner truncates the per-page domains list (MAX_LIST), so a
+        # cross-page union would undercount. The per-page count field is
+        # untruncated; the ledger records the max across reviewed pages.
+        val = _page_check(ps, "privacy", "third_party_origins").get("count")
+        if isinstance(val, (int, float)):
+            tp_counts.append(val)
         kt = _page_check(ps, "privacy", "known_trackers")
         if "trackers" in kt:
             trk_seen = True
@@ -338,7 +340,7 @@ def collect_metrics(result):
             "broken_links": sum(broken_counts) if checked_counts else None,
             "links_checked": sum(checked_counts) if checked_counts else None,
             "mixed_content": sum(mixed_counts) if mixed_counts else None,
-            "third_party_origins": len(third_party) if tp_seen else None,
+            "third_party_origins": max(tp_counts) if tp_counts else None,
             "known_trackers": len(trackers) if trk_seen else None,
         },
         "vitals_captured": vitals_captured,

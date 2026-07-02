@@ -1352,7 +1352,8 @@ class TestTrendMetrics(unittest.TestCase):
                 "link_health": {"checked": checked, "counts": {"broken": broken}},
                 "mixed_content": {"count": mixed}}},
             "privacy": {"ok": True, "checks": {
-                "third_party_origins": {"domains": list(domains)},
+                "third_party_origins": {"count": len(domains),
+                                        "domains": list(domains)},
                 "known_trackers": {"trackers": {t: 1 for t in trackers}}}},
         }
 
@@ -1366,9 +1367,9 @@ class TestTrendMetrics(unittest.TestCase):
             self._page(lcp=1000, weight=100.0, ease=40.0, broken=1, checked=10,
                        domains=("a.example",), trackers=("t.example",)),
             self._page(lcp=3000, weight=300.0, ease=60.0, broken=2, checked=20,
-                       domains=("a.example", "b.example")),
+                       domains=("a.example", "b.example", "c.example")),
             self._page(lcp=2000, weight=200.0, ease=50.0, broken=0, checked=5,
-                       mixed=2),
+                       mixed=2, domains=("d.example",)),
         ]))
         self.assertEqual(m["scores"], {"overall": 0.8, "seo": 0.9})
         self.assertEqual(m["pages"]["median_lcp_ms"], 2000)
@@ -1378,7 +1379,10 @@ class TestTrendMetrics(unittest.TestCase):
         self.assertEqual(m["pages"]["broken_links"], 3)
         self.assertEqual(m["pages"]["links_checked"], 35)
         self.assertEqual(m["pages"]["mixed_content"], 2)
-        self.assertEqual(m["pages"]["third_party_origins"], 2)
+        # Max of per-page counts (1, 3, 1), not the cross-page union (4):
+        # the scanner truncates each page's domains list, so only the
+        # per-page count field is exact.
+        self.assertEqual(m["pages"]["third_party_origins"], 3)
         self.assertEqual(m["pages"]["known_trackers"], 1)
         self.assertTrue(m["vitals_captured"])
 
