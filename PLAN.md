@@ -907,7 +907,44 @@ Tests: draft prefers field over lab, emits nothing when neither measured;
 builder renders the strip with value/label/chip and the source line, and a
 minimal dict still builds without it.
 
-## 32. Open design questions
+## 32. Design: self-writing executive summary and action plan (task H3)
+Problem: the report's summary (bottom_line) and recommendations were left for
+a human to author, so a raw run produced a placeholder and no plan. But the
+measured data already contains the summary: Strong bands are strengths,
+Weak/Poor bands and failing checks are weaknesses, and the findings are the
+action items. The draft generator should assemble all three so a run is
+useful with zero hand-editing (a human still refines).
+
+Data (all optional, backward compatible):
+- `assessment` = {"strengths": [str], "weaknesses": [str]}. Strengths are
+  the Strong categories phrased plainly ("Security posture: strong"), plus a
+  Core Web Vitals line when field/lab data is all Good. Weaknesses are the
+  Weak/Poor categories with their fail/warn counts and the single worst
+  finding each. Derived entirely from the scorecard and grouped issues.
+- `action_plan` = [{"priority": "High"|"Medium", "action": str,
+  "affects": str}] built from the grouped findings, fails first then warns,
+  capped. Each finding's check maps to a standard remediation imperative via
+  an explicit ACTION map (a missing H1 -> "Give every page a single H1...";
+  no HSTS -> "Add an HSTS header..."); unmapped checks fall back to the
+  measured note. `affects` is the page count or the host. These are the
+  standard fixes for the measured failures, not invented advice, and the
+  draft bottom_line names this is measured-derived.
+- `bottom_line`: the draft now writes a real one-liner naming the overall
+  band, the strongest area, and the top priority, still prefixed DRAFT for a
+  human to sharpen.
+
+Builder: an "Executive summary" section renders the bottom_line callout then
+a two-column Strengths / Priorities table (from assessment). The existing
+"Preferred recommendations" table renders `action_plan` when no
+hand-authored recommendations exist (priority chip, action, affects), so the
+plan always appears. Absent fields -> unchanged report.
+
+Tests: assessment picks the right bands, action_plan maps checks to
+imperatives and orders fail-first, bottom_line names band and priority, and
+the builder renders both the summary block and the plan; minimal dict still
+builds.
+
+## 33. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

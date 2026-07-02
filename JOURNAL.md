@@ -1007,6 +1007,38 @@ green. End to end: a live python.org run drafted the panel straight from the
 CrUX query (LCP 0.9s, CLS 0.04, INP 23ms, all Good) and rendered it into the
 docx. Preview sent to the user.
 
+---
+
+## 2026-07-03 - H3: self-writing executive summary and action plan
+
+**Task:** H3 (user: the executive summary should state strengths and
+weaknesses then a specific action plan, and it "shouldn't be this
+difficult"). The measured data already held all of it; the draft generator
+just wasn't assembling it, so a raw run shipped a placeholder and no plan.
+
+**What I did:** draft_report_data now derives three things from measured data
+alone. `assessment`: strengths are Strong scorecard bands (plus an all-Good
+Core Web Vitals line), weaknesses are Weak/Poor bands with their fail/warn
+counts and the single worst finding. `action_plan`: grouped findings mapped
+to standard remediation imperatives through an explicit ACTION table
+(missing H1 -> "Give every page a single H1..."), fail-first, capped, with a
+generic-note fallback. `bottom_line`: a real one-liner naming the overall
+band, the strongest area, and the top priority. The builder renders an
+"Executive summary" section (bottom-line callout plus a Strengths /
+Priorities two-column table) and a "Recommended plan of action" table
+whenever no hand-authored recommendations exist.
+
+**Real bug fixed in passing:** the worst-finding lookup keyed on issue labels
+(http_security, a11y, perf) that never match scorecard category names
+(security, accessibility, performance), so weaknesses would have shown no
+worst finding; added LABEL_TO_CATEGORY and URL-suffix stripping.
+
+**What I verified:** builder suite 13 -> 16, scanner 199 -> 203, all green.
+End to end on python.org: 5 auto-derived strengths, a readability weakness
+naming its worst finding, and a 10-step prioritized plan (X-Content-Type-
+Options, Referrer-Policy, broken links, missing H1s...) - all from the scan,
+no hand-editing. Preview sent to the user.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

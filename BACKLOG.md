@@ -63,6 +63,20 @@ serves.
   designed until then.
 
 ## Phase H - Report communication upgrade (user request 2026-07-03)
+- [x] **H3 (done, M)** Self-writing executive summary and action plan. Spec:
+  PLAN.md section 32. draft_report_data now auto-derives, from measured data
+  alone: an assessment (strengths = Strong bands + all-Good vitals;
+  weaknesses = Weak/Poor bands with counts and the worst finding, via a
+  label->category map that fixed a real mismatch where http_security/a11y
+  labels never matched security/accessibility categories); an action_plan
+  (findings mapped to standard remediation imperatives, fail-first, capped);
+  and a real bottom_line naming band, strongest area, and top priority. The
+  builder renders an "Executive summary" section (callout + Strengths/
+  Priorities two-column table) and a "Recommended plan of action" table when
+  no hand-authored recommendations exist. A raw run now ships a useful
+  summary and plan with zero hand-editing. Builder suite 13 -> 16, scanner
+  199 -> 203. Verified end to end on python.org (5 strengths, readability
+  weakness with worst finding, 10-step prioritized plan, all auto-filled).
 - [x] **H2 (done, M)** Report Core Web Vitals panel. Spec: PLAN.md section 31.
   New optional web_vitals report field, auto-filled by draft_report_data
   (prefers CrUX real-user field data over lab capture, only measured

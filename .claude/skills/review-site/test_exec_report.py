@@ -39,6 +39,14 @@ SAMPLE = {
                                {"label": "CLS", "value": "0.31", "rating": "Poor"},
                                {"label": "INP", "value": "350ms", "rating": "Needs work"}]},
     "bottom_line": "The site is sound overall; the one urgent item is consent.",
+    "assessment": {
+        "strengths": ["TLS and certificates: strong (4 checks pass)"],
+        "weaknesses": ["Security posture: poor (6 failing, 1 warnings). Worst: No HSTS."],
+    },
+    "action_plan": [
+        {"priority": "High", "action": "Add an HSTS response header", "affects": "site-wide"},
+        {"priority": "Medium", "action": "Right-size page titles", "affects": "2 page(s)"},
+    ],
     "scorecard": {
         "overall": "Adequate",
         "rows": [
@@ -143,7 +151,7 @@ class TestExecReport(unittest.TestCase):
         self.assertIn(ber.VITALS_FILL["Poor"], chip_fills)
 
     def test_section_headings_keep_with_next(self):
-        heading = next(p for p in self.doc.paragraphs if p.text == "BOTTOM LINE")
+        heading = next(p for p in self.doc.paragraphs if p.text == "EXECUTIVE SUMMARY")
         self.assertTrue(heading.paragraph_format.keep_with_next)
 
     def test_image_exhibit_renders_in_a_framed_cell(self):
@@ -163,6 +171,26 @@ class TestExecReport(unittest.TestCase):
 
     def test_bottom_line_renders_in_callout(self):
         self.assertIn(SAMPLE["bottom_line"], self.text)
+
+    def test_executive_summary_shows_strengths_and_priorities(self):
+        self.assertIn("EXECUTIVE SUMMARY", self.text)
+        self.assertIn("STRENGTHS", self.text)
+        self.assertIn("PRIORITIES TO FIX", self.text)
+        self.assertIn("TLS and certificates: strong", self.text)
+        self.assertIn("Security posture: poor", self.text)
+
+    def test_action_plan_renders_when_no_recommendations(self):
+        data = {k: v for k, v in SAMPLE.items() if k != "recommendations"}
+        out = Path(self.tmp.name) / "plan.docx"
+        ber.build(data, out)
+        text = _doc_text(Document(str(out)))
+        self.assertIn("RECOMMENDED PLAN OF ACTION", text)
+        self.assertIn("Add an HSTS response header", text)
+
+    def test_hand_authored_recommendations_win_over_action_plan(self):
+        # SAMPLE has recommendations; the auto plan must not also render.
+        self.assertIn("PREFERRED RECOMMENDATIONS", self.text)
+        self.assertNotIn("RECOMMENDED PLAN OF ACTION", self.text)
 
     def test_scorecard_band_chips_use_band_fills(self):
         table = self._table_with_header("POSTURE")

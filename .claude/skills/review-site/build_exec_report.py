@@ -414,6 +414,32 @@ def add_callout(document, text):
     set_col_widths(table, [PAGE_WIDTH])
 
 
+def add_assessment(document, assessment):
+    """Two columns: measured strengths on the left, priorities to fix on the
+    right, each a short bulleted list."""
+    strengths = assessment.get("strengths") or []
+    weaknesses = assessment.get("weaknesses") or []
+    if not strengths and not weaknesses:
+        return
+    table = document.add_table(rows=2, cols=2)
+    set_table_borders(table, insideV=(4, HAIRLINE_HEX))
+    set_table_padding(table, top=60, bottom=90, left=130, right=130)
+    for cell, title, fill in ((table.rows[0].cells[0], "STRENGTHS", BAND_FILL["Strong"]),
+                              (table.rows[0].cells[1], "PRIORITIES TO FIX", BAND_FILL["Poor"])):
+        shade_cell(cell, fill)
+        set_cell_text(cell, title, size=8, bold=True, color=WHITE_RGB)
+    for cell, items in ((table.rows[1].cells[0], strengths),
+                        (table.rows[1].cells[1], weaknesses)):
+        cell.text = ""
+        for idx, item in enumerate(items or ["None recorded."]):
+            para = cell.paragraphs[0] if idx == 0 else cell.add_paragraph()
+            para.paragraph_format.space_after = Pt(3)
+            add_run(para, "- ", size=9, bold=True, color=ACCENT_RGB)
+            add_run(para, item, size=9)
+    set_col_widths(table, [Inches(3.5), Inches(3.5)])
+    keep_rows_together(table)
+
+
 def add_data_table(document, headers, widths, rows):
     """A hairline-ruled table: navy header row, horizontal rules only, roomy
     cells. `rows` is a list of cell writers, one callable per row taking the
@@ -555,14 +581,18 @@ def build(data, out_path):
     add_glance_tiles(document, data)
     add_footer(document, site)
 
-    # Bottom line
+    # Executive summary: bottom line, progress, then strengths vs priorities
     bottom_line = data.get("bottom_line", "")
+    assessment = data.get("assessment")
+    if bottom_line or assessment:
+        section_heading(document, "Executive summary")
     if bottom_line:
-        section_heading(document, "Bottom line")
         add_callout(document, bottom_line)
     progress = data.get("progress")
     if progress:
         add_progress_strip(document, progress)
+    if assessment:
+        add_assessment(document, assessment)
 
     # Measured posture scorecard (optional; only when the scan supplied one)
     scorecard = data.get("scorecard")
@@ -629,6 +659,26 @@ def build(data, out_path):
         add_data_table(document, ["#", "Recommendation", "Expected impact", "Effort"],
                        [Inches(0.4), Inches(3.35), Inches(2.5), Inches(0.75)],
                        [rec_row(r) for r in recs])
+
+    # Plan of action: the measured-derived plan, shown when no hand-authored
+    # recommendations exist so a raw run still ships a prioritized plan.
+    action_plan = data.get("action_plan")
+    if action_plan and not recs:
+        section_heading(document, "Recommended plan of action")
+
+        def action_row(n, row):
+            def write(cells):
+                set_cell_text(cells[0], str(n), size=10, bold=True,
+                              color=ACCENT_RGB, align=WD_ALIGN_PARAGRAPH.CENTER)
+                pr = row.get("priority", "Medium")
+                _chip(cells[1], pr, SEVERITY_FILL.get(pr, SEVERITY_FILL["Low"]))
+                set_cell_text(cells[2], row.get("action", ""), size=9)
+                set_cell_text(cells[3], row.get("affects", ""), size=8.5, color=MUTED_RGB)
+            return write
+
+        add_data_table(document, ["#", "Priority", "Action", "Affects"],
+                       [Inches(0.4), Inches(0.9), Inches(4.15), Inches(1.05)],
+                       [action_row(n, r) for n, r in enumerate(action_plan, start=1)])
 
     # Quick wins
     quick = data.get("quick_wins", [])

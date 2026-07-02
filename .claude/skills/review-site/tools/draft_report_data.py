@@ -25,6 +25,131 @@ MAX_FINDINGS = 15
 # Transparent draft severity per verdict; a human reviews and adjusts these.
 DRAFT_SEVERITY = {"fail": "High", "warn": "Medium"}
 RATING = {"pass": "Good", "warn": "Needs work", "fail": "Poor"}
+MAX_ACTIONS = 10
+
+# Plain-language names for the scorecard categories in the summary.
+CATEGORY_LABEL = {
+    "security": "Security posture", "tls": "TLS and certificates",
+    "dns_email": "Email authentication", "seo": "SEO and on-page",
+    "accessibility": "Accessibility", "links": "Link health",
+    "performance": "Performance and delivery", "readability": "Content readability",
+    "privacy": "Privacy and tracking", "design": "Design signals",
+}
+
+# Standard remediation for each measured failure. The imperative restates the
+# measured problem as its accepted fix (not invented advice); unmapped checks
+# fall back to the observed note.
+ACTION = {
+    "https_redirect": "Redirect all plain HTTP traffic to HTTPS",
+    "hsts": "Add an HSTS response header (at least 180 days)",
+    "content_security_policy": "Add and enforce a Content-Security-Policy that restricts script sources",
+    "clickjacking": "Add X-Frame-Options or a CSP frame-ancestors directive",
+    "x_content_type_options": "Add the X-Content-Type-Options: nosniff header",
+    "referrer_policy": "Set a Referrer-Policy header",
+    "permissions_policy": "Set a Permissions-Policy header",
+    "cookies": "Add Secure, HttpOnly, and SameSite flags to cookies",
+    "subresource_integrity": "Add integrity attributes to cross-origin scripts and styles",
+    "insecure_form_action": "Point every form action to an HTTPS URL",
+    "mixed_content": "Replace insecure http resources with https",
+    "link_health": "Repair or remove the broken links",
+    "information_disclosure": "Suppress version-revealing server banners",
+    "security_txt": "Publish a security.txt disclosure contact",
+    "http2": "Enable HTTP/2 for multiplexed delivery",
+    "headings": "Give every page a single H1 with an ordered heading structure",
+    "heading_order": "Fix the heading order so levels are not skipped",
+    "landmarks": "Add main and nav landmarks to the page template",
+    "form_labels": "Add a programmatic label to every form control",
+    "image_alt": "Add alt text to images that lack it",
+    "link_text": "Give every link descriptive text",
+    "anchor_fragments": "Fix in-page links that point to anchors that do not exist",
+    "meta_description": "Write a unique, well-sized meta description per page",
+    "title": "Right-size and de-duplicate page titles",
+    "viewport": "Add a mobile viewport meta tag",
+    "sitemap": "Publish an XML sitemap",
+    "robots_txt": "Publish a usable robots.txt",
+    "host_canonicalization": "Redirect the apex and www hosts to one canonical host",
+    "asset_caching": "Set Cache-Control lifetimes on static assets",
+    "static_weight": "Reduce page weight on the heaviest pages",
+    "image_dimensions": "Set width and height on images to prevent layout shift",
+    "reading_ease": "Simplify dense copy toward plainer language",
+    "sentence_length": "Shorten long sentences",
+    "known_trackers": "Gate third-party trackers behind consent",
+    "cookie_consent": "Add a consent mechanism before loading trackers",
+    "inline_style_density": "Move inline styles into the stylesheet",
+    "field_lcp": "Improve Largest Contentful Paint for real users",
+    "field_cls": "Reduce Cumulative Layout Shift for real users",
+    "field_inp": "Improve Interaction to Next Paint for real users",
+    "lcp": "Improve Largest Contentful Paint",
+    "cls": "Reduce Cumulative Layout Shift",
+    "tbt": "Reduce Total Blocking Time",
+    "contrast": "Fix low-contrast text to meet WCAG 1.4.3",
+}
+
+
+def _affects(issue):
+    pages = issue.get("pages")
+    if pages:
+        return f"{len(pages)} page(s)" if len(pages) > 1 else "1 page"
+    return "site-wide"
+
+
+# Issue-list labels differ from scorecard category names; map back so the
+# worst-finding lookup lands on the right category.
+LABEL_TO_CATEGORY = {"http_security": "security", "a11y": "accessibility",
+                     "perf": "performance", "pagesec": "security", "crawl": "seo",
+                     "vitals": "performance", "crux": "performance"}
+
+
+def _worst_by_category(scan):
+    """category name -> first (worst) finding note affecting it."""
+    grouped = scan.get("issues_grouped") or scan.get("issues", {}) or {}
+    worst = {}
+    for i in grouped.get("fail", []) + grouped.get("warn", []):
+        label = (i.get("scan") or "").split(":", 1)[0]
+        category = LABEL_TO_CATEGORY.get(label, label)
+        worst.setdefault(category, i.get("note"))
+    return worst
+
+
+def _assessment(scan):
+    """Strengths and weaknesses read straight from the measured scorecard."""
+    cats = (scan.get("scorecard", {}) or {}).get("categories", {}) or {}
+    worst = _worst_by_category(scan)
+    strengths, weaknesses = [], []
+    for name, g in cats.items():
+        label = CATEGORY_LABEL.get(name, name)
+        band = g.get("band")
+        if band == "Strong":
+            strengths.append(f"{label}: strong ({g.get('pass', 0)} checks pass)")
+        elif band in ("Weak", "Poor"):
+            note = worst.get(name)
+            detail = f"{g.get('fail', 0)} failing, {g.get('warn', 0)} warnings"
+            weaknesses.append(f"{label}: {band.lower()} ({detail})"
+                              + (f". Worst: {note}" if note else ""))
+    wv = _web_vitals(scan)
+    if wv and all(m["rating"] == "Good" for m in wv["metrics"]):
+        strengths.insert(0, "Core Web Vitals all in the Good range")
+    return {"strengths": strengths, "weaknesses": weaknesses}
+
+
+def _action_plan(scan):
+    """A prioritized plan from the grouped findings, fails first."""
+    grouped = scan.get("issues_grouped") or scan.get("issues", {}) or {}
+    ordered = list(grouped.get("fail", [])) + list(grouped.get("warn", []))
+    plan, seen = [], set()
+    for i in ordered:
+        check = i.get("check", "")
+        if check in seen:
+            continue
+        seen.add(check)
+        plan.append({
+            "priority": "High" if i.get("verdict") == "fail" else "Medium",
+            "action": ACTION.get(check) or (i.get("note") or check),
+            "affects": _affects(i),
+        })
+        if len(plan) >= MAX_ACTIONS:
+            break
+    return plan
 
 
 def _vitals_metrics(checks, spec):
@@ -128,19 +253,30 @@ def draft(scan):
                     "new_issues": len(delta.get("new", [])),
                     "resolved_issues": len(delta.get("resolved", []))}
 
+    assessment = _assessment(scan)
+    action_plan = _action_plan(scan)
+    strongest = assessment["strengths"][0].split(":")[0] if assessment["strengths"] else None
+    top_priority = action_plan[0]["action"] if action_plan else None
+    bits = [f"DRAFT (sharpen for the CEO): measured posture is {scorecard['overall']} "
+            f"across {n_pages} page(s)"]
+    if strongest:
+        bits.append(f"the strongest area is {strongest.lower()}")
+    if top_priority:
+        bits.append(f"the top priority is to {top_priority[0].lower() + top_priority[1:]}")
+    bottom_line = "; ".join(bits) + "."
+
     return {
         "site": scan.get("host", slug),
         "target_url": scan.get("target", ""),
         "date": date,
-        "bottom_line": (f"DRAFT (rewrite for the CEO): measured posture is "
-                        f"{scorecard['overall']} across {n_pages} page(s), with "
-                        f"{totals.get('fail', 0)} failing checks and "
-                        f"{totals.get('warn', 0)} warnings."),
+        "bottom_line": bottom_line,
         "scope": scope,
         "progress": progress,
         "web_vitals": _web_vitals(scan),
+        "assessment": assessment,
         "scorecard": scorecard,
         "findings": findings,
+        "action_plan": action_plan,
         "recommendations": [],
         "quick_wins": [],
     }

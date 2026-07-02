@@ -2112,6 +2112,36 @@ class TestDraftReportData(unittest.TestCase):
         d = drpt.draft(self.SCAN)
         self.assertIsNone(d["web_vitals"])
 
+    def test_assessment_reads_weaknesses_with_worst_finding_named(self):
+        # Fixture: security is Poor (weakness); the http_security -> security
+        # label mapping must land the worst-finding note on it.
+        d = drpt.draft(self.SCAN)
+        w = d["assessment"]["weaknesses"]
+        sec = next(x for x in w if x.startswith("Security posture"))
+        self.assertIn("poor", sec)
+        self.assertIn("No HSTS.", sec)
+
+    def test_assessment_lists_strong_categories(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["scorecard"]["categories"]["seo"]["band"] = "Strong"
+        d = drpt.draft(scan)
+        self.assertTrue(any(s.startswith("SEO and on-page: strong")
+                            for s in d["assessment"]["strengths"]))
+
+    def test_action_plan_maps_checks_to_imperatives_fail_first(self):
+        d = drpt.draft(self.SCAN)
+        plan = d["action_plan"]
+        self.assertEqual(plan[0]["priority"], "High")
+        self.assertEqual(plan[0]["action"], drpt.ACTION["hsts"])
+        self.assertTrue(any(a["priority"] == "Medium" and a["action"] == drpt.ACTION["title"]
+                            for a in plan))
+        self.assertEqual(plan[0]["affects"], "site-wide")  # host issue
+
+    def test_bottom_line_names_band_and_top_priority(self):
+        d = drpt.draft(self.SCAN)
+        self.assertIn("Weak", d["bottom_line"])
+        self.assertIn("top priority", d["bottom_line"])
+
     def test_findings_are_capped(self):
         big = {**self.SCAN, "issues": {"fail": [{"scan": "x", "check": "c", "verdict": "fail",
                "note": "n"}] * 40, "warn": []}}
