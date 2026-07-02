@@ -89,20 +89,14 @@ def pipeline(target, out_dir=None, crawl_pages=None, fresh_crawl=False, capture=
     finally:
         common.disable_fetch_cache()
     slug = result["slug"]
-    json_path = out_dir / f"{slug}_scan.json"
-    md_path = out_dir / f"{slug}_scan_summary.md"
-    history_path = out_dir / f"{slug}_history.jsonl"
-    scan_site.attach_delta(result, json_path, history_path)
-    common.write_json(json_path, result)
-    scan_site.append_history(result, history_path)
-    scan_site.write_digest_md(result, md_path,
-                              history=scan_site.read_history(history_path))
+    paths = scan_site.write_run_outputs(result, out_dir)
 
     draft_path = out_dir / f"{slug}_exec_report_data.draft.json"
     common.write_json(draft_path, draft_report_data.draft(result))
 
     return {"scan": result, "discovery": disco, "capture": capture_summary,
-            "json_path": json_path, "digest_path": md_path, "draft_path": draft_path}
+            "json_path": paths["json_path"], "digest_path": paths["digest_path"],
+            "draft_path": draft_path}
 
 
 def main():

@@ -16,6 +16,7 @@ Usage:
 """
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -415,6 +416,36 @@ def attach_delta(result, json_path, history_path=None):
     result["delta"] = diff_issues(prev, result)
 
 
+def archive_scan(result, out_dir):
+    """Immutable per-run copy of the full scan JSON. The ledger keeps the
+    chosen metrics; the archive keeps everything, so a metric not in today's
+    ledger schema can still be backfilled into future trends."""
+    stamp = re.sub(r"[-:]", "", result.get("measured_at_utc") or "unknown")
+    archive_dir = Path(out_dir) / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    path = archive_dir / f"{result['slug']}_scan_{stamp}.json"
+    common.write_json(path, result)
+    return path
+
+
+def write_run_outputs(result, out_dir):
+    """Every per-run artifact for a scan result: delta, scan JSON, archive
+    copy, ledger line, digest. The one write path shared by scan_site.main
+    and run_review so the artifacts can never diverge."""
+    out_dir = Path(out_dir)
+    slug = result["slug"]
+    json_path = out_dir / f"{slug}_scan.json"
+    md_path = out_dir / f"{slug}_scan_summary.md"
+    history_path = out_dir / f"{slug}_history.jsonl"
+    attach_delta(result, json_path, history_path)
+    common.write_json(json_path, result)
+    archive_scan(result, out_dir)
+    append_history(result, history_path)
+    write_digest_md(result, md_path, history=read_history(history_path))
+    return {"json_path": json_path, "digest_path": md_path,
+            "history_path": history_path}
+
+
 def write_digest_md(result, path, history=None):
     totals = result["totals"]
     lines = [f"# Passive scan digest: {result['host']}", "",
@@ -490,13 +521,7 @@ def main():
     result = run(target, extra)
 
     out_dir = common.evidence_dir()
-    json_path = out_dir / f"{result['slug']}_scan.json"
-    md_path = out_dir / f"{result['slug']}_scan_summary.md"
-    history_path = out_dir / f"{result['slug']}_history.jsonl"
-    attach_delta(result, json_path, history_path)
-    common.write_json(json_path, result)
-    append_history(result, history_path)
-    write_digest_md(result, md_path, history=read_history(history_path))
+    paths = write_run_outputs(result, out_dir)
 
     print(f"Target: {result['target']}")
     print(f"Pages scanned: {len(result['pages_scanned'])}")
@@ -520,8 +545,8 @@ def main():
     if delta:
         print(f"\nSince previous scan ({delta.get('previous_measured_at')}): "
               f"{len(delta['new'])} new, {len(delta['resolved'])} resolved.")
-    print(f"\nWrote {json_path}")
-    print(f"Wrote {md_path}")
+    print(f"\nWrote {paths['json_path']}")
+    print(f"Wrote {paths['digest_path']}")
 
 
 if __name__ == "__main__":

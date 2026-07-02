@@ -3007,5 +3007,43 @@ class TestTriage(unittest.TestCase):
             self.assertIn("| 1 | poor.example | Poor | 0.30 |", md_text)
 
 
+class TestRunOutputsAndArchive(unittest.TestCase):
+    def _result(self, measured_at):
+        r = json.loads(json.dumps(TestFindingsHistory.RESULT))
+        r.update({"measured_at_utc": measured_at, "tool": "scan_site",
+                  "host": "acme.example", "slug": "acme-example",
+                  "page_scans": []})
+        r["issues_grouped"] = {"fail": site.group_issues(r["issues"]["fail"]),
+                               "warn": site.group_issues(r["issues"]["warn"])}
+        return r
+
+    def test_write_run_outputs_writes_all_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = site.write_run_outputs(self._result("2026-07-03T10:00:00Z"), out)
+            self.assertTrue(paths["json_path"].exists())
+            self.assertTrue(paths["digest_path"].exists())
+            self.assertTrue(paths["history_path"].exists())
+            archived = list((out / "archive").glob("*.json"))
+            self.assertEqual([p.name for p in archived],
+                             ["acme-example_scan_20260703T100000Z.json"])
+            # The archive is the complete scan result, not the slim ledger line.
+            data = json.loads(archived[0].read_text(encoding="utf-8"))
+            self.assertIn("page_scans", data)
+
+    def test_second_run_appends_ledger_and_new_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            site.write_run_outputs(self._result("2026-07-03T10:00:00Z"), out)
+            second = self._result("2026-10-01T09:00:00Z")
+            site.write_run_outputs(second, out)
+            entries = site.read_history(out / "acme-example_history.jsonl")
+            self.assertEqual(len(entries), 2)
+            self.assertEqual(len(list((out / "archive").glob("*.json"))), 2)
+            # The second run's delta compared against the first ledger entry.
+            self.assertEqual(second["delta"]["previous_measured_at"],
+                             "2026-07-03T10:00:00Z")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
