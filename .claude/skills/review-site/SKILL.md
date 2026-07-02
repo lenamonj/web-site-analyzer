@@ -109,6 +109,7 @@ page, not a site-wide union.
      "site": "<display name, e.g. example.com>",
      "target_url": "<full URL>",
      "date": "<YYYY-MM-DD>",
+     "slug": "<the run's slug, carried over from the draft unchanged>",
      "bottom_line": "<one short paragraph, reads in under 30 seconds>",
      "scorecard": {
        "overall": "<Strong|Adequate|Weak|Poor>",
@@ -126,9 +127,10 @@ page, not a site-wide union.
      "evidence": [
        {"caption": "<what this proves>", "code": "<literal snippet>", "highlight": "<substring(s) to mark>"},
        {"caption": "<what this shows>", "image": "planning/_evidence/<screenshot>.png"}
-     ]
+     ],
+     "progress": "<the draft's progress object, carried over unchanged, including its nested trend when present>"
    }
-   `evidence` is optional: when present, the builder renders an appendix of captioned proof (a shaded code box with the problem substring highlighted, or an embedded screenshot). Use it only for the findings that most need showing, not for every row.
+   `evidence` is optional: when present, the builder renders an appendix of captioned proof (a shaded code box with the problem substring highlighted, or an embedded screenshot). Use it only for the findings that most need showing, not for every row. Carry `slug` and `progress` over from the draft unchanged; `progress.trend` is what renders the "Progress this quarter" section, so dropping it drops the section.
 2. Run the builder from the repo root:
    `python .claude/skills/review-site/build_exec_report.py planning/_evidence/exec_report_data.json planning/<slug>_Executive_Report.docx`
    If `python` is not found, try `py`. If `python-docx` is missing, run `pip install python-docx` first.

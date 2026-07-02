@@ -3077,11 +3077,11 @@ class TestRunOutputsAndArchive(unittest.TestCase):
 
 class TestTrends(unittest.TestCase):
     def _entry(self, ts, overall=0.7, seo=0.8, lcp=2000, fails=(), pages=5,
-               with_metrics=True):
+               with_metrics=True, bands=None):
         e = {
             "measured_at_utc": ts,
             "pages_scanned": pages,
-            "bands": {"overall": "Adequate", "seo": "Strong"},
+            "bands": bands or {"overall": "Adequate", "seo": "Strong"},
             "issues": {"fail": [{"scan": "http_security", "check": c,
                                  "verdict": "fail", "note": f"{c} missing"}
                                 for c in fails],
@@ -3150,11 +3150,38 @@ class TestTrends(unittest.TestCase):
                          ["[http_security] hsts: hsts missing"])
         self.assertEqual(d["pages_scanned"], {"prev": 5, "current": 6})
 
-    def test_pre_metrics_entries_hold_direction(self):
+    def test_missing_score_falls_back_to_band_direction(self):
+        entries = [self._entry("2026-01-10T10:00:00Z", with_metrics=False,
+                               bands={"overall": "Weak", "seo": "Weak"}),
+                   self._entry("2026-04-10T10:00:00Z",
+                               bands={"overall": "Strong", "seo": "Strong"})]
+        d = trends_mod.build_trend(entries)["latest_delta"]
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        self.assertEqual(seo_row["direction"], "improved")
+
+    def test_missing_score_and_band_movement_down_is_declined(self):
+        entries = [self._entry("2026-01-10T10:00:00Z", with_metrics=False,
+                               bands={"overall": "Strong", "seo": "Strong"}),
+                   self._entry("2026-04-10T10:00:00Z",
+                               bands={"overall": "Weak", "seo": "Weak"})]
+        d = trends_mod.build_trend(entries)["latest_delta"]
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        self.assertEqual(seo_row["direction"], "declined")
+
+    def test_missing_score_and_same_band_holds(self):
         entries = [self._entry("2026-01-10T10:00:00Z", with_metrics=False),
                    self._entry("2026-04-10T10:00:00Z", with_metrics=False)]
         d = trends_mod.build_trend(entries)["latest_delta"]
         self.assertTrue(all(r["direction"] == "held" for r in d["scorecard"]))
+
+    def test_not_measured_band_holds(self):
+        entries = [self._entry("2026-01-10T10:00:00Z", with_metrics=False,
+                               bands={"overall": "Adequate", "seo": "Not measured"}),
+                   self._entry("2026-04-10T10:00:00Z",
+                               bands={"overall": "Adequate", "seo": "Strong"})]
+        d = trends_mod.build_trend(entries)["latest_delta"]
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        self.assertEqual(seo_row["direction"], "held")
 
     def test_trend_from_ledger_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:

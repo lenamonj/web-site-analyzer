@@ -25,6 +25,9 @@ PAGE_METRICS = ["median_lcp_ms", "median_cls", "median_tbt_ms",
                 "broken_links", "links_checked", "mixed_content",
                 "third_party_origins", "known_trackers"]
 
+# Posture bands in improving order, for direction when a score is missing.
+BAND_RANK = {"Poor": 0, "Weak": 1, "Adequate": 2, "Strong": 3}
+
 
 def quarter_of(ts):
     """'2026-07-02T15:37:23Z' -> '2026-Q3'; None when unparseable."""
@@ -90,13 +93,18 @@ def _delta_rows(prev, curr):
         if name == "overall":
             continue
         p, c = _score(prev, name), _score(curr, name)
+        prev_band, band = prev_bands.get(name), curr_bands.get(name)
         if isinstance(p, (int, float)) and isinstance(c, (int, float)) and p != c:
             direction = "improved" if c > p else "declined"
         else:
-            direction = "held"
+            prev_rank, rank = BAND_RANK.get(prev_band), BAND_RANK.get(band)
+            if prev_rank is not None and rank is not None and prev_rank != rank:
+                direction = "improved" if rank > prev_rank else "declined"
+            else:
+                direction = "held"
         rows.append({"category": name,
-                     "prev_band": prev_bands.get(name),
-                     "band": curr_bands.get(name),
+                     "prev_band": prev_band,
+                     "band": band,
                      "prev_score": p, "score": c, "direction": direction})
     return rows
 
