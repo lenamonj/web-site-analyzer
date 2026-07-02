@@ -99,18 +99,60 @@ def check_clickjacking(headers):
             **_verdict("fail", "No X-Frame-Options and no CSP frame-ancestors. Clickjacking exposure.")}
 
 
+def _parse_csp(value):
+    """Directive name -> source token list. Repeated headers arrive as a list
+    and combine like a semicolon-joined policy; the first occurrence of a
+    directive wins, per the CSP spec."""
+    if isinstance(value, list):
+        value = "; ".join(value)
+    directives = {}
+    for part in value.split(";"):
+        tokens = part.strip().split()
+        if tokens:
+            directives.setdefault(tokens[0].lower(),
+                                  [t.lower().strip("'") for t in tokens[1:]])
+    return directives
+
+
 def check_csp(headers):
+    """Grade what the policy actually enforces for scripts, not just its
+    presence: report-only delivery, a missing script/default directive,
+    wildcard script origins, and unsafe-inline/eval in the directive that
+    governs scripts (unsafe-inline in style-src alone is not a script hole)."""
     val = headers.get("content-security-policy")
+    report_only = headers.get("content-security-policy-report-only")
     if not val:
+        if report_only:
+            return {"present": False, "report_only": True,
+                    "value": report_only if isinstance(report_only, str) else "; ".join(report_only),
+                    **_verdict("warn", "CSP is delivered Report-Only; the policy monitors but does not enforce.")}
         return {"present": False, "value": None,
                 **_verdict("warn", "No Content-Security-Policy. XSS mitigation is weaker.")}
-    low = val.lower()
-    weak = [t for t in ("unsafe-inline", "unsafe-eval") if t in low]
-    if weak:
-        return {"present": True, "value": val, "weak_directives": weak,
-                **_verdict("warn", f"CSP present but weakened by {', '.join(weak)}.")}
-    return {"present": True, "value": val, "weak_directives": [],
-            **_verdict("pass", "Content-Security-Policy present.")}
+
+    directives = _parse_csp(val)
+    script_directive = ("script-src" if "script-src" in directives
+                        else "default-src" if "default-src" in directives else None)
+    problems = []
+    weak = []
+    if script_directive is None:
+        problems.append("no script-src and no default-src fallback, so scripts are unrestricted")
+    else:
+        sources = directives[script_directive]
+        wild = [s for s in sources if s in ("*", "http:", "https:")]
+        if wild:
+            problems.append(f"{script_directive} allows any origin ({', '.join(wild)})")
+        weak = [t for t in ("unsafe-inline", "unsafe-eval") if t in sources]
+        if weak:
+            problems.append(f"{script_directive} permits {', '.join(weak)}")
+
+    out = {"present": True,
+           "value": val if isinstance(val, str) else "; ".join(val),
+           "directives": sorted(directives),
+           "script_directive": script_directive,
+           "weak_directives": weak}
+    if problems:
+        return {**out, **_verdict("warn", "CSP present but weakened: " + "; ".join(problems) + ".")}
+    return {**out, **_verdict("pass", "Content-Security-Policy restricts script sources.")}
 
 
 def _parse_cookies(headers):
@@ -142,11 +184,18 @@ def check_cookies(headers):
         return {"count": 0, "cookies": [],
                 **_verdict("info", "No cookies set on this response.")}
     insecure = [c["name"] for c in cookies if not c["secure"] or not c["http_only"]]
+    no_samesite = [c["name"] for c in cookies if c["same_site"] is None]
     if insecure:
         return {"count": len(cookies), "cookies": cookies, "insecure": insecure,
+                "missing_samesite": no_samesite,
                 **_verdict("warn", f"Cookies missing Secure/HttpOnly: {', '.join(insecure)}.")}
-    return {"count": len(cookies), "cookies": cookies, "insecure": [],
-            **_verdict("pass", "All cookies on this response carry Secure and HttpOnly.")}
+    if no_samesite:
+        return {"count": len(cookies), "cookies": cookies, "insecure": [],
+                "missing_samesite": no_samesite,
+                **_verdict("warn", (f"Cookies without a SameSite attribute: {', '.join(no_samesite)}. "
+                                    "Browsers default to Lax, but the CSRF intent is undeclared."))}
+    return {"count": len(cookies), "cookies": cookies, "insecure": [], "missing_samesite": [],
+            **_verdict("pass", "All cookies on this response carry Secure, HttpOnly, and SameSite.")}
 
 
 def check_security_txt(base):

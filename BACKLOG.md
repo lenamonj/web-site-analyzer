@@ -14,6 +14,13 @@ serves.
 ## Phase D - Reporting automation
 
 ## Phase F - World-class pass (2026-07-02 loop)
+- [x] **F6 (done)** Header analysis depth. Spec: PLAN.md section 17. check_csp
+  now parses directives and grades what the policy enforces for scripts:
+  Report-Only delivery, missing script-src/default-src, wildcard script
+  origins, unsafe-inline/eval scoped to the script-effective directive
+  (unsafe-inline in style-src alone no longer warns). check_cookies now warns
+  on cookies without SameSite. Suite 138 -> 140; live smoke on github.com
+  (strict CSP passes, JS-readable _octo cookie correctly flagged).
 - [x] **F5 (done)** Per-run fetch cache. Spec: PLAN.md section 16. Thread-safe
   memo cache inside common.http_fetch keyed by (method, url, want_body,
   extra_headers), successes only, bounded at 512 entries, off by default;

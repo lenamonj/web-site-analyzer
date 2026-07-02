@@ -193,6 +193,33 @@ class TestSecurityChecks(unittest.TestCase):
         self.assertIn("unsafe-inline", weak["weak_directives"])
         self.assertEqual(sec.check_csp({})["verdict"], "warn")
 
+    def test_csp_depth(self):
+        ro = sec.check_csp({"content-security-policy-report-only": "default-src 'self'"})
+        self.assertEqual(ro["verdict"], "warn")
+        self.assertIn("Report-Only", ro["note"])
+        noscript = sec.check_csp({"content-security-policy": "img-src 'self'; style-src 'self'"})
+        self.assertEqual(noscript["verdict"], "warn")
+        self.assertIn("unrestricted", noscript["note"])
+        wild = sec.check_csp({"content-security-policy": "script-src * 'self'"})
+        self.assertEqual(wild["verdict"], "warn")
+        self.assertIn("any origin", wild["note"])
+        # unsafe-inline confined to style-src is not a script hole; the check
+        # grades the directive that actually governs scripts.
+        style_only = sec.check_csp(
+            {"content-security-policy": "script-src 'self'; style-src 'unsafe-inline'"})
+        self.assertEqual(style_only["verdict"], "pass")
+        # An explicit script-src overrides a weak default-src.
+        scoped = sec.check_csp(
+            {"content-security-policy": "default-src 'unsafe-eval'; script-src 'self'"})
+        self.assertEqual(scoped["verdict"], "pass")
+
+    def test_cookie_samesite(self):
+        missing = sec.check_cookies({"set-cookie": "sid=1; Secure; HttpOnly"})
+        self.assertEqual(missing["verdict"], "warn")
+        self.assertIn("SameSite", missing["note"])
+        full = sec.check_cookies({"set-cookie": "sid=1; Secure; HttpOnly; SameSite=Strict"})
+        self.assertEqual(full["verdict"], "pass")
+
     def test_clickjacking(self):
         self.assertEqual(sec.check_clickjacking({"x-frame-options": "DENY"})["verdict"], "pass")
         self.assertEqual(sec.check_clickjacking({"content-security-policy": "frame-ancestors 'self'"})["verdict"], "pass")

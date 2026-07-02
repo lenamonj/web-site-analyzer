@@ -592,6 +592,28 @@ Five regression tests reproduce the reviewer's exact failing inputs.
 **What I verified:** suite 132 -> 138 tests, all pass; builder suite 9/9;
 working tree clean after commit.
 
+---
+
+## 2026-07-02 - F6: header analysis depth (CSP directives, SameSite)
+
+**Task:** F6 per PLAN.md section 17. The CSP check graded only presence and
+unsafe-inline/eval anywhere in the header; the cookie check ignored SameSite.
+
+**What I did:** `_parse_csp` parses the policy into directives (first
+occurrence wins, list-valued headers combine). `check_csp` now warns on
+Report-Only-only delivery, on a policy with no script-src and no default-src
+fallback, on wildcard script origins (*, http:, https:), and on
+unsafe-inline/eval in the directive that actually governs scripts - so
+unsafe-inline confined to style-src no longer produces a script warning, and
+an explicit safe script-src overrides a weak default-src. `check_cookies`
+adds a SameSite finding: Secure/HttpOnly gaps stay the stronger warn,
+otherwise undeclared SameSite warns with the cookie names.
+
+**What I verified:** suite 138 -> 140 tests, all pass. Live smoke on
+github.com: its strict CSP passes the deeper analysis; its intentionally
+JS-readable _octo cookie is flagged for missing HttpOnly (a true
+observation).
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

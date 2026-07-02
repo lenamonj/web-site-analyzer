@@ -526,7 +526,38 @@ Tests: cache hit returns the identical dict for a repeated GET; HEAD and GET
 do not cross-satisfy; failures are not cached; disable clears; scan_site.run
 leaves the cache disabled afterward.
 
-## 17. Open design questions
+## 17. Design: header analysis depth (task F6)
+Purpose: the CSP and cookie checks in `scan_http_security` grade only the
+shallowest signal. Deepen both with defensible, evidence-based verdicts; no
+new tool, no new fetches.
+
+1. `check_csp` parses the policy into directives and grades:
+   - absent -> warn (unchanged).
+   - delivered only as `Content-Security-Policy-Report-Only` -> warn: the
+     policy is monitoring, not enforcing.
+   - no `script-src` and no `default-src` fallback -> warn: scripts are
+     unrestricted, which defeats the header's XSS purpose.
+   - a wildcard `*` source (or `http:`/`https:` scheme-wide source) in
+     `script-src` (or in `default-src` when script-src is absent) -> warn:
+     any origin may serve script.
+   - `unsafe-inline` / `unsafe-eval` in script-effective directives -> warn
+     (existing behavior, now scoped to the script-effective directive rather
+     than the whole header, so unsafe-inline in style-src alone downgrades to
+     a note, not a warn).
+   - otherwise pass, reporting the parsed script-src sources.
+   Multiple findings combine into one warn with all reasons in the note.
+2. `check_cookies` additionally treats a missing or `SameSite=None` cookie as
+   a finding: missing SameSite -> the browser default (Lax) applies but the
+   intent is undeclared; `SameSite=None` without `Secure` is rejected by
+   browsers. Verdicts: any cookie missing Secure/HttpOnly stays warn (the
+   stronger finding); otherwise cookies lacking SameSite -> warn with a
+   distinct note; all cookies carrying Secure+HttpOnly+SameSite -> pass.
+
+Tests: directive parsing (quoted policy strings), the report-only path, the
+no-script-directive path, wildcard sources, unsafe-inline scoped to
+script-src vs style-src, SameSite matrix including None-without-Secure.
+
+## 18. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)
