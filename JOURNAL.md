@@ -973,6 +973,18 @@ paths for missing key, 404 (origin not in dataset), and 403 (API not
 enabled on the key's project - the live state today; the note says exactly
 that). Suite 192 -> 196, all green.
 
+**I3 verified live (2026-07-03):** the user enabled the Chrome UX Report API
+and created a dedicated CRUX-only key (CRUX_API_KEY in .env). A Gemini key
+could not be reused: Gemini API keys must bind to a service account, which
+the console refuses to combine with a plain API restriction like CrUX, so
+scan_crux now prefers CRUX_API_KEY over GOOGLE_API_KEY. Both paths confirmed
+against the real API: python.org returned real field data (p75 LCP 875ms,
+CLS 0.04, INP 23ms - all pass, Strong) and client-a.example correctly
+returned the honest "not in the CrUX dataset" info path for a low-traffic
+origin. http_post_json also now preserves the API error body so a 403
+reports its precise reason (this surfaced API_KEY_SERVICE_BLOCKED during
+setup).
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,
