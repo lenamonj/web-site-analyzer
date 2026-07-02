@@ -943,6 +943,36 @@ the planted broken anchor. Test server stopped, localhost evidence removed.
 Out of scope, stated: CrUX field data needs an API key; the crawl ceiling
 and no-JS-execution rules are charter choices.
 
+---
+
+## 2026-07-03 - I2 + I3: real-site shakedown fixes; CrUX field data
+
+**I2 (shakedown):** three sites, three kinds of proof. client-a.example: the
+delta fired against the July 1 baseline and correctly attributed all 17 new
+issues to newly added checks (0 false resolutions); the new checks caught
+real problems the July 1 manual review missed (no asset caching site-wide,
+CSP Report-Only, apex/www split). python.org: 13 pages clean; its one
+"broken link" is a genuine 503. excalidraw.com: headless-Chrome DOM capture
+produced measured rendered_dom verdicts on a real production SPA. Defects
+confirmed live and fixed with regressions: the logo-link false positive
+(anchors wrapping an alt'd image now carry that accessible name - this had
+to be hand-corrected in the July 1 report) and prose grading of listing
+pages (readability now reports info when sentences are absurd or when over
+half the visible words are link text; python.org events pages had scored
+Flesch -13.6). Verified both directions live: the events page is now info
+while the privacy policy still grades as dense prose.
+
+**I3 (CrUX):** the user supplied .env with GOOGLE_API_KEY (immediately added
+.env to .gitignore, before any staging). common.env_value reads env then
+.env and never logs; common.http_post_json joins the stubbed primitive set,
+and the test module now disables both suite-wide so offline tests can never
+reach the real API or the developer's keys. scan_crux (15th tool, host
+scope, performance category) grades the origin's p75 LCP/CLS/INP from the
+Chrome UX Report against the published CWV thresholds, with labeled info
+paths for missing key, 404 (origin not in dataset), and 403 (API not
+enabled on the key's project - the live state today; the note says exactly
+that). Suite 192 -> 196, all green.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

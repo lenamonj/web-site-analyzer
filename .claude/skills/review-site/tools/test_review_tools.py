@@ -35,9 +35,17 @@ import scan_performance as perf
 import scan_privacy as privacy
 import scan_readability as rd
 import scan_seo as seo
+import scan_crux as crux_scan
 import scan_site as site
 import scan_tls as tls
 import scan_vitals as vitals
+
+# The suite is offline by definition: no test may reach the real CrUX API or
+# read real keys from the developer's environment or .env. Tests that need
+# these primitives override them locally and restore the stubs after.
+common.http_post_json = lambda url, payload, timeout=None: {
+    "ok": False, "status": None, "json": None, "error": "stubbed offline (suite default)"}
+common.env_value = lambda name: None
 
 # A well-formed static page: language, title, one H1, ordered headings, images
 # with alt, a labeled input, landmarks, descriptive links, Open Graph, JSON-LD.
@@ -523,9 +531,9 @@ class TestRegistry(unittest.TestCase):
             "scan_http_security", "scan_tls", "scan_dns_email", "scan_crawl",
             "scan_seo", "scan_accessibility", "scan_links",
             "scan_performance", "scan_readability", "scan_privacy",
-            "scan_page_security", "scan_design", "scan_vitals",
+            "scan_page_security", "scan_design", "scan_vitals", "scan_crux",
         })
-        self.assertEqual(len(reg.host_tools()), 4)
+        self.assertEqual(len(reg.host_tools()), 5)
         self.assertEqual(len(reg.page_tools()), 9)
 
     def test_every_entry_exposes_a_callable_scan(self):
@@ -1062,6 +1070,49 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertIn("3 page(s)", landmarks["evidence"])
         # One grouped finding, not three per-page duplicates.
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
+
+
+class TestCrux(unittest.TestCase):
+    RECORD = {"record": {"metrics": {
+        "largest_contentful_paint": {"percentiles": {"p75": 2100}},
+        "cumulative_layout_shift": {"percentiles": {"p75": "0.31"}},
+        "interaction_to_next_paint": {"percentiles": {"p75": 350}},
+    }}}
+
+    def _run(self, key="k", post=None):
+        orig = (common.env_value, common.http_post_json)
+        common.env_value = lambda name: key
+        common.http_post_json = post or (lambda url, payload, timeout=None: {
+            "ok": True, "status": 200, "json": self.RECORD, "error": None})
+        try:
+            return crux_scan.scan("https://acme.example/")
+        finally:
+            common.env_value, common.http_post_json = orig
+
+    def test_threshold_grading_from_a_canned_record(self):
+        r = self._run()
+        self.assertEqual(r["checks"]["field_lcp"]["verdict"], "pass")
+        self.assertEqual(r["checks"]["field_cls"]["verdict"], "fail")   # string p75 parsed
+        self.assertEqual(r["checks"]["field_inp"]["verdict"], "warn")
+        self.assertEqual(r["category"], "performance")
+        self.assertIn("real Chrome users", r["checks"]["field_lcp"]["note"])
+
+    def test_no_key_is_not_measured(self):
+        r = self._run(key=None)
+        self.assertFalse(r["queried"])
+        self.assertEqual({c["verdict"] for c in r["checks"].values()}, {"info"})
+        self.assertEqual(r["grade"]["band"], "Not measured")
+
+    def test_origin_absent_from_dataset_is_info(self):
+        r = self._run(post=lambda url, payload, timeout=None: {
+            "ok": False, "status": 404, "json": None, "error": "HTTP 404"})
+        self.assertEqual({c["verdict"] for c in r["checks"].values()}, {"info"})
+        self.assertIn("not in the CrUX dataset", r["checks"]["field_lcp"]["note"])
+
+    def test_api_error_is_info_never_fabricated(self):
+        r = self._run(post=lambda url, payload, timeout=None: {
+            "ok": False, "status": 500, "json": None, "error": "HTTP 500"})
+        self.assertEqual({c["verdict"] for c in r["checks"].values()}, {"info"})
 
 
 class TestShakedownFixes(unittest.TestCase):

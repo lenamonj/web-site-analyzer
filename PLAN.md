@@ -850,7 +850,39 @@ order, robots disallow honored and counted, crawl-delay raising the wait,
 extension and off-domain skips, the page cap, and resume-without-refetch.
 Live verification: a tiny --crawl run against example.com.
 
-## 30. Open design questions
+## 30. Design: CrUX field data (task I3)
+Purpose: lab metrics (scan_vitals) describe one synthetic load; the Chrome
+UX Report is Google's public dataset of real-user experience for origins
+with sufficient traffic. One authenticated POST to the documented API
+returns the origin's p75 Core Web Vitals. This is passive data retrieval
+about the origin, not a probe of the target.
+
+Key handling: `common.env_value(name)` reads os.environ first, then a
+`KEY=VALUE` line from the repo-root `.env` (which .gitignore excludes). The
+key is never logged, never printed, and never included in any result dict.
+
+Network: `common.http_post_json(url, payload)` (stdlib urllib, never raises,
+returns {ok, status, json, error}) joins the stubbed-primitive set so the
+contract tests stay offline.
+
+Tool: `scan_crux.py`, host scope, CATEGORY = "performance" (field data rolls
+into the performance bucket beside the lab checks), 14th registered tool.
+scan(target) posts {"origin": "https://<host>"} to
+chromeuxreport.googleapis.com/v1/records:queryRecord and grades the p75s
+against the published CWV thresholds (LCP 2.5s/4s, CLS 0.1/0.25, INP
+200ms/500ms):
+- field_lcp, field_cls, field_inp: pass/warn/fail by threshold; info when
+  the metric is absent from the record.
+- No API key -> every check info ("field data not queried; set
+  GOOGLE_API_KEY"), grade Not measured.
+- HTTP 404 -> info: the origin is not in the CrUX dataset (insufficient
+  traffic); that is an observation, not a fault.
+- Other API errors -> info with the status, never a fabricated grade.
+Notes state "p75 of real Chrome users, 28-day collection" so the provenance
+is explicit. Tests: threshold matrix from a canned record, the no-key path,
+the 404 path, and the API-error path; registry census moves to 5 host tools.
+
+## 31. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

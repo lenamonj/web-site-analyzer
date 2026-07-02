@@ -50,6 +50,18 @@ serves.
   (3) covered by I1 (anchor forms). Suite 189 -> 192. Also added .env to
   .gitignore before any key could be committed.
 
+- [x] **I3 (done, M)** CrUX field data. Spec: PLAN.md section 30. The user
+  supplied a .env with GOOGLE_API_KEY. Added common.env_value (env then
+  .env, never logged) and common.http_post_json (stubbed suite-wide so
+  offline tests can never reach the real API or read real keys); new 15th
+  tool scan_crux (host scope, performance category) grades origin p75
+  LCP/CLS/INP from the Chrome UX Report against published CWV thresholds,
+  with honest info paths for no key, origin absent from the dataset (404),
+  and unauthorized API (403, with an actionable note). Suite 192 -> 196.
+  Live: the key currently returns 403 - the Chrome UX Report API needs to be
+  enabled in the key's Google Cloud project; the tool degrades exactly as
+  designed until then.
+
 ## Phase H - Report communication upgrade (user request 2026-07-03)
 - [x] **H1 (done, M)** Executive report review pass. Spec: PLAN.md section 12
   amendment. Added: optional scope line (pages reviewed, method) under the

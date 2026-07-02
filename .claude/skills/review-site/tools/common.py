@@ -256,6 +256,43 @@ def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want
         }
 
 
+def env_value(name):
+    """A secret from the environment, falling back to the repo-root .env file
+    (which .gitignore excludes from version control). Never log the value."""
+    import os
+    if os.environ.get(name):
+        return os.environ[name]
+    path = repo_root() / ".env"
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+    return None
+
+
+def http_post_json(url, payload, timeout=DEFAULT_TIMEOUT):
+    """POST a JSON payload and parse a JSON response. Never raises; errors are
+    returned. Part of the stubbed network-primitive set (see the contract
+    tests), like http_fetch and doh_query."""
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"Content-Type": "application/json",
+                                          "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return {"ok": True, "status": resp.status,
+                    "json": json.loads(resp.read().decode("utf-8", errors="replace")),
+                    "error": None}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "status": e.code, "json": None,
+                "error": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"ok": False, "status": None, "json": None,
+                "error": f"{type(e).__name__}: {e}"}
+
+
 def doh_query(name, rtype, timeout=DEFAULT_TIMEOUT):
     """
     Resolve a DNS record over HTTPS (Google public resolver).
