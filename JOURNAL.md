@@ -703,6 +703,29 @@ reports DKIM pass with selectors 20230601 and 20161025 found; the previous
 list reported "not found on probed selectors" for the same domain. Full
 dns_email scan measured 0.7s.
 
+---
+
+## 2026-07-03 - G2: tracker list depth
+
+**Task:** G2 per PLAN.md section 25 (spec'd first). Phase G loop, iteration 2.
+
+**What I did:** expanded the embedded privacy reference lists to the level of
+the public tracker datasets while staying offline-only: KNOWN_TRACKERS grew
+from 25 to 154 documented tracker registrable domains, grouped and commented
+by function (analytics including Adobe's omtrdc/demdex/2o7 family;
+advertising ad-tech including SSPs, DSPs, identity and data brokers, and
+verification vendors; social widgets; session replay; marketing automation
+and attribution; A/B testing). CMP_HOSTS grew to 20 (Didomi, Sourcepoint,
+consentmanager, the IAB consensu.org domain, CookieHub, CookieFirst,
+Cookie-Script, Civic) and CONSENT_MARKERS gained the matching DOM markers.
+Matching stays exact-or-subdomain; a match remains an observation.
+
+**What I verified:** suite 167 -> 170 (count-floor test guards truncation,
+subdomain-vs-lookalike matching, expanded CMP/marker detection). Live:
+cnn.com's static homepage now names 7 trackers across four categories, four
+of which only the expanded list can identify, and its consent platform is
+detected.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

@@ -1682,6 +1682,36 @@ class TestReferrerPolicy(unittest.TestCase):
             {"referrer-policy": "unsafe-url"})["verdict"], "warn")
 
 
+class TestTrackerListDepth(unittest.TestCase):
+    def test_list_covers_the_major_families_with_a_count_floor(self):
+        # An accidental truncation of the embedded list must fail loudly.
+        self.assertGreaterEqual(len(privacy.KNOWN_TRACKERS), 140)
+        for domain, category in (
+                ("criteo.net", "advertising"), ("adnxs.com", "advertising"),
+                ("omtrdc.net", "analytics"), ("taboola.com", "advertising"),
+                ("rlcdn.com", "advertising"), ("logrocket.com", "session-replay"),
+                ("hs-analytics.net", "marketing"), ("appsflyer.com", "attribution"),
+                ("optimizely.com", "ab-testing")):
+            self.assertEqual(privacy.KNOWN_TRACKERS.get(domain), category, domain)
+
+    def test_new_entries_match_by_subdomain_not_lookalike(self):
+        found = privacy._match_trackers([
+            "https://static.criteo.net/js/ld/ld.js",
+            "https://secure.adnxs.com/px",
+            "https://notcriteo.net/x.js",
+        ])
+        self.assertIn("criteo.net", found)
+        self.assertIn("adnxs.com", found)
+        self.assertEqual(len(found), 2)
+
+    def test_expanded_cmp_and_marker_detection(self):
+        self.assertTrue(privacy._consent_detected(
+            '<script src="https://sdk.privacy-center.org/loader.js"></script>'))
+        self.assertTrue(privacy._consent_detected('<div id="didomi-host">'))
+        self.assertTrue(privacy._consent_detected('<div class="cmplz-cookiebanner">'))
+        self.assertFalse(privacy._consent_detected('<div>plain page</div>'))
+
+
 class TestPrivacyHostMatching(unittest.TestCase):
     def test_suffix_not_substring(self):
         self.assertTrue(privacy._host_matches("www.facebook.com", "facebook.com"))

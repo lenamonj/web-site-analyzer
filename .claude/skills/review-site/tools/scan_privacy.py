@@ -27,43 +27,187 @@ MAX_LIST = 12
 
 # Curated, explicit reference lists. A match is a factual observation that a
 # known host or marker appears in the static HTML, not a score or benchmark.
+# Entries are registrable domains (or tracking-specific subdomains) whose
+# function is publicly documented in the common tracker datasets
+# (EasyPrivacy, DuckDuckGo Tracker Radar, Ghostery/WhoTracksMe). Matching is
+# exact-or-subdomain via _host_matches; see PLAN.md section 25.
 KNOWN_TRACKERS = {
+    # -- analytics ---------------------------------------------------------
     "google-analytics.com": "analytics",
     "googletagmanager.com": "analytics",
     "analytics.google.com": "analytics",
-    "doubleclick.net": "advertising",
-    "googlesyndication.com": "advertising",
-    "googleadservices.com": "advertising",
-    "connect.facebook.net": "social",
-    "facebook.com": "social",
-    "hotjar.com": "session-replay",
-    "clarity.ms": "session-replay",
-    "fullstory.com": "session-replay",
-    "mouseflow.com": "session-replay",
-    "crazyegg.com": "session-replay",
     "segment.com": "analytics",
     "segment.io": "analytics",
     "mixpanel.com": "analytics",
     "amplitude.com": "analytics",
+    "heapanalytics.com": "analytics",
+    "heap.io": "analytics",
+    "kissmetrics.io": "analytics",
+    "statcounter.com": "analytics",
+    "chartbeat.com": "analytics",
+    "parsely.com": "analytics",
+    "plausible.io": "analytics",
+    "matomo.cloud": "analytics",
+    "piwik.pro": "analytics",
+    "getclicky.com": "analytics",
+    "woopra.com": "analytics",
+    "gosquared.com": "analytics",
+    "pendo.io": "analytics",
+    "posthog.com": "analytics",
+    "scorecardresearch.com": "analytics",
+    "quantserve.com": "analytics",
+    "quantcount.com": "analytics",
+    "mc.yandex.ru": "analytics",
+    "mc.yandex.com": "analytics",
+    "hm.baidu.com": "analytics",
+    "cnzz.com": "analytics",
+    "umeng.com": "analytics",
+    "omtrdc.net": "analytics",          # Adobe Analytics
+    "demdex.net": "advertising",        # Adobe Audience Manager
+    "2o7.net": "analytics",             # Adobe (legacy)
+    "adobedtm.com": "analytics",
+    "adobedc.net": "analytics",
+    "webtrends.com": "analytics",
+    "nr-data.net": "analytics",         # New Relic browser agent
+    "newrelic.com": "analytics",
+    "bugsnag.com": "analytics",
+    "sentry.io": "analytics",
+    # -- advertising and ad-tech ------------------------------------------
+    "doubleclick.net": "advertising",
+    "googlesyndication.com": "advertising",
+    "googleadservices.com": "advertising",
+    "adservice.google.com": "advertising",
+    "2mdn.net": "advertising",
+    "adnxs.com": "advertising",         # Xandr / AppNexus
+    "rubiconproject.com": "advertising",
+    "pubmatic.com": "advertising",
+    "openx.net": "advertising",
+    "criteo.com": "advertising",
+    "criteo.net": "advertising",
+    "taboola.com": "advertising",
+    "outbrain.com": "advertising",
+    "amazon-adsystem.com": "advertising",
+    "adsrvr.org": "advertising",        # The Trade Desk
+    "casalemedia.com": "advertising",   # Index Exchange
+    "indexww.com": "advertising",
+    "smartadserver.com": "advertising",
+    "adform.net": "advertising",
+    "yieldlab.net": "advertising",
+    "teads.tv": "advertising",
+    "moatads.com": "advertising",       # Oracle Moat verification
+    "doubleverify.com": "advertising",
+    "adsafeprotected.com": "advertising",  # IAS verification
+    "serving-sys.com": "advertising",   # Sizmek
+    "innovid.com": "advertising",
+    "flashtalking.com": "advertising",
+    "media.net": "advertising",
+    "revcontent.com": "advertising",
+    "mgid.com": "advertising",
+    "sharethrough.com": "advertising",
+    "triplelift.com": "advertising",
+    "spotxchange.com": "advertising",
+    "fwmrm.net": "advertising",         # FreeWheel
+    "bidswitch.net": "advertising",
+    "crwdcntrl.net": "advertising",     # Lotame
+    "bluekai.com": "advertising",       # Oracle Data Cloud
+    "exelator.com": "advertising",      # Nielsen
+    "eyeota.net": "advertising",
+    "tapad.com": "advertising",
+    "rlcdn.com": "advertising",         # LiveRamp
+    "liadm.com": "advertising",         # LiveIntent
+    "id5-sync.com": "advertising",
+    "agkn.com": "advertising",          # Neustar
+    "mathtag.com": "advertising",       # MediaMath
+    "turn.com": "advertising",          # Amobee
+    "simpli.fi": "advertising",
+    "stackadapt.com": "advertising",
+    "yieldmo.com": "advertising",
+    "gumgum.com": "advertising",
+    "33across.com": "advertising",
+    "lijit.com": "advertising",         # Sovrn
+    "sovrn.com": "advertising",
+    "sonobi.com": "advertising",
+    "zemanta.com": "advertising",
     "bat.bing.com": "advertising",
     "ads.linkedin.com": "advertising",
     "snap.licdn.com": "advertising",
     "ads-twitter.com": "advertising",
     "analytics.tiktok.com": "advertising",
-    "quantserve.com": "advertising",
-    "scorecardresearch.com": "analytics",
+    "ct.pinterest.com": "advertising",
+    "alb.reddit.com": "advertising",
+    "q.quora.com": "advertising",
+    "ads.yahoo.com": "advertising",
+    "sp.analytics.yahoo.com": "advertising",
+    # -- social widgets ----------------------------------------------------
+    "connect.facebook.net": "social",
+    "facebook.com": "social",
+    "platform.twitter.com": "social",
+    "platform.linkedin.com": "social",
+    "addthis.com": "social",
+    "sharethis.com": "social",
+    "addtoany.com": "social",
+    "disqus.com": "social",
+    "vk.com": "social",
+    # -- session replay ----------------------------------------------------
+    "hotjar.com": "session-replay",
+    "clarity.ms": "session-replay",
+    "fullstory.com": "session-replay",
+    "mouseflow.com": "session-replay",
+    "crazyegg.com": "session-replay",
+    "smartlook.com": "session-replay",
+    "inspectlet.com": "session-replay",
+    "luckyorange.com": "session-replay",
+    "sessioncam.com": "session-replay",
+    "logrocket.com": "session-replay",
+    "lr-ingest.io": "session-replay",
+    "quantummetric.com": "session-replay",
+    "contentsquare.net": "session-replay",
+    "decibelinsight.net": "session-replay",
+    # -- marketing automation and attribution ------------------------------
+    "hs-analytics.net": "marketing",    # HubSpot
+    "hs-scripts.com": "marketing",
+    "track.hubspot.com": "marketing",
+    "marketo.net": "marketing",
+    "mktoresp.com": "marketing",
+    "pardot.com": "marketing",
+    "en25.com": "marketing",            # Oracle Eloqua
+    "klaviyo.com": "marketing",
+    "braze.com": "marketing",
+    "appboycdn.com": "marketing",       # Braze CDN
+    "customer.io": "marketing",
+    "intercom.io": "marketing",
+    "drift.com": "marketing",
+    "chimpstatic.com": "marketing",     # Mailchimp
+    "onesignal.com": "marketing",
+    "bounceexchange.com": "marketing",  # Wunderkind
+    "branch.io": "attribution",
+    "appsflyer.com": "attribution",
+    "adjust.com": "attribution",
+    "kochava.com": "attribution",
+    "impactradius-event.com": "attribution",
+    "awin1.com": "attribution",
+    "shareasale.com": "attribution",
+    "linksynergy.com": "attribution",   # Rakuten
+    # -- A/B testing and personalization ------------------------------------
+    "optimizely.com": "ab-testing",
+    "visualwebsiteoptimizer.com": "ab-testing",  # VWO
+    "abtasty.com": "ab-testing",
 }
 
 CMP_HOSTS = (
     "cookiebot.com", "cookielaw.org", "onetrust.com", "osano.com",
     "trustarc.com", "usercentrics.eu", "usercentrics.com", "iubenda.com",
     "cookieyes.com", "termly.io", "quantcast.com",
+    "didomi.io", "privacy-center.org", "consentmanager.net",
+    "sp-prod.net", "consensu.org", "cookiehub.com", "cookiefirst.com",
+    "cookie-script.com", "civiccomputing.com",
 )
 
 CONSENT_MARKERS = (
     "cookie-consent", "cookie-banner", "cookie-notice", "cookieconsent",
     "onetrust", "ot-sdk", "gdpr-consent", "consent-banner", "cookie-bar",
-    "cookie-policy",
+    "cookie-policy", "didomi", "usercentrics", "cmplz", "borlabs-cookie",
+    "truste", "iubenda",
 )
 
 SCRIPT_RE = common.tag_attrs_re("script")

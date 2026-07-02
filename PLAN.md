@@ -673,7 +673,32 @@ probe list, a stubbed hit on a date selector is reported, and the absence
 note still carries the caveat. Live verification: gmail.com publishes
 20230601._domainkey and must be found.
 
-## 25. Open design questions
+## 25. Design: tracker list depth (task G2)
+Problem: KNOWN_TRACKERS held about two dozen entries, so common trackers
+(Criteo, Xandr, Adobe Analytics, Taboola, LiveRamp, session-replay vendors
+beyond the top four) loaded without being named.
+
+Design: expand the embedded constants to roughly 150 widely documented
+tracker registrable domains, grouped and commented by function: analytics,
+advertising/ad-tech (SSPs, DSPs, identity/data brokers, verification),
+social widgets, session replay, marketing automation and attribution, and
+A/B testing. Sources are the well-known public tracker datasets
+(EasyPrivacy, DuckDuckGo Tracker Radar, Ghostery/WhoTracksMe classes of
+list); only domains whose tracking function is publicly documented are
+included, still explicit constants in the module, no downloads at runtime.
+Matching stays exact-or-subdomain via _host_matches (no substring
+lookalikes). A match remains a factual observation ("this known host is
+referenced"), never a score. CMP_HOSTS gains the widely deployed consent
+platforms (Didomi, Sourcepoint, consentmanager, IAB consensu.org,
+CookieHub, CookieFirst, Cookie-Script, Civic) and CONSENT_MARKERS the
+matching DOM markers (didomi, usercentrics, cmplz, borlabs-cookie, truste).
+
+Tests: representative new entries match by exact and subdomain host, the
+lookalike guard still rejects notfacebook.com-style hosts, expanded CMP and
+marker detection, and a count floor so an accidental list truncation fails
+the suite.
+
+## 26. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

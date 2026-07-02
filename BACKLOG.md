@@ -25,11 +25,14 @@ per the standing rule.
   protonmail/2/3, Zoho); absence note names the probed families and keeps the
   honest caveat. Suite 164 -> 167; live: gmail.com now found on 20230601 and
   20161025 (previously reported not found), full scan 0.7s.
-- [ ] **G2 (todo, S)** Tracker list depth. The curated KNOWN_TRACKERS list is
-  a few dozen entries versus tens of thousands in EasyList-class datasets.
-  Expand the embedded list to the top ~150 tracker domains by prevalence
-  (still explicit constants, no downloads, sources cited in the spec), and
-  add the matching CMP hosts. Keep matches reported as observations.
+- [x] **G2 (done, S)** Tracker list depth. Spec: PLAN.md section 25.
+  KNOWN_TRACKERS 25 -> 154 documented tracker domains grouped by function
+  (analytics, ad-tech incl. SSP/DSP/identity/verification, social, session
+  replay, marketing/attribution, A/B testing); CMP_HOSTS 11 -> 20 (Didomi,
+  Sourcepoint, consensu.org, and peers); CONSENT_MARKERS +6. Count-floor
+  test guards against truncation. Suite 167 -> 170; live: cnn.com static
+  HTML now names 7 trackers (4 only findable with the expanded list) and
+  detects its consent platform.
 - [ ] **G3 (todo, L)** Rendered-evidence pipeline, part 1: structural re-runs.
   When a browser (Playwright/Chrome MCP) is available, capture the rendered
   DOM for client-rendered pages and re-run the structural scanners (seo,
