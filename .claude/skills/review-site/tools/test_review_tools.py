@@ -1064,6 +1064,78 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
 
 
+class TestCrawler(unittest.TestCase):
+    SITE = {
+        "https://acme.example/robots.txt":
+            "User-agent: *\nDisallow: /private/\nCrawl-delay: 2",
+        "https://acme.example/":
+            '<a href="/a">a</a> <a href="/b">b</a> <a href="/private/x">p</a> '
+            '<a href="/file.pdf">pdf</a> <a href="https://other.example/">ext</a>',
+        "https://acme.example/a": '<a href="/b">b</a> <a href="/c">c</a>',
+        "https://acme.example/b": '<a href="/">home</a>',
+        "https://acme.example/c": "no links here",
+    }
+
+    def setUp(self):
+        self.fetches = []
+        self.sleeps = []
+        self._orig = common.http_fetch
+        site_map = self.SITE
+        fetches = self.fetches
+
+        def fetch(url, *a, **k):
+            fetches.append(url)
+            body = site_map.get(url)
+            status = 200 if body is not None else 404
+            return {"ok": body is not None, "error": None,
+                    "hops": [{"url": url, "status": status, "headers": {}}],
+                    "final_url": url, "final_status": status, "final_headers": {},
+                    "content_type": "text/html", "content_encoding": "",
+                    "body": body, "body_bytes": len(body or ""),
+                    "uncompressed_bytes": len(body or ""), "elapsed_ms": 1,
+                    "requested_url": url}
+
+        common.http_fetch = fetch
+
+    def tearDown(self):
+        common.http_fetch = self._orig
+
+    def test_bfs_respects_robots_extensions_and_domain(self):
+        import crawler
+        r = crawler.crawl("https://acme.example/", max_pages=10,
+                          delay=1.0, sleep=self.sleeps.append)
+        self.assertEqual(r["pages"], ["https://acme.example/", "https://acme.example/a",
+                                      "https://acme.example/b", "https://acme.example/c"])
+        self.assertEqual(r["stats"]["skipped_by_robots"], 1)
+        self.assertNotIn("https://acme.example/file.pdf", self.fetches)
+        self.assertNotIn("https://other.example/", self.fetches)
+        # Crawl-delay: 2 raises the 1.0s default; one wait between each fetch.
+        self.assertTrue(self.sleeps and all(s == 2.0 for s in self.sleeps))
+
+    def test_page_cap_is_enforced(self):
+        import crawler
+        r = crawler.crawl("https://acme.example/", max_pages=2,
+                          delay=0, sleep=self.sleeps.append)
+        self.assertEqual(len(r["pages"]), 2)
+
+    def test_resume_does_not_refetch_visited_pages(self):
+        import crawler
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state.json"
+            crawler.crawl("https://acme.example/", max_pages=2, delay=0,
+                          state_path=state, sleep=self.sleeps.append)
+            first_fetches = list(self.fetches)
+            self.fetches.clear()
+            r = crawler.crawl("https://acme.example/", max_pages=4, delay=0,
+                              state_path=state, sleep=self.sleeps.append)
+        self.assertIn("https://acme.example/", first_fetches)
+        self.assertEqual(len(r["pages"]), 4)
+        # The resumed run fetched only robots.txt plus the unvisited frontier.
+        self.assertNotIn("https://acme.example/", self.fetches)
+        self.assertNotIn("https://acme.example/a", self.fetches)
+        self.assertIn("https://acme.example/b", self.fetches)
+
+
 class TestFindingsHistory(unittest.TestCase):
     RESULT = {
         "measured_at_utc": "2026-07-03T10:00:00Z",

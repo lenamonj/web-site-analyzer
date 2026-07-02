@@ -809,6 +809,39 @@ section with the ledger-sourced delta. One test fixture initially carried
 band-only scorecard dicts and broke the digest's scorecard table; fixed the
 fixture to carry full grade dicts as real runs do.
 
+---
+
+## 2026-07-03 - G6: polite scale crawling (PHASE G COMPLETE)
+
+**Task:** G6 per PLAN.md section 29 (spec'd first). Phase G loop, iteration
+6 - the final Phase G task.
+
+**What I did:** `tools/crawler.py`, a discovery tool (not a registered
+scanner): breadth-first, same-registrable-domain crawl that is strictly
+serial with a 1.0s per-request delay (raised by robots.txt Crawl-delay),
+robots.txt compliant via the stdlib robotparser (disallowed URLs counted,
+never fetched), bounded by the caller's budget under a hard 500-page
+ceiling, filters binary extensions, off-domain hosts, and non-http schemes,
+and persists resumable state after every page
+(`<slug>_crawl_state.json`). `run_review.py` gains `--crawl N` and
+`--fresh`: the crawl replaces sampled discovery only when the user
+explicitly opts in, and the pipeline's fetch cache means the scan reuses the
+crawl's page fetches instead of refetching. CLAUDE.md scope, SKILL.md, and
+README updated; authorization language unchanged.
+
+**What I verified:** suite 183 -> 186 (BFS order with robots/extension/
+domain filtering and Crawl-delay raising the wait, page cap, resume without
+refetching visited pages), all pass. Live: a capped crawl of example.com
+collected exactly its one page, excluded the external link, and stopped
+with an empty frontier.
+
+**Phase G ledger:** G1 DKIM selector families, G2 tracker list depth
+(25 -> 154), G3 rendered-DOM snapshot pipeline, G4 scan_vitals (browser
+LCP/CLS/TBT + WCAG contrast), G5 findings history ledger with digest
+trends, G6 polite opt-in crawling. Suite went 164 -> 186 scanner tests plus
+9 builder tests over the phase; every task spec'd in PLAN.md before build,
+verified live where a passive check allowed, committed atomically.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

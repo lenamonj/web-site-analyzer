@@ -31,7 +31,11 @@ Or ask directly: "Run the website review against the URL in TARGET.txt, write th
 - If no browser tool is available, say so in the gameplan and limit the design section to what is inferable from HTML, CSS, and the scanner JSON (semantic structure, heading order, ARIA, meta tags, declared breakpoints). Do not invent visual judgments.
 
 ## Scope
-Do not crawl the entire site. Review this default set unless told otherwise:
+Do not crawl the entire site by default. An opt-in polite crawl exists for
+authorized deep reviews (`python .claude/skills/review-site/tools/run_review.py --crawl N`,
+robots.txt compliant, serial with a per-request delay, hard 500-page cap);
+use it only when the user explicitly asks for a wider surface. Otherwise
+review this default set:
 1. Homepage (the target URL)
 2. Every top-level navigation destination
 3. Two or three representative deep pages per major section (a product page, an article or insights page, an About or Careers page)

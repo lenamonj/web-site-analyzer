@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import common
+import crawler
 import discover_pages
 import draft_report_data
 import scan_site
@@ -35,18 +36,26 @@ def choose_pages(target, disco):
     return [u for u in disco.get("proposed_review_set", []) if u not in skip]
 
 
-def pipeline(target, out_dir=None):
-    """Run discover -> scan -> draft and write all artifacts. Returns the paths."""
+def pipeline(target, out_dir=None, crawl_pages=None, fresh_crawl=False):
+    """Run discover (or an opt-in crawl) -> scan -> draft and write all
+    artifacts. Returns the paths. crawl_pages switches page discovery to the
+    polite crawler (PLAN.md section 29) with that page budget."""
     target = common.normalize_url(target)
     out_dir = Path(out_dir) if out_dir else common.evidence_dir()
 
     # Enable the per-run fetch cache for the whole pipeline so discovery's
-    # homepage and robots.txt fetches are reused by the scan (scan_site.run
+    # (or the crawl's) page fetches are reused by the scan (scan_site.run
     # keeps existing entries and disables the cache when it finishes).
     common.enable_fetch_cache()
     try:
-        disco = discover_pages.discover(target)
-        extra = choose_pages(target, disco)
+        if crawl_pages:
+            state_path = out_dir / f"{common.slug_of(target)}_crawl_state.json"
+            disco = crawler.crawl(target, max_pages=crawl_pages,
+                                  state_path=state_path, fresh=fresh_crawl)
+            extra = [u for u in disco.get("pages", []) if u != target]
+        else:
+            disco = discover_pages.discover(target)
+            extra = choose_pages(target, disco)
         result = scan_site.run(target, extra)
     finally:
         common.disable_fetch_cache()
@@ -70,12 +79,24 @@ def pipeline(target, out_dir=None):
 def main():
     common.enable_utf8_stdout()
     args = sys.argv[1:]
+    crawl_pages, fresh = None, False
+    if "--fresh" in args:
+        fresh = True
+        args.remove("--fresh")
+    if "--crawl" in args:
+        idx = args.index("--crawl")
+        try:
+            crawl_pages = int(args[idx + 1])
+            del args[idx:idx + 2]
+        except (IndexError, ValueError):
+            print("Usage: python run_review.py [url] [--crawl N] [--fresh]")
+            sys.exit(1)
     target = args[0] if args else common.read_target_file()
     if not target:
         print("No target given and no http line found in TARGET.txt")
         sys.exit(1)
 
-    out = pipeline(target)
+    out = pipeline(target, crawl_pages=crawl_pages, fresh_crawl=fresh)
     result = out["scan"]
 
     print(f"Target: {result['target']}")

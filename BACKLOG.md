@@ -64,11 +64,18 @@ per the standing rule.
   evidence dirs); digest gains a Trend section over the last 5 runs naming
   overall-band moves. Suite 178 -> 183; live double-run on example.com shows
   the ledger, the trend section, and the ledger-sourced delta.
-- [ ] **G6 (todo, L)** Polite scale crawling. Raise the page budget from ~15
-  sampled pages to a configurable crawl (default off) with per-host rate
-  limiting, robots.txt compliance, a hard page cap, and resumability. The
-  existing fetch cache and aggregation are prerequisites already in place.
-  Authorization language in CLAUDE.md applies unchanged.
+- [x] **G6 (done, L)** Polite scale crawling. Spec: PLAN.md section 29. New
+  tools/crawler.py (not a scanner): breadth-first same-domain discovery,
+  robots.txt compliant via stdlib robotparser (disallows counted, never
+  fetched; Crawl-delay raises the 1.0s serial delay), hard 500-page ceiling,
+  binary/off-domain/scheme filtering, resumable state file written after
+  every page. run_review gains --crawl N / --fresh, replacing sampled
+  discovery when the user opts in; the pipeline fetch cache means the scan
+  reuses crawl fetches. Docs updated (README, SKILL, CLAUDE scope note).
+  Suite 183 -> 186; live capped crawl of example.com behaved exactly
+  (1 page, external link excluded, clean stop).
+
+_Phase G complete: G1 through G6 all done, suite green._
 
 ## Phase F - World-class pass (2026-07-02 loop)
 - [x] **F11 (done)** HTTP/2 detection via ALPN. Spec: PLAN.md section 22.

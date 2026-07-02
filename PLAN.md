@@ -802,7 +802,40 @@ Tests: history_entry fields, append/read roundtrip with a malformed line
 skipped, ledger-preferred delta, JSON fallback, and the trend section
 rendering.
 
-## 29. Open design questions
+## 29. Design: polite scale crawling (task G6)
+Purpose: raise the reviewable surface beyond the ~15 sampled pages when the
+user explicitly asks for it. Default remains the sampled review set; the
+crawl is opt-in per run and the CLAUDE.md authorization language applies
+unchanged.
+
+Tool: `tools/crawler.py`, not a registered scanner (it discovers pages; it
+grades nothing). `crawl(target, max_pages, delay, state_path, fresh, sleep)`
+runs a breadth-first, same-registrable-domain crawl:
+- Politeness: strictly serial (no fan-out), one request per `delay` seconds
+  (default 1.0), raised to the robots.txt Crawl-delay when larger. robots.txt
+  compliance via stdlib urllib.robotparser (can_fetch with our bot token);
+  disallowed URLs are counted, never fetched.
+- Bounds: `max_pages` capped by a hard MAX_PAGES_CEILING of 500. Binary and
+  asset extensions, off-domain hosts, and non-http(s) schemes are skipped;
+  fragments are stripped; the frontier is deduplicated.
+- Resumability: state (visited, queue, collected, counters) is persisted to
+  `planning/_evidence/<slug>_crawl_state.json` after every page, so an
+  interrupted crawl resumes where it stopped; `fresh=True` discards state.
+  The sleep function is injectable so tests never wait.
+- Determinism: BFS in discovery order; same graph, same result.
+
+Integration: `run_review.py [url] --crawl N [--fresh]` uses the crawl result
+as the page set instead of the discovery proposal. The per-run fetch cache
+is enabled for the whole pipeline, so pages fetched during the crawl are not
+refetched by the scan, and the aggregation/grouping from F9 keeps a
+100-page issue list readable.
+
+Tests (stubbed fetches over a synthetic site graph): BFS collection and
+order, robots disallow honored and counted, crawl-delay raising the wait,
+extension and off-domain skips, the page cap, and resume-without-refetch.
+Live verification: a tiny --crawl run against example.com.
+
+## 30. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

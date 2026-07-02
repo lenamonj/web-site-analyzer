@@ -67,7 +67,8 @@ python .claude\skills\review-site\tools\scan_site.py https://example.com https:/
 | `scan_vitals.py` | Browser-captured LCP, CLS, TBT, and WCAG contrast, graded against the published Core Web Vitals and Lighthouse thresholds; reports "not captured" honestly when no browser pass ran (see `tools\CAPTURE.md`) |
 | `scan_site.py` | Orchestrates all of the above across the target and extra pages, rolls the results into a per-category scorecard, writes the evidence JSON and digest |
 | `draft_report_data.py` | Drafts the executive-report data file from the scan JSON: measured scorecard and findings filled in, judgement fields left empty |
-| `run_review.py` | One command for the whole evidence pass: discovery, full scan of the proposed page set, digest, and draft report data |
+| `crawler.py` | Opt-in polite crawler: breadth-first same-domain discovery, robots.txt compliant (including Crawl-delay), strictly serial with a per-request delay, hard 500-page ceiling, resumable state file |
+| `run_review.py` | One command for the whole evidence pass: discovery (or `--crawl N` for the polite crawler), full scan of the page set, digest, and draft report data |
 
 Issues are **aggregated**: an identical finding repeated across pages (a template-level defect) collapses into one entry naming the affected pages, so the digest and the drafted report state "missing landmarks on 12 pages" once instead of twelve times. Each run appends to a per-target **history ledger** (`planning\_evidence\<slug>_history.jsonl`), diffs itself against the previous run (new vs resolved issues), and the digest shows a **trend** of the last five runs with any overall-band movement, so the fix-and-rescan loop shows progress explicitly.
 

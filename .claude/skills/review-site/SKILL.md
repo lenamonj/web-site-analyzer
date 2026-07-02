@@ -19,6 +19,8 @@ With no url it reads `TARGET.txt`. Pass extra in-scope page URLs to scan them to
 
 One-command alternative: `python .claude/skills/review-site/tools/run_review.py [url]` runs discovery, scans the whole proposed page set, and also writes `<slug>_exec_report_data.draft.json` in one step. Prefer it when the default scope rules apply; run the tools separately when you need to hand-pick the page set.
 
+Wide reviews (only when the user explicitly asks): add `--crawl N` to run_review to replace sampled discovery with a polite breadth-first crawl of up to N same-domain pages (robots.txt compliant including Crawl-delay, strictly serial with a per-request delay, hard 500-page ceiling, resumable via `<slug>_crawl_state.json`; `--fresh` discards saved state). The authorization rules apply unchanged.
+
 It writes:
 - `planning/_evidence/<slug>_scan.json` - full structured results, one verdict (pass, warn, fail, info) and a note per check.
 - `planning/_evidence/<slug>_scan_summary.md` - every failing check and warning in one list, ready to fold into the gameplan.
