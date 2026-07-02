@@ -35,3 +35,7 @@ planning/_evidence/*.jpeg
 # OS cruft
 Thumbs.db
 .DS_Store
+
+# Sales and outreach material: local business documents, not part of the
+# public open-source project.
+sales/
