@@ -14,6 +14,14 @@ serves.
 ## Phase D - Reporting automation
 
 ## Phase F - World-class pass (2026-07-02 loop)
+- [x] **F5 (done)** Per-run fetch cache. Spec: PLAN.md section 16. Thread-safe
+  memo cache inside common.http_fetch keyed by (method, url, want_body,
+  extra_headers), successes only, bounded at 512 entries, off by default;
+  scan_site.run and run_review.pipeline enable it for their duration (enable
+  keeps entries when already on, so the pipeline's discovery warmup carries
+  into the scan). Nav links and shared assets are now fetched once per run
+  instead of once per page. Suite 126 -> 132 tests; live run_review on
+  example.com green end to end.
 - [x] **F1 (done)** Executive report redesign. User directive: the report is
   visually weak; make it look professional and board-ready. Redesigned
   `build_exec_report.py` (masthead banner, at-a-glance tiles, callout bottom

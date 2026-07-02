@@ -40,10 +40,16 @@ def pipeline(target, out_dir=None):
     target = common.normalize_url(target)
     out_dir = Path(out_dir) if out_dir else common.evidence_dir()
 
-    disco = discover_pages.discover(target)
-    extra = choose_pages(target, disco)
-
-    result = scan_site.run(target, extra)
+    # Enable the per-run fetch cache for the whole pipeline so discovery's
+    # homepage and robots.txt fetches are reused by the scan (scan_site.run
+    # keeps existing entries and disables the cache when it finishes).
+    common.enable_fetch_cache()
+    try:
+        disco = discover_pages.discover(target)
+        extra = choose_pages(target, disco)
+        result = scan_site.run(target, extra)
+    finally:
+        common.disable_fetch_cache()
     slug = result["slug"]
     json_path = out_dir / f"{slug}_scan.json"
     md_path = out_dir / f"{slug}_scan_summary.md"

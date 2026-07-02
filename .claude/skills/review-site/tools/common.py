@@ -11,6 +11,7 @@ import gzip
 import json
 import ssl
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -104,6 +105,31 @@ def _decode_body(raw, content_type):
         return raw.decode("utf-8", errors="replace")
 
 
+# Per-run fetch cache (PLAN.md section 16). Within one run the same URL is
+# requested repeatedly (nav links on every page, shared assets, robots.txt);
+# reusing one observation keeps the run polite to the target. Off by default;
+# scan_site.run and run_review.pipeline enable it for their duration. Cached
+# responses are treated as read-only by every scanner.
+_FETCH_CACHE = None
+_FETCH_CACHE_LOCK = threading.Lock()
+_FETCH_CACHE_MAX = 512
+
+
+def enable_fetch_cache():
+    """Turn the per-run cache on. Keeps existing entries when already on, so
+    a pipeline that enabled it before scan_site.run does not lose its warmup."""
+    global _FETCH_CACHE
+    with _FETCH_CACHE_LOCK:
+        if _FETCH_CACHE is None:
+            _FETCH_CACHE = {}
+
+
+def disable_fetch_cache():
+    global _FETCH_CACHE
+    with _FETCH_CACHE_LOCK:
+        _FETCH_CACHE = None
+
+
 def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want_body=True,
                extra_headers=None):
     """
@@ -117,6 +143,11 @@ def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want
     content_encoding, elapsed_ms.
     """
     url = normalize_url(url)
+    cache_key = (method, url, want_body,
+                 tuple(sorted((extra_headers or {}).items())))
+    with _FETCH_CACHE_LOCK:
+        if _FETCH_CACHE is not None and cache_key in _FETCH_CACHE:
+            return _FETCH_CACHE[cache_key]
     opener = _opener()
     hops = []
     current = url
@@ -171,7 +202,7 @@ def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want
 
         elapsed_ms = round((time.perf_counter() - started) * 1000)
         final = hops[-1]
-        return {
+        result = {
             "ok": True,
             "error": None,
             "requested_url": url,
@@ -186,6 +217,12 @@ def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want
             "uncompressed_bytes": uncompressed_bytes,
             "elapsed_ms": elapsed_ms,
         }
+        # Only complete successes are cached; a transient failure on one page
+        # must not poison the same URL for the rest of the run.
+        with _FETCH_CACHE_LOCK:
+            if _FETCH_CACHE is not None and len(_FETCH_CACHE) < _FETCH_CACHE_MAX:
+                _FETCH_CACHE[cache_key] = result
+        return result
     except Exception as e:
         elapsed_ms = round((time.perf_counter() - started) * 1000)
         return {

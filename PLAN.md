@@ -491,7 +491,42 @@ icon rels, one bounded fetch loop for CSS. Tests: fixtures per check plus the
 client-rendered path and a stubbed-CSS font-family extraction test;
 `TestToolContract` covers the new tool automatically.
 
-## 16. Open design questions
+## 16. Design: per-run fetch cache (task F5)
+Problem: within one multi-page run the same URL is fetched repeatedly - the
+nav links that appear on every page are re-probed by scan_links per page, a
+shared stylesheet or script is re-HEADed by scan_performance and re-read by
+scan_design per page, and robots.txt is read by both discover_pages and
+scan_crawl. That wastes runtime and puts needless load on the target,
+violating the politeness principle.
+
+Design: a process-wide memo cache inside `common.http_fetch`, explicitly
+enabled per run.
+- `common.enable_fetch_cache()` turns it on and clears it;
+  `common.disable_fetch_cache()` turns it off and clears it. Off by default,
+  so standalone single-scanner runs and existing tests see today's behavior
+  unless they opt in.
+- Key: `(method, normalized url, want_body)`. A GET with a body satisfies
+  nothing else; HEAD and GET stay distinct entries (a HEAD hit must not stand
+  in for a GET body request).
+- Only successful, complete responses are cached (`final_status` not None).
+  Failures are never cached, so a transient error on page A does not poison
+  page B.
+- Thread safe (a `threading.Lock` around the dict) because scan_links and
+  scan_performance call http_fetch from a ThreadPoolExecutor.
+- Bounded: at most 512 entries; when full, new results are returned uncached
+  (no eviction complexity; a run never legitimately needs more).
+- Callers: `scan_site.run` and `run_review.pipeline` enable it at start and
+  disable it in a finally block. Nothing else changes; every tool transparently
+  benefits.
+- Staleness is not a concern: a run is one short observation window, and
+  reusing one observation of an unchanged URL within it is exactly the
+  "fetched and parsed once" principle already applied to pages.
+
+Tests: cache hit returns the identical dict for a repeated GET; HEAD and GET
+do not cross-satisfy; failures are not cached; disable clears; scan_site.run
+leaves the cache disabled afterward.
+
+## 17. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

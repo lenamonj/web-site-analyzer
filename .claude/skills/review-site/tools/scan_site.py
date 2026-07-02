@@ -108,6 +108,16 @@ def run(target, extra_pages):
     host = common.host_of(target)
     slug = common.slug_of(target)
 
+    # One observation per URL per run (PLAN.md section 16): nav links and
+    # shared assets repeat across pages and need not be re-fetched.
+    common.enable_fetch_cache()
+    try:
+        return _run(target, host, slug, extra_pages)
+    finally:
+        common.disable_fetch_cache()
+
+
+def _run(target, host, slug, extra_pages):
     host_scans = {
         e.key: _safe_scan(e.module.scan, target, tool_name=e.tool_id)
         for e in registry.host_tools()

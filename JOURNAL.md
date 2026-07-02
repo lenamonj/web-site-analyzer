@@ -513,3 +513,35 @@ scanner) per BACKLOG; get the user's visual verdict on the redesigned report.
 **Next step:** all Phase F backlog items are done. Remaining candidates: the
 user's visual verdict on the F1 report design, wiring the new dimensions into
 SKILL.md/README wording, and the deferred per-run resource cache.
+
+---
+
+## 2026-07-02 - F5: per-run fetch cache + docs sync + review pass
+
+**Task:** F5 (PLAN.md section 16, spec'd first), plus the docs sync committed
+separately and an adversarial review of the F2-F4 code by a reviewer agent.
+
+**What I did:**
+- `common.http_fetch` gained an explicit per-run memo cache: thread safe
+  (fan-outs run in ThreadPoolExecutor), keyed by (method, url, want_body,
+  extra_headers), caches complete successes only (a transient failure never
+  poisons the run), bounded at 512 entries, off by default. `scan_site.run`
+  and `run_review.pipeline` enable it for their duration; enable keeps
+  existing entries when already on so the pipeline's discovery fetches
+  (homepage, robots.txt) are reused by the scan. Cached responses are treated
+  as read-only by scanners.
+- Why: nav links repeat on every page and scan_links re-probed them per page;
+  shared stylesheets were re-HEADed by scan_performance and re-read by
+  scan_design per page. One observation per URL per run is both faster and
+  politer to the target.
+- Docs sync: README (tool table, category list, 126-test count, structure,
+  builder test suite), SKILL.md check list, and CLAUDE.md scanner summary now
+  match the 12-tool reality.
+
+**What I verified:**
+- Suite 126 -> 132 tests (cache hit, HEAD/GET separation, failure-not-cached,
+  idempotent enable, run disables afterward), all green. Caught and fixed a
+  test that passed for the wrong reason (missing urllib import made the fake
+  opener raise NameError, which http_fetch also treats as failure).
+- Live `run_review.py https://example.com` end to end with the cache on:
+  scan, digest, and draft all written; scorecard unchanged.

@@ -14,6 +14,7 @@ import gzip
 import json
 import tempfile
 import unittest
+import urllib.error
 import zlib
 from pathlib import Path
 
@@ -714,6 +715,94 @@ class TestPrivacy(unittest.TestCase):
         r = privacy.scan("https://acme.example/", page=self._ctx(SPA_SHELL))
         self.assertEqual(r["checks"]["known_trackers"]["verdict"], "info")
         self.assertEqual(r["checks"]["third_party_origins"]["verdict"], "info")
+
+
+class TestFetchCache(unittest.TestCase):
+    """The per-run fetch cache (PLAN.md section 16), tested through http_fetch
+    with a counting fake opener so no real request is made."""
+
+    class _FakeResponse:
+        def __init__(self, status=200):
+            import email.message
+            self.headers = email.message.Message()
+            self.headers["Content-Type"] = "text/html"
+            self.status = status
+
+        def read(self, n):
+            return b"hello"
+
+        def close(self):
+            pass
+
+    def setUp(self):
+        self.calls = []
+        self._orig_opener = common._opener
+        common.disable_fetch_cache()
+
+    def tearDown(self):
+        common._opener = self._orig_opener
+        common.disable_fetch_cache()
+
+    def _install_opener(self, fail=False):
+        calls = self.calls
+        fake_response = self._FakeResponse
+
+        class _FakeOpener:
+            def open(self, req, timeout=None):
+                calls.append((req.get_method(), req.full_url))
+                if fail:
+                    raise urllib.error.URLError("stubbed down")
+                return fake_response()
+
+        common._opener = lambda: _FakeOpener()
+
+    def test_repeat_get_is_served_from_cache(self):
+        self._install_opener()
+        common.enable_fetch_cache()
+        first = common.http_fetch("https://acme.example/")
+        second = common.http_fetch("https://acme.example/")
+        self.assertEqual(len(self.calls), 1)
+        self.assertIs(first, second)
+
+    def test_head_and_get_do_not_cross_satisfy(self):
+        self._install_opener()
+        common.enable_fetch_cache()
+        common.http_fetch("https://acme.example/", method="HEAD", want_body=False)
+        common.http_fetch("https://acme.example/")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_disabled_cache_fetches_every_time(self):
+        self._install_opener()
+        common.http_fetch("https://acme.example/")
+        common.http_fetch("https://acme.example/")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_failures_are_not_cached(self):
+        self._install_opener(fail=True)
+        common.enable_fetch_cache()
+        first = common.http_fetch("https://acme.example/")
+        second = common.http_fetch("https://acme.example/")
+        self.assertFalse(first["ok"])
+        self.assertEqual(len(self.calls), 2)
+        self.assertIsNot(first, second)
+
+    def test_enable_keeps_entries_when_already_on(self):
+        self._install_opener()
+        common.enable_fetch_cache()
+        common.http_fetch("https://acme.example/")
+        common.enable_fetch_cache()  # e.g. run_review enabled, then scan_site.run
+        common.http_fetch("https://acme.example/")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_scan_site_run_disables_the_cache_afterward(self):
+        orig = (common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy)
+        common.http_fetch, common.tls_info, common.doh_query = _canned_fetch, _canned_tls, _canned_doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+        try:
+            site.run("https://acme.example/", [])
+        finally:
+            common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy = orig
+        self.assertIsNone(common._FETCH_CACHE)
 
 
 class TestAssetCachingAndRedirects(unittest.TestCase):
