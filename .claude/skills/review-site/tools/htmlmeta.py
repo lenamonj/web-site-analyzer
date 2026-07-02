@@ -256,6 +256,7 @@ def parse_html(html):
         "meta_description": _meta_lookup(p.metas, "description"),
         "meta_robots": _meta_lookup(p.metas, "robots"),
         "meta_viewport": _meta_lookup(p.metas, "viewport"),
+        "meta_theme_color": _meta_lookup(p.metas, "theme-color"),
         "meta_generator": _meta_lookup(p.metas, "generator"),
         "charset": next((m.get("charset") for m in p.metas if "charset" in m), None),
         "canonical": canonical,

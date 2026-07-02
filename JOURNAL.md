@@ -473,3 +473,43 @@ the F1 render check ran in the background.
 
 **Next step:** F3 (architecture/caching depth) and F4 (static design-signal
 scanner) per BACKLOG; get the user's visual verdict on the redesigned report.
+
+---
+
+## 2026-07-02 - F3 + F4: architecture/caching depth and the design dimension
+
+**Task:** F3 and F4 per PLAN.md sections 14 and 15 (both spec'd before build).
+
+**What I did (F3, no new tool):**
+- `scan_performance`: `_measure` now captures each asset's Cache-Control
+  during the existing HEAD fan-out; new `asset_caching` check warns when the
+  majority of measured 200 assets have no usable caching lifetime (no
+  max-age, not immutable, or no-store/no-cache); new `redirect_chain` check
+  warns at two or more redirects before the final URL.
+- `scan_crawl`: new `host_canonicalization` check fetches https on the apex
+  and www variants (only when the target IS apex or www; subdomain sites are
+  not applicable) and warns when both serve 200 without converging on one
+  canonical host.
+
+**What I did (F4):**
+- New `scan_design.py`, the 12th registered tool and a new "design" scorecard
+  category: favicon (declared icon link, falling back to one passive check of
+  /favicon.ico), theme-color, deprecated presentational tags, inline-style
+  density (over 30 warns), distinct non-generic font families from inline
+  style blocks plus up to 5 linked stylesheets (bounded passive GETs), and
+  image width/height coverage (layout-shift risk when the majority lack
+  dimensions). Head-level checks run even on client-rendered pages (the
+  shipped head is static); body-derived checks go inconclusive there.
+- `htmlmeta.parse_html` now surfaces `meta_theme_color` (shared-parser job).
+
+**What I verified:**
+- Suite 106 -> 126 tests, all pass, offline, <0.1s.
+- Live smokes: example.com apex/www correctly flagged as non-converging (a
+  true finding); wikipedia.org design scan extracted its real font stack
+  (linux libertine, source serif pro, montserrat) from linked CSS and graded
+  Strong; full `scan_site.py` run shows a 10-category scorecard with design
+  present and page_security merged into security.
+
+**Next step:** all Phase F backlog items are done. Remaining candidates: the
+user's visual verdict on the F1 report design, wiring the new dimensions into
+SKILL.md/README wording, and the deferred per-run resource cache.

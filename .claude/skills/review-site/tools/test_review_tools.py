@@ -25,6 +25,7 @@ import registry as reg
 import run_review
 import scan_accessibility as a11y
 import scan_crawl as crawl
+import scan_design as design
 import scan_dns_email as dns
 import scan_http_security as sec
 import scan_links as links
@@ -493,10 +494,10 @@ class TestRegistry(unittest.TestCase):
             "scan_http_security", "scan_tls", "scan_dns_email", "scan_crawl",
             "scan_seo", "scan_accessibility", "scan_links",
             "scan_performance", "scan_readability", "scan_privacy",
-            "scan_page_security",
+            "scan_page_security", "scan_design",
         })
         self.assertEqual(len(reg.host_tools()), 4)
-        self.assertEqual(len(reg.page_tools()), 7)
+        self.assertEqual(len(reg.page_tools()), 8)
 
     def test_every_entry_exposes_a_callable_scan(self):
         for e in reg.REGISTRY:
@@ -715,6 +716,115 @@ class TestPrivacy(unittest.TestCase):
         self.assertEqual(r["checks"]["third_party_origins"]["verdict"], "info")
 
 
+class TestAssetCachingAndRedirects(unittest.TestCase):
+    def test_cache_max_age_parsing(self):
+        self.assertEqual(perf._cache_max_age("public, max-age=31536000, immutable"), 31536000)
+        self.assertEqual(perf._cache_max_age("max-age=0"), 0)
+        self.assertIsNone(perf._cache_max_age("no-store"))
+        self.assertIsNone(perf._cache_max_age(None))
+        self.assertEqual(perf._cache_max_age(["public", "max-age=60"]), 60)
+
+    def test_mostly_uncached_assets_warn(self):
+        measured = [
+            {"url": "https://a/1.js", "status": 200, "cache_control": None},
+            {"url": "https://a/2.css", "status": 200, "cache_control": "no-store"},
+            {"url": "https://a/3.png", "status": 200, "cache_control": "max-age=86400"},
+        ]
+        c = perf._asset_caching_check(measured, inconclusive=False)
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["uncached"], 2)
+
+    def test_cached_assets_pass_and_immutable_counts(self):
+        measured = [
+            {"url": "https://a/1.js", "status": 200, "cache_control": "public, immutable"},
+            {"url": "https://a/2.css", "status": 200, "cache_control": "max-age=604800"},
+        ]
+        c = perf._asset_caching_check(measured, inconclusive=False)
+        self.assertEqual(c["verdict"], "pass")
+        self.assertEqual(c["uncached"], 0)
+
+    def test_no_cache_directive_defeats_max_age(self):
+        measured = [
+            {"url": "https://a/1.js", "status": 200, "cache_control": "no-cache, max-age=600"},
+        ]
+        c = perf._asset_caching_check(measured, inconclusive=False)
+        self.assertEqual(c["verdict"], "warn")
+
+    def test_nothing_measured_is_info(self):
+        self.assertEqual(perf._asset_caching_check([], False)["verdict"], "info")
+        self.assertEqual(perf._asset_caching_check(
+            [{"url": "u", "status": 200, "cache_control": None}], True)["verdict"], "info")
+
+    def test_redirect_chain_verdicts(self):
+        hop = lambda u, s: {"url": u, "status": s, "headers": {}}
+        none = perf._redirect_chain_check({"hops": [hop("https://a/", 200)]})
+        one = perf._redirect_chain_check({"hops": [hop("http://a/", 301), hop("https://a/", 200)]})
+        two = perf._redirect_chain_check({"hops": [hop("http://a", 301), hop("https://a", 301),
+                                                   hop("https://www.a/", 200)]})
+        self.assertEqual(none["verdict"], "pass")
+        self.assertEqual(none["redirects"], 0)
+        self.assertEqual(one["verdict"], "pass")
+        self.assertEqual(two["verdict"], "warn")
+        self.assertEqual(two["redirects"], 2)
+
+
+class TestHostCanonicalization(unittest.TestCase):
+    def _fetch_stub(self, behavior):
+        """behavior: host -> (final_status, final_url) or None for unreachable."""
+        def fetch(url, *a, **k):
+            host = url.split("//", 1)[1].split("/", 1)[0]
+            spec = behavior.get(host)
+            if spec is None:
+                return {"ok": False, "error": "unreachable", "hops": [], "final_url": url,
+                        "final_status": None, "final_headers": {}, "body": None,
+                        "content_type": "", "content_encoding": "", "body_bytes": 0,
+                        "uncompressed_bytes": 0, "elapsed_ms": 0, "requested_url": url}
+            status, final = spec
+            return {"ok": True, "error": None,
+                    "hops": [{"url": final, "status": status, "headers": {}}],
+                    "final_url": final, "final_status": status, "final_headers": {},
+                    "body": None, "content_type": "", "content_encoding": "",
+                    "body_bytes": 0, "uncompressed_bytes": 0, "elapsed_ms": 1,
+                    "requested_url": url}
+        return fetch
+
+    def _run(self, host, behavior):
+        orig = common.http_fetch
+        common.http_fetch = self._fetch_stub(behavior)
+        try:
+            return crawl.check_host_canonicalization(host)
+        finally:
+            common.http_fetch = orig
+
+    def test_www_redirecting_to_apex_passes(self):
+        c = self._run("acme.example", {
+            "acme.example": (200, "https://acme.example/"),
+            "www.acme.example": (200, "https://acme.example/"),
+        })
+        self.assertEqual(c["verdict"], "pass")
+        self.assertEqual(c["canonical_host"], "acme.example")
+
+    def test_both_live_without_convergence_warns(self):
+        c = self._run("acme.example", {
+            "acme.example": (200, "https://acme.example/"),
+            "www.acme.example": (200, "https://www.acme.example/"),
+        })
+        self.assertEqual(c["verdict"], "warn")
+
+    def test_unreachable_variant_is_info(self):
+        c = self._run("acme.example", {
+            "acme.example": (200, "https://acme.example/"),
+            "www.acme.example": None,
+        })
+        self.assertEqual(c["verdict"], "info")
+        self.assertEqual(c["unreachable"], "www.acme.example")
+
+    def test_subdomain_site_is_not_applicable(self):
+        c = self._run("blog.acme.example", {})
+        self.assertEqual(c["verdict"], "info")
+        self.assertIn("subdomain", c["note"])
+
+
 class TestPageSecurity(unittest.TestCase):
     def _ctx(self, html, final_url="https://acme.example/"):
         parsed = htmlmeta.parse_html(html)
@@ -788,6 +898,123 @@ class TestPageSecurity(unittest.TestCase):
         self.assertEqual(r["checks"]["subresource_integrity"]["verdict"], "info")
         self.assertEqual(r["checks"]["insecure_form_action"]["verdict"], "info")
         self.assertEqual(r["category"], "security")
+
+
+class TestDesign(unittest.TestCase):
+    def _ctx(self, html, final_url="https://acme.example/"):
+        parsed = htmlmeta.parse_html(html)
+        render = htmlmeta.render_assessment(parsed, html)
+        return {"url": final_url, "parsed": parsed, "render": render,
+                "res": {"ok": True, "body": html, "final_url": final_url,
+                        "error": None}}
+
+    def _no_favicon_fetch(self, url, *a, **k):
+        return {"ok": True, "error": None, "hops": [{"url": url, "status": 404, "headers": {}}],
+                "final_url": url, "final_status": 404, "final_headers": {}, "body": None,
+                "content_type": "", "content_encoding": "", "body_bytes": 0,
+                "uncompressed_bytes": 0, "elapsed_ms": 1, "requested_url": url}
+
+    BASE = ('<!doctype html><html lang="en"><head><title>Home page</title>{head}</head>'
+            '<body><h1>Hi</h1><p>Some real body text for the page content here.</p>{body}'
+            '</body></html>')
+
+    def _scan(self, head="", body=""):
+        html = self.BASE.format(head=head, body=body)
+        orig = common.http_fetch
+        common.http_fetch = self._no_favicon_fetch
+        try:
+            return design.scan("https://acme.example/", page=self._ctx(html))
+        finally:
+            common.http_fetch = orig
+
+    def test_declared_favicon_passes(self):
+        r = self._scan(head='<link rel="icon" href="/favicon.svg">')
+        self.assertEqual(r["checks"]["favicon"]["verdict"], "pass")
+
+    def test_missing_favicon_warns_when_default_absent(self):
+        r = self._scan()
+        self.assertEqual(r["checks"]["favicon"]["verdict"], "warn")
+
+    def test_default_favicon_ico_counts(self):
+        html = self.BASE.format(head="", body="")
+        orig = common.http_fetch
+        common.http_fetch = lambda url, *a, **k: {
+            "ok": True, "error": None, "hops": [{"url": url, "status": 200, "headers": {}}],
+            "final_url": url, "final_status": 200, "final_headers": {}, "body": None,
+            "content_type": "image/x-icon", "content_encoding": "", "body_bytes": 0,
+            "uncompressed_bytes": 0, "elapsed_ms": 1, "requested_url": url}
+        try:
+            r = design.scan("https://acme.example/", page=self._ctx(html))
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(r["checks"]["favicon"]["verdict"], "pass")
+
+    def test_theme_color(self):
+        r = self._scan(head='<meta name="theme-color" content="#0b1f3a">')
+        self.assertEqual(r["checks"]["theme_color"]["verdict"], "pass")
+        self.assertEqual(r["checks"]["theme_color"]["value"], "#0b1f3a")
+        r2 = self._scan()
+        self.assertEqual(r2["checks"]["theme_color"]["verdict"], "info")
+
+    def test_deprecated_tags_warn_with_counts(self):
+        r = self._scan(body="<center><font size=3>old</font></center><marquee>hi</marquee>")
+        c = r["checks"]["deprecated_presentational_tags"]
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["counts"]["font"], 1)
+        self.assertEqual(c["counts"]["marquee"], 1)
+
+    def test_inline_style_density(self):
+        few = self._scan(body='<div style="color:red">x</div>')
+        self.assertEqual(few["checks"]["inline_style_density"]["verdict"], "pass")
+        many = self._scan(body='<i style="color:red">x</i>' * 31)
+        c = many["checks"]["inline_style_density"]
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["count"], 31)
+
+    def test_font_families_from_inline_and_linked_css(self):
+        html = self.BASE.format(
+            head='<link rel="stylesheet" href="/site.css">'
+                 '<style>body { font-family: "Inter", sans-serif; }</style>',
+            body="")
+        orig = common.http_fetch
+        common.http_fetch = lambda url, *a, **k: {
+            "ok": True, "error": None, "hops": [{"url": url, "status": 200, "headers": {}}],
+            "final_url": url, "final_status": 200, "final_headers": {},
+            "body": "h1 { font-family: Georgia, serif; } p { font-family: Inter; }",
+            "content_type": "text/css", "content_encoding": "", "body_bytes": 10,
+            "uncompressed_bytes": 10, "elapsed_ms": 1, "requested_url": url}
+        try:
+            r = design.scan("https://acme.example/", page=self._ctx(html))
+        finally:
+            common.http_fetch = orig
+        c = r["checks"]["font_families"]
+        self.assertEqual(c["verdict"], "pass")
+        self.assertEqual(sorted(c["families"]), ["georgia", "inter"])
+
+    def test_too_many_font_families_warn(self):
+        css = "".join(f".c{i} {{ font-family: Font{i}; }}" for i in range(6))
+        r = self._scan(head=f"<style>{css}</style>")
+        self.assertEqual(r["checks"]["font_families"]["verdict"], "warn")
+
+    def test_image_dimensions(self):
+        good = self._scan(body='<img src="/a.png" width="10" height="10">')
+        self.assertEqual(good["checks"]["image_dimensions"]["verdict"], "pass")
+        bad = self._scan(body='<img src="/a.png"><img src="/b.png"><img src="/c.png" width="1" height="1">')
+        c = bad["checks"]["image_dimensions"]
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["missing_dimensions"], 2)
+
+    def test_client_rendered_marks_body_checks_info_but_head_still_counts(self):
+        orig = common.http_fetch
+        common.http_fetch = self._no_favicon_fetch
+        try:
+            r = design.scan("https://acme.example/", page=self._ctx(SPA_SHELL))
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(r["checks"]["deprecated_presentational_tags"]["verdict"], "info")
+        self.assertEqual(r["checks"]["inline_style_density"]["verdict"], "info")
+        self.assertEqual(r["checks"]["image_dimensions"]["verdict"], "info")
+        self.assertEqual(r["category"], "design")
 
 
 class TestSecurityTxtAndCaa(unittest.TestCase):

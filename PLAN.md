@@ -421,7 +421,77 @@ present/absent/cross-origin-only, http form action on https page, inline
 handler counting, target_blank rel matrix, security.txt parse, CAA
 present/absent; `TestToolContract` picks up the new tool automatically.
 
-## 14. Open design questions
+## 14. Design: architecture and caching depth (task F3)
+Purpose: measure the delivery-architecture facts a world-class analyzer should
+report beyond raw page weight. Three additions, no new tool.
+
+1. `asset_caching` check in `scan_performance` (page scope): `_measure`
+   already HEADs each declared resource; it now also captures the resource's
+   Cache-Control header. Static assets (scripts, stylesheets, images) that
+   answered 200 are graded: an asset with no Cache-Control, no max-age, or
+   max-age 0 is uncached. More than half of measured assets uncached -> warn
+   with capped examples; otherwise pass with counts; nothing measured or
+   client-rendered -> info. The HTML document's own caching stays the separate
+   info-only `caching` check (no universal right answer for documents).
+2. `redirect_chain` check in `scan_performance` (page scope): the shared page
+   fetch already records every hop. Two or more redirects before the final
+   URL -> warn (each hop adds a full round trip before first byte); one -> pass
+   noting the hop; zero -> pass.
+3. `host_canonicalization` check in `scan_crawl` (host scope, category seo):
+   apex vs www duplicate-site risk. Applies only when the target host is the
+   registrable apex or www.<apex>; anything else (a real subdomain site) is
+   info not-applicable. Fetch both `https://<apex>` and `https://www.<apex>`
+   (HEAD-style, no body): if both answer 200 on different final hosts with no
+   redirect between them -> warn (two live versions of the site split link
+   equity and confuse crawlers); if one side redirects to the other (or both
+   land on one final host) -> pass; if one side is unreachable -> info (that
+   variant does not resolve; not evidence of a fault).
+
+Tests: cache-control parsing and the uncached-majority matrix, redirect-chain
+verdicts from synthetic hop lists, and the canonicalization matrix (redirect,
+both-live, unreachable variant, subdomain not-applicable) with stubbed
+fetches. `TestToolContract` is unaffected (no new tool).
+
+## 15. Design: static design-signal scanner (task F4)
+Purpose: give the analyzer a measured "design" dimension from static HTML and
+declared CSS, complementing (not replacing) the browser-based visual pass in
+SKILL.md. New page tool `scan_design.py`, `CATEGORY = "design"`,
+`SCOPE = "page"`, registered as the 12th tool; the scorecard gains a design
+category. All checks are objective, countable facts; no aesthetic judgement is
+fabricated.
+
+Checks:
+1. `favicon` (pass|warn|info): a `<link rel>` containing icon (icon, shortcut
+   icon, apple-touch-icon) -> pass; none in a server-rendered page -> warn (a
+   missing tab/bookmark icon is a visible polish gap); client-rendered ->
+   info.
+2. `theme_color` (pass|info): `<meta name=theme-color>` present -> pass, else
+   info (observation only; mobile browser chrome tinting).
+3. `deprecated_presentational_tags` (pass|warn): any `<font> <center>
+   <marquee> <blink> <frameset> <frame> <big> <strike>` -> warn with per-tag
+   counts (they defeat responsive, consistent styling); none -> pass.
+4. `inline_style_density` (pass|warn|info): count of `style=` attributes; over
+   30 on one page -> warn (styling is escaping the design system; consistency
+   and maintenance risk); 1-30 -> pass with the count; zero -> pass.
+5. `font_families` (pass|warn|info): distinct font-family stems declared in
+   inline `<style>` blocks plus up to 5 declared same-page stylesheets
+   (passive GET, body cap applies, failures skipped silently as info). Over 4
+   distinct families -> warn (typographic inconsistency); 1-4 -> pass listing
+   them; none found -> info. Generic families (serif, sans-serif, monospace,
+   system-ui, inherit) and font stacks after the first name are not counted.
+6. `image_dimensions` (pass|warn|info): `<img>` tags in static HTML missing
+   both width/height attributes (and no style with width/height) shift layout
+   as they load. More than half missing -> warn with capped examples;
+   otherwise pass; no images or client-rendered -> info.
+
+Client-rendered pages: all markup-derived checks -> info (section 2 rule).
+Extraction: regex over the raw body for tags/attributes (same technique as
+scan_privacy/scan_page_security), `parsed["links"]` for stylesheet hrefs and
+icon rels, one bounded fetch loop for CSS. Tests: fixtures per check plus the
+client-rendered path and a stubbed-CSS font-family extraction test;
+`TestToolContract` covers the new tool automatically.
+
+## 16. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

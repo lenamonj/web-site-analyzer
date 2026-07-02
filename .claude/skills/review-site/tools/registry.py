@@ -24,6 +24,7 @@ from collections import namedtuple
 
 import scan_accessibility
 import scan_crawl
+import scan_design
 import scan_dns_email
 import scan_http_security
 import scan_links
@@ -54,6 +55,7 @@ REGISTRY = [
     _entry("scan_readability", "readability", scan_readability, "readability"),
     _entry("scan_privacy", "privacy", scan_privacy, "privacy"),
     _entry("scan_page_security", "page_security", scan_page_security, "pagesec"),
+    _entry("scan_design", "design", scan_design, "design"),
 ]
 
 

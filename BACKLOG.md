@@ -31,13 +31,20 @@ serves.
   (DoH CAA lookup). Registered as the 11th tool; suite 90 -> 106 tests, all
   pass; live smoke on example.com and wikipedia.org (security.txt correctly
   detected as published there).
-- [ ] **F3 (todo)** Architecture/caching depth: grade Cache-Control on sampled
-  static assets (currently info-only on the HTML doc), flag multi-hop redirect
-  chains, and check www vs apex host consistency. Spec in PLAN.md first.
-- [ ] **F4 (todo)** Static design-signal scanner (new "design" category):
-  favicon/touch-icon/theme-color presence, deprecated presentational tags,
-  inline-style density, declared font families from linked CSS (passive GET of
-  declared stylesheets only). Spec in PLAN.md first.
+- [x] **F3 (done)** Architecture/caching depth. Spec: PLAN.md section 14.
+  `asset_caching` (per-asset Cache-Control captured during the existing HEAD
+  fan-out; uncached-majority warns) and `redirect_chain` checks in
+  scan_performance; `host_canonicalization` (apex vs www convergence) in
+  scan_crawl. Suite 106 -> 116, all pass; live smoke: example.com correctly
+  flagged for serving apex and www without converging.
+- [x] **F4 (done)** Static design-signal scanner. Spec: PLAN.md section 15.
+  New `scan_design.py` (12th tool, new "design" scorecard category): favicon
+  (declared link or default /favicon.ico), theme-color, deprecated
+  presentational tags, inline-style density, distinct font families from
+  inline and linked CSS (bounded passive GETs), image width/height coverage
+  (layout shift). Head checks still run on client-rendered pages; body checks
+  go inconclusive. htmlmeta now surfaces meta_theme_color. Suite 116 -> 126,
+  all pass; live smoke on wikipedia.org extracted its real font stack.
 
 ## Done
 - [x] **E1 (done)** Architecture review pass. New host-scoped `scan_crawl.py`
