@@ -842,6 +842,43 @@ trends, G6 polite opt-in crawling. Suite went 164 -> 186 scanner tests plus
 9 builder tests over the phase; every task spec'd in PLAN.md before build,
 verified live where a passive check allowed, committed atomically.
 
+---
+
+## 2026-07-03 - LOOP COMPLETE
+
+BACKLOG.md has no unblocked `todo` items (27 tasks done across phases A
+through G), so per the stop condition this run records completion instead of
+inventing work.
+
+**Delivered across the loops (each spec'd in PLAN.md, tested, verified,
+committed atomically):**
+- Foundation: central registry, contract-conformance tests, self-describing
+  tools with tool-owned grades.
+- Measurement surface: 13 scanners across 10 scorecard categories - HTTP
+  security with CSP directive analysis and security.txt, page-level security
+  hygiene (SRI, form actions, inline handlers), TLS with CAA and HTTP/2 via
+  ALPN, email auth and transport (SPF, DMARC, DKIM incl. date selectors,
+  DNSSEC, MTA-STS, TLS-RPT, BIMI), crawlability with disallow-all and
+  apex/www canonicalization, SEO, structural accessibility, link health with
+  anchor integrity, performance with per-asset caching and redirect chains,
+  readability, privacy with 154 documented trackers and CMP detection,
+  design signals, and browser-vitals consumption (LCP/CLS/TBT, contrast).
+- Analyst output: issue aggregation across pages, run deltas, findings
+  history ledger with digest trends, machine-drafted report data, and the
+  user-approved executive report design (test-covered builder).
+- Infrastructure: per-run fetch cache, quote-aware hyphen-safe HTML
+  extraction, rendered-DOM snapshot pipeline, polite opt-in crawler,
+  .gitattributes hygiene. 186 scanner tests plus 9 builder tests, offline,
+  green.
+
+**No blocked items.** Open follow-ups for a human:
+- Exercise the browser capture steps (rendered snapshots, metrics.json) in a
+  real site review; the tool side is built and tested.
+- The open design questions in PLAN.md (host vs page scan signatures; git
+  has no remote so the loop commits locally and cannot push).
+
+RALPH: NOTHING TO DO
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,
