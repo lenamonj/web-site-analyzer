@@ -44,6 +44,7 @@ class _Extractor(HTMLParser):
         self.landmarks = set()
         self.roles = []
         self.jsonld_types = []
+        self.ids = set()         # every element id (plus legacy <a name>)
         self.positive_tabindex = 0
         self.buttons_empty = 0
         self.word_count = 0
@@ -89,6 +90,10 @@ class _Extractor(HTMLParser):
             self.landmarks.add(tag)
         if "role" in a:
             self.roles.append(a["role"])
+        if a.get("id"):
+            self.ids.add(a["id"])
+        if tag == "a" and a.get("name"):
+            self.ids.add(a["name"])  # legacy fragment target
         if "tabindex" in a:
             try:
                 if int(a["tabindex"]) > 0:
@@ -272,6 +277,7 @@ def parse_html(html):
         "landmarks": sorted(p.landmarks),
         "roles": p.roles,
         "jsonld_types": p.jsonld_types,
+        "ids": sorted(p.ids),
         "positive_tabindex": p.positive_tabindex,
         "buttons_empty": p.buttons_empty,
         "word_count": p.word_count,

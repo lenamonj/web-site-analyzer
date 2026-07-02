@@ -14,6 +14,18 @@ serves.
 ## Phase D - Reporting automation
 
 ## Phase F - World-class pass (2026-07-02 loop)
+- [x] **F7 (done)** Email transport posture. Spec: PLAN.md section 18.
+  scan_dns_email gains mta_sts (record via DoH plus the well-known policy
+  file and its mode; enforce -> pass), tls_rpt, and bimi checks; all three
+  report not-applicable when the domain has no MX. Suite +6 tests; live
+  smoke on google.com (MTA-STS enforce pass, TLS-RPT pass, BIMI absent info,
+  all true).
+- [x] **F8 (done)** Robots disallow-all + anchor integrity. Spec: PLAN.md
+  section 19. check_robots_txt now parses the User-agent:* group and FAILS on
+  a site-wide Disallow: / (presence-only checking passed it before);
+  htmlmeta collects element ids (and legacy a-name) so scan_links'
+  new anchor_fragments check warns on in-page #links that scroll nowhere.
+  Suite +8 tests.
 - [x] **F6 (done)** Header analysis depth. Spec: PLAN.md section 17. check_csp
   now parses directives and grades what the policy enforces for scripts:
   Report-Only delivery, missing script-src/default-src, wildcard script

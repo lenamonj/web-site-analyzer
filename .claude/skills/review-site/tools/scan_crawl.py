@@ -21,6 +21,32 @@ CATEGORY = "seo"
 SCOPE = "host"
 
 
+def _star_group_disallows_all(body):
+    """True when the 'User-agent: *' group contains a bare 'Disallow: /' and
+    no bare 'Allow: /' that re-opens it. Consecutive User-agent lines share
+    one group until a directive seals it."""
+    agents, sealed = set(), True
+    disallow_all = allow_all = False
+    for raw in body.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        field, value = (p.strip() for p in line.split(":", 1))
+        field = field.lower()
+        if field == "user-agent":
+            if sealed:
+                agents, sealed = set(), False
+            agents.add(value)
+        else:
+            sealed = True
+            if "*" in agents and value == "/":
+                if field == "disallow":
+                    disallow_all = True
+                elif field == "allow":
+                    allow_all = True
+    return disallow_all and not allow_all
+
+
 def check_robots_txt(base):
     res = common.http_fetch(urljoin(base, "/robots.txt"), want_body=True)
     if res.get("final_status") is None:
@@ -30,8 +56,14 @@ def check_robots_txt(base):
     if res["final_status"] == 200 and "user-agent" in body.lower():
         sitemaps = [l.split(":", 1)[1].strip() for l in body.splitlines()
                     if l.lower().startswith("sitemap:")]
+        if _star_group_disallows_all(body):
+            return {"present": True, "status": res["final_status"], "sitemaps": sitemaps,
+                    "disallows_all": True, "verdict": "fail",
+                    "note": ("robots.txt disallows the entire site for every crawler "
+                             "(User-agent: * with Disallow: /). Search engines are "
+                             "blocked site-wide.")}
         return {"present": True, "status": res["final_status"], "sitemaps": sitemaps,
-                "verdict": "pass",
+                "disallows_all": False, "verdict": "pass",
                 "note": f"robots.txt present with {len(sitemaps)} sitemap reference(s)."}
     return {"present": False, "status": res["final_status"], "sitemaps": [],
             "verdict": "warn", "note": "No usable robots.txt at /robots.txt."}

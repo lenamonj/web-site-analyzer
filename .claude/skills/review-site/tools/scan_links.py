@@ -114,6 +114,28 @@ def _mixed_content(html, is_https):
     return {"count": len(found), "items": found[:15], "verdict": verdict, "note": note}
 
 
+def _fragment_check(anchors, ids, inconclusive):
+    """In-page anchors (#fragment) that point at no element id scroll
+    nowhere. '#top' is a browser built-in and a bare '#' is a JS-link
+    pattern, so both are excluded."""
+    if inconclusive:
+        return {"verdict": "info",
+                "note": "Page is client-rendered; in-page anchors are not assessable statically."}
+    targets = [a["href"][1:] for a in anchors
+               if (a.get("href") or "").startswith("#") and len(a.get("href") or "") > 1]
+    if not targets:
+        return {"verdict": "info", "count": 0, "note": "No in-page fragment links in the static HTML."}
+    id_set = set(ids)
+    missing = sorted({t for t in targets if t not in id_set and t.lower() != "top"})
+    if missing:
+        examples = ", ".join("#" + m for m in missing[:5])
+        return {"verdict": "warn", "count": len(targets), "missing": missing[:10],
+                "note": (f"{len(missing)} in-page anchor target(s) do not exist on the page "
+                         f"({examples}); those links scroll nowhere.")}
+    return {"verdict": "pass", "count": len(targets),
+            "note": f"All {len(targets)} in-page fragment link(s) resolve to an element id."}
+
+
 def _scan(url, page=None):
     url = common.normalize_url(url)
     if page is None:
@@ -171,6 +193,8 @@ def _scan(url, page=None):
     checks = {
         "link_health": link_check,
         "mixed_content": _mixed_content(res["body"], is_https),
+        "anchor_fragments": _fragment_check(parsed["anchors"], parsed["ids"],
+                                            render["likely_client_rendered"]),
     }
     tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
     for c in checks.values():

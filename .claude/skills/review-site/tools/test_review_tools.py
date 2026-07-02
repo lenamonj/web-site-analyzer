@@ -990,6 +990,130 @@ class TestHostCanonicalization(unittest.TestCase):
         self.assertIn("subdomain", c["note"])
 
 
+class TestEmailTransportPosture(unittest.TestCase):
+    STS_POLICY = "version: STSv1\nmode: enforce\nmx: mail.acme.example\nmax_age: 86400"
+
+    def _doh_stub(self, txt_map):
+        def doh(name, rtype, *a, **k):
+            return {"ok": True, "error": None, "status": 0, "ad": False,
+                    "answers": txt_map.get(name, []), "raw": []}
+        return doh
+
+    def _fetch_stub(self, status=200, body=None):
+        def fetch(url, *a, **k):
+            return {"ok": status == 200, "error": None,
+                    "hops": [{"url": url, "status": status, "headers": {}}],
+                    "final_url": url, "final_status": status, "final_headers": {},
+                    "body": body, "content_type": "text/plain", "content_encoding": "",
+                    "body_bytes": 0, "uncompressed_bytes": 0, "elapsed_ms": 1,
+                    "requested_url": url}
+        return fetch
+
+    def _run(self, check, txt_map, has_mx=True, status=200, body=None):
+        orig = (common.doh_query, common.http_fetch)
+        common.doh_query = self._doh_stub(txt_map)
+        common.http_fetch = self._fetch_stub(status, body)
+        try:
+            return check("acme.example", has_mx)
+        finally:
+            common.doh_query, common.http_fetch = orig
+
+    def test_mta_sts_enforced_passes(self):
+        c = self._run(dns.check_mta_sts,
+                      {"_mta-sts.acme.example": ["v=STSv1; id=20260702"]},
+                      body=self.STS_POLICY)
+        self.assertEqual(c["verdict"], "pass")
+        self.assertEqual(c["mode"], "enforce")
+
+    def test_mta_sts_testing_mode_is_info(self):
+        c = self._run(dns.check_mta_sts,
+                      {"_mta-sts.acme.example": ["v=STSv1; id=1"]},
+                      body=self.STS_POLICY.replace("enforce", "testing"))
+        self.assertEqual(c["verdict"], "info")
+        self.assertEqual(c["mode"], "testing")
+
+    def test_mta_sts_unreachable_policy_is_info(self):
+        c = self._run(dns.check_mta_sts,
+                      {"_mta-sts.acme.example": ["v=STSv1; id=1"]}, status=404)
+        self.assertEqual(c["verdict"], "info")
+        self.assertFalse(c["policy_reachable"])
+
+    def test_mta_sts_absent_is_info(self):
+        c = self._run(dns.check_mta_sts, {})
+        self.assertEqual(c["verdict"], "info")
+        self.assertFalse(c["present"])
+
+    def test_no_mx_makes_transport_checks_not_applicable(self):
+        for check in (dns.check_mta_sts, dns.check_tls_rpt, dns.check_bimi):
+            c = self._run(check, {}, has_mx=False)
+            self.assertEqual(c["verdict"], "info")
+            self.assertIn("no MX", c["note"])
+
+    def test_tls_rpt_and_bimi_present_pass(self):
+        rpt = self._run(dns.check_tls_rpt,
+                        {"_smtp._tls.acme.example": ["v=TLSRPTv1; rua=mailto:tls@acme.example"]})
+        self.assertEqual(rpt["verdict"], "pass")
+        bimi = self._run(dns.check_bimi,
+                         {"default._bimi.acme.example": ["v=BIMI1; l=https://acme.example/logo.svg"]})
+        self.assertEqual(bimi["verdict"], "pass")
+        self.assertIn("logo", bimi["note"])
+
+
+class TestRobotsDisallowAllAndFragments(unittest.TestCase):
+    def test_global_disallow_detected(self):
+        self.assertTrue(crawl._star_group_disallows_all(
+            "User-agent: *\nDisallow: /"))
+
+    def test_path_scoped_disallow_is_fine(self):
+        self.assertFalse(crawl._star_group_disallows_all(
+            "User-agent: *\nDisallow: /admin/\nDisallow: /tmp/"))
+
+    def test_disallow_in_specific_group_ignored(self):
+        self.assertFalse(crawl._star_group_disallows_all(
+            "User-agent: BadBot\nDisallow: /\n\nUser-agent: *\nDisallow: /private/"))
+
+    def test_allow_root_reopens(self):
+        self.assertFalse(crawl._star_group_disallows_all(
+            "User-agent: *\nDisallow: /\nAllow: /"))
+
+    def test_consecutive_agent_lines_share_a_group(self):
+        self.assertTrue(crawl._star_group_disallows_all(
+            "User-agent: Googlebot\nUser-agent: *\nDisallow: /"))
+
+    def test_robots_check_fails_on_global_disallow(self):
+        orig = common.http_fetch
+        common.http_fetch = lambda url, *a, **k: {
+            "ok": True, "error": None, "hops": [{"url": url, "status": 200, "headers": {}}],
+            "final_url": url, "final_status": 200, "final_headers": {},
+            "body": "User-agent: *\nDisallow: /", "content_type": "text/plain",
+            "content_encoding": "", "body_bytes": 24, "uncompressed_bytes": 24,
+            "elapsed_ms": 1, "requested_url": url}
+        try:
+            c = crawl.check_robots_txt("https://acme.example/")
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(c["verdict"], "fail")
+        self.assertTrue(c["disallows_all"])
+
+    def test_parser_collects_ids_and_legacy_names(self):
+        parsed = htmlmeta.parse_html(
+            '<div id="pricing"></div><a name="legacy"></a><span id="faq"></span>')
+        self.assertEqual(parsed["ids"], ["faq", "legacy", "pricing"])
+
+    def test_fragment_matrix(self):
+        anchors = [{"href": "#pricing"}, {"href": "#missing"}, {"href": "#"},
+                   {"href": "#top"}, {"href": "/other"}]
+        c = links._fragment_check(anchors, ["pricing"], False)
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["missing"], ["missing"])
+        ok = links._fragment_check([{"href": "#pricing"}], ["pricing"], False)
+        self.assertEqual(ok["verdict"], "pass")
+        none = links._fragment_check([{"href": "/x"}, {"href": "#"}], [], False)
+        self.assertEqual(none["verdict"], "info")
+        spa = links._fragment_check([{"href": "#a"}], [], True)
+        self.assertEqual(spa["verdict"], "info")
+
+
 class TestPageSecurity(unittest.TestCase):
     def _ctx(self, html, final_url="https://acme.example/"):
         parsed = htmlmeta.parse_html(html)

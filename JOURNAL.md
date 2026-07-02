@@ -614,6 +614,31 @@ github.com: its strict CSP passes the deeper analysis; its intentionally
 JS-readable _octo cookie is flagged for missing HttpOnly (a true
 observation).
 
+---
+
+## 2026-07-02 - F7 + F8: email transport posture; robots disallow-all and anchor integrity
+
+**Task:** F7 and F8 per PLAN.md sections 18 and 19 (spec'd first). User
+directed: visual report verdict deferred, keep improving other areas.
+
+**F7 (scan_dns_email):** mta_sts (DoH TXT on _mta-sts.<domain>, then the
+well-known policy file; enforce mode -> pass, testing/unreachable/absent ->
+info with the specific gap), tls_rpt (_smtp._tls TXT), bimi (default._bimi
+TXT). All three not-applicable when the domain has no MX. Absence is an
+observation, not a downgrade, consistent with security.txt/CAA.
+
+**F8:** `check_robots_txt` parses the User-agent:* group (consecutive UA
+lines share a group; a bare Allow: / reopens) and now FAILS on a site-wide
+Disallow: / - the presence-only check literally passed a robots.txt that
+blocks every search engine. htmlmeta collects element ids plus legacy
+<a name> targets; scan_links' new `anchor_fragments` check warns when
+in-page #links point at ids that do not exist ('#' and '#top' excluded).
+
+**What I verified:** suite 140 -> 154 tests, all pass. Live smoke on
+google.com: MTA-STS enforce pass, TLS-RPT pass, BIMI absent info - all
+verified true observations. README and SKILL.md check lists updated in the
+same commits.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,
