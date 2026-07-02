@@ -617,6 +617,7 @@ observation).
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,
-a professionally designed executive report with its own test suite, 143
-total offline tests, and docs in sync. Open: the user's visual verdict on
+a professionally designed executive report with its own test suite, 149
+total offline tests (140 scanner + 9 builder), and docs in sync. Open: the
+user's visual verdict on
 the redesigned report docx files.
