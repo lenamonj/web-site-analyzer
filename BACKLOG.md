@@ -5,6 +5,26 @@ highest-priority unblocked `todo`. Keep tasks small enough to finish and verify
 in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
+## Phase K - Quarterly trend layer follow-ups (final review backlog 2026-07-02)
+- [ ] **K1 (todo, S)** Order-independent quarter selection: trends.quarterly_points
+  takes the last ledger line in file order as a quarter's point; a backfilled
+  line appended later would silently win. Select max by measured_at_utc within
+  each quarter instead.
+- [ ] **K2 (todo, S)** report_charts raises for missing matplotlib even when no
+  series is drawable (all pre-metrics ledger); gate the RuntimeError on actual
+  drawability so the failure tracks need.
+- [ ] **K3 (todo, S)** archive_scan stamps "unknown" when measured_at_utc is
+  missing and would silently overwrite a prior unknown archive; raise instead
+  (archive is business data). Related: same-second stamps overwrite, accepted
+  at quarterly cadence.
+- [ ] **K4 (todo, S)** Builder chart prefix falls back to "site" when data lacks
+  slug, so two clients' trend PNGs could overwrite under _evidence/rendered/.
+  Consider failing loudly instead.
+- [ ] **K5 (todo, S)** trends._delta_rows drops categories present in the prev
+  quarter but absent from current bands; emit them as held/not-measured rows.
+  Also add a year-boundary quarter-sort test and a draft test with delta and
+  trend present simultaneously.
+
 ## Phase J - Automation of the rendered tier (user request 2026-07-02)
 - [x] **J3 (done, M)** Prospect triage mode. Spec: PLAN.md section 36. New
   tools/triage.py sweeps a domain list (static, homepage-only, serial,
