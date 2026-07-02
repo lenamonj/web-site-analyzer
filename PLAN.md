@@ -698,7 +698,45 @@ lookalike guard still rejects notfacebook.com-style hosts, expanded CMP and
 marker detection, and a count floor so an accidental list truncation fails
 the suite.
 
-## 26. Open design questions
+## 26. Design: rendered-evidence pipeline, part 1 (task G3)
+Problem: on client-rendered pages the structural scanners honestly report
+"inconclusive", which is correct but shallow: the browser-built DOM is
+knowable when a browser tool is available to the agent.
+
+Handoff format (capture side, performed by the agent per SKILL.md, not by
+the scanners): for each page the scan flagged likely_client_rendered, the
+agent captures the rendered document (outerHTML after load and overlay
+dismissal) and writes:
+- `planning/_evidence/rendered/<slug>/<file>.html` - one file per page.
+- `planning/_evidence/rendered/<slug>/manifest.json` - {"captured_with":
+  tool name, "viewport": "1440px", "pages": {"<page url>": {"file":
+  "<file>.html", "captured_at_utc": "..."}}}.
+The scanners never launch a browser (stdlib-only rule); when no snapshot
+exists the static inconclusive verdicts stand. Nothing is ever inferred
+about a page without a capture.
+
+Tool-side consumption:
+- `htmlmeta.page_from_snapshot(url, html, network_res)` builds a page
+  context from the snapshot: network facts (status, headers, final_url) stay
+  from the live fetch, the body is the rendered DOM, and the render
+  assessment is stamped `source = "rendered_dom_snapshot"`.
+- `scan_site.load_rendered_snapshots(slug)` reads the manifest and returns
+  url -> rendered HTML (missing or unreadable manifest -> empty, silently:
+  absence of snapshots is the normal case).
+- In the per-page loop, when a page is likely_client_rendered AND a snapshot
+  exists, every page scanner except scan_performance receives the snapshot
+  context (performance numbers are network-transfer facts and stay static);
+  each result produced from a snapshot is stamped
+  `evidence_source = "rendered_dom"` and the page entry records
+  `rendered_snapshot_used`. The digest header states how many pages used
+  rendered evidence.
+
+Tests: snapshot context construction, manifest loading (present, missing,
+malformed), and an orchestrated run where a canned SPA shell plus a snapshot
+yields measured seo verdicts stamped rendered_dom while performance stays
+static. Live capture is the agent's step and is not simulated in tests.
+
+## 27. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

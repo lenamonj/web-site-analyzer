@@ -33,13 +33,18 @@ per the standing rule.
   test guards against truncation. Suite 167 -> 170; live: cnn.com static
   HTML now names 7 trackers (4 only findable with the expanded list) and
   detects its consent platform.
-- [ ] **G3 (todo, L)** Rendered-evidence pipeline, part 1: structural re-runs.
-  When a browser (Playwright/Chrome MCP) is available, capture the rendered
-  DOM for client-rendered pages and re-run the structural scanners (seo,
-  accessibility, privacy, page_security, design) against it, replacing their
-  "inconclusive" verdicts with measured ones. The scan JSON must label which
-  evidence is static versus rendered. Spec the handoff format first: the
-  agent captures, the tools consume a saved DOM snapshot file.
+- [x] **G3 (done, L)** Rendered-evidence pipeline, part 1. Spec: PLAN.md
+  section 26. Tool side built and tested: htmlmeta.page_from_snapshot builds
+  a measured context from a captured DOM (network facts stay from the live
+  fetch), scan_site.load_rendered_snapshots reads the
+  planning/_evidence/rendered/<slug>/manifest.json handoff, and the per-page
+  loop runs every structural scanner against the snapshot for
+  client-rendered pages (results stamped evidence_source: rendered_dom;
+  performance keeps static transfer facts; no snapshot -> inconclusive
+  stands). Capture side documented in SKILL.md for the agent's browser pass;
+  live capture was not performed this iteration (no browser step in the
+  loop), so live verification of the capture step remains with the next
+  full site review. Suite 170 -> 174.
 - [ ] **G4 (todo, L)** Rendered-evidence pipeline, part 2: real performance
   and visual metrics. From the same browser session capture LCP, CLS, and
   TBT (Lighthouse-class metrics the static floor cannot see) plus

@@ -72,7 +72,7 @@ Issues are **aggregated**: an identical finding repeated across pages (a templat
 
 Each run also produces a **scorecard**: every category is rolled up into a posture band (Strong, Adequate, Weak, Poor, or Not measured) from its own pass/warn/fail checks, plus an overall band. It is a transparent aggregation of measured checks, not an invented benchmark, and the raw counts always travel with it. The executive report renders this scorecard when present. A multi-page run adds a **cross-page** check for titles or meta descriptions reused across pages. Each page is fetched and parsed once and shared across all page-level scanners, so scanning stays light on the target, and one scanner failing never aborts the run.
 
-The scanners detect client-rendered (JavaScript) pages and mark their structural SEO, accessibility, and readability checks inconclusive rather than reporting an empty static body as clean. Those pages need the optional browser pass for real content.
+The scanners detect client-rendered (JavaScript) pages and mark their structural SEO, accessibility, and readability checks inconclusive rather than reporting an empty static body as clean. With the optional browser pass, the agent captures each such page's rendered DOM to `planning\_evidence\rendered\<slug>\` (files plus a small manifest) and the next scan runs the structural scanners against the browser-built DOM, labeling those verdicts `evidence_source: rendered_dom`; performance numbers always stay measured from the real network transfer. Without a browser, the inconclusive verdicts stand - nothing is guessed.
 
 ---
 

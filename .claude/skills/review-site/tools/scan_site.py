@@ -58,6 +58,26 @@ def _dup_check(mapping, label, n_pages):
     return {"verdict": "pass", "note": f"Each reviewed page has a distinct {label}."}
 
 
+def load_rendered_snapshots(slug):
+    """url -> rendered HTML captured by the agent's browser pass (PLAN.md
+    section 26). Absence of the manifest is the normal case and returns
+    empty; the scanners never launch a browser themselves."""
+    base = common.evidence_dir() / "rendered" / slug
+    manifest_path = base / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    out = {}
+    for url, entry in (manifest.get("pages") or {}).items():
+        f = base / (entry.get("file") or "")
+        if f.is_file():
+            out[url] = f.read_text(encoding="utf-8", errors="replace")
+    return out
+
+
 def group_issues(issues):
     """Collapse identical (label, check, verdict) findings that repeat across
     pages into one group carrying the affected pages, so a template-level
@@ -153,12 +173,12 @@ def run(target, extra_pages):
     # shared assets repeat across pages and need not be re-fetched.
     common.enable_fetch_cache()
     try:
-        return _run(target, host, slug, extra_pages)
+        return _run(target, host, slug, extra_pages, load_rendered_snapshots(slug))
     finally:
         common.disable_fetch_cache()
 
 
-def _run(target, host, slug, extra_pages):
+def _run(target, host, slug, extra_pages, snapshots):
     host_scans = {
         e.key: _safe_scan(e.module.scan, target, tool_name=e.tool_id)
         for e in registry.host_tools()
@@ -171,9 +191,23 @@ def _run(target, host, slug, extra_pages):
         # page-level scanner instead of each one re-fetching the same URL.
         ctx = _safe_scan(htmlmeta.fetch_page, url, tool_name="fetch_page")
         entry = {"url": url}
+        # A client-rendered page with an agent-captured DOM snapshot gets its
+        # structural scans run against the rendered DOM (PLAN.md section 26).
+        # Performance keeps the static context: its numbers are transfer facts.
+        rendered_ctx = None
+        snap_html = snapshots.get(url)
+        if (snap_html and isinstance(ctx, dict)
+                and ctx.get("render", {}).get("likely_client_rendered")):
+            rendered_ctx = htmlmeta.page_from_snapshot(url, snap_html, ctx.get("res"))
+            entry["rendered_snapshot_used"] = True
         for key, module, _ in PAGE_SCANNERS:
             page_arg = ctx if isinstance(ctx, dict) and "res" in ctx else None
-            entry[key] = _safe_scan(module.scan, url, page=page_arg, tool_name=f"scan_{key}")
+            if rendered_ctx is not None and key != "performance":
+                page_arg = rendered_ctx
+            sr = _safe_scan(module.scan, url, page=page_arg, tool_name=f"scan_{key}")
+            if page_arg is rendered_ctx and isinstance(sr, dict):
+                sr["evidence_source"] = "rendered_dom"
+            entry[key] = sr
         page_scans.append(entry)
 
     issues = []
@@ -252,6 +286,11 @@ def write_digest_md(result, path):
              f"- Failing checks: {totals['fail']} ({totals.get('grouped_fail', totals['fail'])} distinct)"
              f"  |  Warnings: {totals['warn']} ({totals.get('grouped_warn', totals['warn'])} distinct)",
              ""]
+    rendered_pages = sum(1 for ps in result.get("page_scans", [])
+                         if ps.get("rendered_snapshot_used"))
+    if rendered_pages:
+        lines.insert(5, f"- Rendered DOM snapshots used for {rendered_pages} page(s); "
+                        "those structural verdicts are measured from the browser-built DOM.")
     sc = result.get("scorecard", {})
     if sc:
         o = sc["overall"]

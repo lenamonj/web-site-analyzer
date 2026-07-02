@@ -285,6 +285,26 @@ def parse_html(html):
     }
 
 
+def page_from_snapshot(url, html, network_res=None):
+    """Page context from an agent-captured rendered DOM snapshot (PLAN.md
+    section 26). Network facts (status, headers, final_url) stay from the
+    live fetch when provided; the body is the rendered DOM, so structural
+    scanners measure what the browser actually built."""
+    if network_res and network_res.get("ok") is not None:
+        res = dict(network_res)
+    else:
+        res = {"ok": True, "error": None, "hops": [], "final_url": url,
+               "final_status": None, "final_headers": {}, "content_type": "text/html",
+               "content_encoding": "", "body_bytes": 0, "uncompressed_bytes": 0,
+               "elapsed_ms": 0, "requested_url": url}
+    res["body"] = html
+    res["ok"] = True
+    parsed = parse_html(html)
+    render = render_assessment(parsed, html)
+    render["source"] = "rendered_dom_snapshot"
+    return {"url": res.get("final_url") or url, "res": res, "parsed": parsed, "render": render}
+
+
 def fetch_page(url):
     """
     Fetch and parse a page once, returning a context the page scanners share.

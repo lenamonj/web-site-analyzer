@@ -1063,6 +1063,90 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
 
 
+class TestRenderedSnapshots(unittest.TestCase):
+    def test_page_from_snapshot_builds_a_measured_context(self):
+        net = {"ok": False, "error": None, "final_url": "https://acme.example/app",
+               "final_status": 200, "final_headers": {"content-type": "text/html"},
+               "hops": [], "content_type": "text/html", "content_encoding": "",
+               "body": SPA_SHELL, "body_bytes": 10, "uncompressed_bytes": 10,
+               "elapsed_ms": 1, "requested_url": "https://acme.example/app"}
+        ctx = htmlmeta.page_from_snapshot("https://acme.example/app", GOOD_PAGE, net)
+        self.assertEqual(ctx["res"]["body"], GOOD_PAGE)
+        self.assertTrue(ctx["res"]["ok"])
+        self.assertEqual(ctx["res"]["final_url"], "https://acme.example/app")
+        self.assertFalse(ctx["render"]["likely_client_rendered"])
+        self.assertEqual(ctx["render"]["source"], "rendered_dom_snapshot")
+
+    def test_load_rendered_snapshots_reads_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "rendered" / "acme-example"
+            base.mkdir(parents=True)
+            (base / "home.html").write_text(GOOD_PAGE, encoding="utf-8")
+            (base / "manifest.json").write_text(json.dumps({
+                "captured_with": "test", "viewport": "1440px",
+                "pages": {"https://acme.example/": {"file": "home.html",
+                                                    "captured_at_utc": "2026-07-03T00:00:00Z"}},
+            }), encoding="utf-8")
+            orig = common.evidence_dir
+            common.evidence_dir = lambda: Path(tmp)
+            try:
+                snaps = site.load_rendered_snapshots("acme-example")
+                empty = site.load_rendered_snapshots("other-slug")
+            finally:
+                common.evidence_dir = orig
+        self.assertEqual(snaps, {"https://acme.example/": GOOD_PAGE})
+        self.assertEqual(empty, {})
+
+    def test_spa_page_with_snapshot_gets_measured_verdicts(self):
+        def spa_fetch(url, *args, **kwargs):
+            res = dict(_canned_fetch(url))
+            res["body"] = SPA_SHELL
+            res["body_bytes"] = len(SPA_SHELL)
+            res["uncompressed_bytes"] = len(SPA_SHELL)
+            return res
+
+        orig = (common.http_fetch, common.tls_info, common.doh_query,
+                tls._probe_legacy, site.load_rendered_snapshots)
+        common.http_fetch = spa_fetch
+        common.tls_info = _canned_tls
+        common.doh_query = _canned_doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+        site.load_rendered_snapshots = lambda slug: {"https://acme.example/": GOOD_PAGE}
+        try:
+            result = site.run("https://acme.example/", [])
+        finally:
+            (common.http_fetch, common.tls_info, common.doh_query,
+             tls._probe_legacy, site.load_rendered_snapshots) = orig
+
+        page = result["page_scans"][0]
+        self.assertTrue(page["rendered_snapshot_used"])
+        self.assertEqual(page["seo"]["evidence_source"], "rendered_dom")
+        # Structural verdicts are measured from the snapshot, not inconclusive.
+        self.assertEqual(page["seo"]["checks"]["headings"]["verdict"], "pass")
+        self.assertEqual(page["accessibility"]["evidence_source"], "rendered_dom")
+        # Performance keeps the static context: transfer facts are not simulated.
+        self.assertNotIn("evidence_source", page["performance"])
+
+    def test_spa_page_without_snapshot_stays_inconclusive(self):
+        def spa_fetch(url, *args, **kwargs):
+            res = dict(_canned_fetch(url))
+            res["body"] = SPA_SHELL
+            return res
+
+        orig = (common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy)
+        common.http_fetch = spa_fetch
+        common.tls_info = _canned_tls
+        common.doh_query = _canned_doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+        try:
+            result = site.run("https://acme.example/", [])
+        finally:
+            common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy = orig
+        page = result["page_scans"][0]
+        self.assertNotIn("rendered_snapshot_used", page)
+        self.assertEqual(page["seo"]["checks"]["headings"]["verdict"], "info")
+
+
 class TestDkimSelectorFamilies(unittest.TestCase):
     def test_probe_list_includes_date_and_provider_families(self):
         for sel in ("20230601", "20161025", "s2048", "fm1", "protonmail", "zoho"):

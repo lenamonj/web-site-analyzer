@@ -726,6 +726,37 @@ cnn.com's static homepage now names 7 trackers across four categories, four
 of which only the expanded list can identify, and its consent platform is
 detected.
 
+---
+
+## 2026-07-03 - G3: rendered-evidence pipeline, part 1 (tool side)
+
+**Task:** G3 per PLAN.md section 26 (spec'd first). Phase G loop, iteration 3.
+
+**What I did:**
+- Handoff contract: the agent's browser pass writes one HTML file per
+  client-rendered page plus `planning/_evidence/rendered/<slug>/manifest.json`
+  (captured_with, viewport, url -> file + captured_at_utc). Documented in
+  SKILL.md with the exact schema; the scanners never launch a browser.
+- `htmlmeta.page_from_snapshot(url, html, network_res)`: a page context whose
+  body is the rendered DOM while status, headers, and final_url stay from
+  the live fetch; the render assessment is stamped source =
+  rendered_dom_snapshot.
+- `scan_site`: `load_rendered_snapshots(slug)` reads the manifest (absence is
+  the normal case); the per-page loop hands the snapshot context to every
+  page scanner except performance when the page is client-rendered and a
+  capture exists. Results carry `evidence_source: rendered_dom`, the page
+  entry records `rendered_snapshot_used`, and the digest header counts
+  rendered-evidence pages. Without a capture the inconclusive verdicts stand
+  untouched - nothing is inferred.
+
+**What I verified:** suite 170 -> 174, all pass, including an orchestrated
+run where a canned SPA shell plus a snapshot yields measured seo and
+accessibility verdicts stamped rendered_dom while performance keeps the
+static transfer context, and the no-snapshot path stays inconclusive. The
+live capture step is the agent's browser pass and was not exercised in this
+iteration; it is recorded as pending for the next full site review rather
+than simulated.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,
