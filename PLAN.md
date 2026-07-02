@@ -346,7 +346,82 @@ dead links could take minutes. Both now run their batch through a bounded
 deterministic. Eight concurrent requests is comparable to a normal browser's
 per-host connection pool, so the run remains polite to the target.
 
-## 12. Open design questions
+## 12. Design: executive report document design (task F1)
+Directive (user, 2026-07-02): the executive report was visually weak; it must
+look professional, board-ready. The builder owns all formatting (output
+contract), so the redesign lives entirely in `build_exec_report.py` and the
+JSON data contract is unchanged: the same keys (site, target_url, date,
+bottom_line, scorecard{overall, rows}, findings, recommendations, quick_wins,
+evidence) render in both hand-authored and machine-drafted form.
+
+Document design system:
+- One accent navy (0B1F3A) plus a muted, print-safe semantic palette:
+  Strong/Low 1E7B4F, Adequate/Medium E2A800 (dark text for contrast),
+  Weak CB6120, Poor B3261E, Critical 7F1D1D, Not measured 8A94A6. A thin gold
+  rule (C9A227) under the masthead. Hairlines D8DEE9. Calibri body, Consolas
+  code. No em or en dashes anywhere.
+- Masthead: full-width navy banner (kicker, site name at 25pt, url | date
+  line), built as a shaded 1x1 table so it renders identically everywhere.
+- At-a-glance tile strip: four tiles (overall posture, findings count with a
+  severity breakdown, recommendations count, areas measured), every value
+  copied or counted from the data, nothing invented.
+- Bottom line: shaded callout with a navy left bar.
+- Tables: navy header row, horizontal hairlines only (no full grid), roomy
+  cell margins via tblCellMar, vertical centering, header row repeats across
+  pages, rows do not split. Posture and severity render as color chips.
+- Footer: hairline rule, "<site> Website Review" left, "Page N" right via a
+  real PAGE field.
+- Evidence appendix: numbered exhibits ("Exhibit N."), full-width images,
+  bordered code blocks with the exact problem substring highlighted.
+
+Tests: `test_exec_report.py` (next to the builder; requires python-docx,
+skips if absent) builds from a synthetic dict and asserts masthead, tile
+counts, chip fills, severity ordering, rank ordering, footer PAGE field,
+exhibit numbering, and that a minimal data dict renders without the optional
+sections. Visual verification: render the two real evidence datasets and
+inspect the PDF (Word COM export).
+
+## 13. Design: security depth (task F2)
+Purpose: close the gaps between the current header-only security view and what
+a world-class passive analyzer reports. Three additions, all passive.
+
+1. `security_txt` check added to `scan_http_security` (host scope): one GET to
+   `/.well-known/security.txt` (RFC 9116, a standardized well-known URI like
+   robots.txt, not path guessing). 200 with a `Contact:` line -> pass; fetch
+   failure -> info (network failure is not evidence of absence); otherwise ->
+   info noting it is not published (adoption is low, so absence is reported as
+   an observation, not graded down).
+2. New page-scoped tool `scan_page_security` (`CATEGORY = "security"`; the
+   scorecard merges it with the host header checks since categories merge by
+   name per section 9). Checks, all from static HTML:
+   - `subresource_integrity` (pass|warn|info): cross-origin `<script src>` and
+     `<link rel=stylesheet>` without an `integrity` attribute -> warn with
+     counts and capped examples; all covered -> pass; none cross-origin or
+     client-rendered -> info.
+   - `insecure_form_action` (pass|fail|info): a `<form action="http://...">`
+     on an HTTPS page -> fail (credentials or PII would leave over plaintext);
+     none -> pass; no forms or client-rendered -> info.
+   - `inline_event_handlers` (info): count of `on<event>=` attributes in the
+     markup; reported because they block a strict CSP. Observation only.
+   - `target_blank_rel` (pass|info): `<a target="_blank">` without
+     `rel=noopener|noreferrer` -> info with count (modern browsers imply
+     noopener, so this is hygiene, not a graded fault); otherwise pass.
+   Client-rendered pages mark the markup-derived checks info (section 2 rule).
+   Extraction reuses the existing regex approach over `res["body"]` plus
+   `parsed` anchors/links; form/script/link attr regexes live in this module.
+3. `caa` check added to `scan_tls` (host scope): one DoH query for the CAA
+   record of the registrable domain (reuses `common.doh_query` and
+   `scan_dns_email.registrable_domain`). Records present -> pass listing the
+   authorized CAs; none -> info (absence is common and only an observation);
+   query failure -> info.
+
+Registration: one `_entry` for `scan_page_security` in the registry; the two
+check additions ride inside existing tools. Tests: offline fixtures for SRI
+present/absent/cross-origin-only, http form action on https page, inline
+handler counting, target_blank rel matrix, security.txt parse, CAA
+present/absent; `TestToolContract` picks up the new tool automatically.
+
+## 14. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

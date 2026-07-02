@@ -2,10 +2,13 @@
 """
 Executive report builder for the website review scaffold.
 
-Reads a JSON file of findings and recommendations and writes a one-to-two page,
-CEO-level Word report with consistent formatting. Formatting lives here so the
-report looks identical on every run regardless of who or what invokes it, and
-regardless of which site was analyzed.
+Reads a JSON file of findings and recommendations and writes a CEO-level Word
+report with consistent, professional formatting: a masthead banner, an
+at-a-glance tile strip, a bottom-line callout, hairline-ruled tables with
+color-chip posture and severity cells, an evidence appendix, and a numbered
+footer. Formatting lives here so the report looks identical on every run
+regardless of who or what invokes it, and regardless of which site was
+analyzed.
 
 Usage:
     python build_exec_report.py <input_json> <output_docx>
@@ -19,46 +22,84 @@ import sys
 from pathlib import Path
 
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.ns import qn
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches, Pt, RGBColor
+
+BODY_FONT = "Calibri"
+MONO_FONT = "Consolas"
 
 # Single accent color. Swap this hex to rebrand the whole report.
 ACCENT_HEX = "0B1F3A"                       # deep navy
 ACCENT_RGB = RGBColor(0x0B, 0x1F, 0x3A)
 WHITE_RGB = RGBColor(0xFF, 0xFF, 0xFF)
-BODY_RGB = RGBColor(0x22, 0x22, 0x22)
-MARK_RGB = RGBColor(0xC0, 0x39, 0x2B)       # red, for the marked (problem) text
-MONO_FONT = "Consolas"
+BODY_RGB = RGBColor(0x26, 0x2B, 0x33)
+MUTED_RGB = RGBColor(0x5A, 0x66, 0x72)      # secondary text
+BANNER_SUB_RGB = RGBColor(0xB9, 0xC6, 0xDA)  # light blue-gray on navy
+MARK_RGB = RGBColor(0xB3, 0x26, 0x1E)       # red, for the marked (problem) text
+GOLD_HEX = "C9A227"                          # thin rule under the masthead
+HAIRLINE_HEX = "D8DEE9"
+TILE_FILL_HEX = "F4F6F9"
+CALLOUT_FILL_HEX = "EEF2F8"
+CODE_FILL_HEX = "F7F8FA"
+CHIP_FILL_HEX = "E6EAF1"                     # neutral chip (effort column)
 
-# Background fill per severity for the severity cell.
+# Background fill per severity for the severity cell. Muted, print-safe tones.
 SEVERITY_FILL = {
-    "Critical": "C0392B",
-    "High": "E67E22",
-    "Medium": "F1C40F",
-    "Low": "27AE60",
+    "Critical": "7F1D1D",
+    "High": "C0392B",
+    "Medium": "E2A800",
+    "Low": "1E7B4F",
 }
 SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
 
 # Background fill per measured posture band (from the scanner scorecard).
 BAND_FILL = {
-    "Strong": "27AE60",
-    "Adequate": "F1C40F",
-    "Weak": "E67E22",
-    "Poor": "C0392B",
-    "Not measured": "7F8C8D",
+    "Strong": "1E7B4F",
+    "Adequate": "E2A800",
+    "Weak": "CB6120",
+    "Poor": "B3261E",
+    "Not measured": "8A94A6",
 }
 
+# Fills light enough to need dark text for contrast; the rest use white.
+LIGHT_FILLS = {"E2A800", TILE_FILL_HEX, CALLOUT_FILL_HEX, CHIP_FILL_HEX}
 
-def add_run(paragraph, text, size=10, bold=False, color=BODY_RGB, italic=False):
+PAGE_WIDTH = Inches(7.0)  # usable width inside 0.75in margins on US Letter
+
+
+# ---------------------------------------------------------------- low level --
+
+# OOXML property elements require their children in a fixed schema order.
+# python-docx reads any order, but Word is strict: appending (say) tcBorders
+# after shd makes Word silently repair or mis-lay-out the file. Every manual
+# element below is therefore inserted before the tags that must follow it.
+_TCPR_AFTER_TCBORDERS = ("w:shd", "w:noWrap", "w:tcMar", "w:textDirection",
+                         "w:tcFitText", "w:vAlign", "w:hideMark")
+_TCPR_AFTER_SHD = _TCPR_AFTER_TCBORDERS[1:]
+_TBLPR_AFTER_TBLBORDERS = ("w:shd", "w:tblLayout", "w:tblCellMar", "w:tblLook",
+                           "w:tblCaption", "w:tblDescription")
+_TBLPR_AFTER_TBLCELLMAR = ("w:tblLook", "w:tblCaption", "w:tblDescription")
+_PPR_AFTER_PBDR = ("w:shd", "w:tabs", "w:suppressAutoHyphens", "w:spacing",
+                   "w:ind", "w:contextualSpacing", "w:jc", "w:rPr", "w:sectPr")
+_RPR_AFTER_SPACING = ("w:w", "w:kern", "w:position", "w:sz", "w:szCs",
+                      "w:highlight", "w:u", "w:vertAlign", "w:lang")
+
+
+def add_run(paragraph, text, size=10, bold=False, color=BODY_RGB, italic=False,
+            font=BODY_FONT, letter_spacing=None):
     run = paragraph.add_run(text)
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
     run.font.color.rgb = color
-    run.font.name = "Calibri"
+    run.font.name = font
+    if letter_spacing:
+        sp = OxmlElement("w:spacing")
+        sp.set(qn("w:val"), str(letter_spacing))  # twentieths of a point
+        run._r.get_or_add_rPr().insert_element_before(sp, *_RPR_AFTER_SPACING)
     return run
 
 
@@ -68,35 +109,247 @@ def shade_cell(cell, hex_fill):
     shd.set(qn("w:val"), "clear")
     shd.set(qn("w:color"), "auto")
     shd.set(qn("w:fill"), hex_fill)
-    tc_pr.append(shd)
+    tc_pr.insert_element_before(shd, *_TCPR_AFTER_SHD)
 
 
 def set_cell_text(cell, text, size=9, bold=False, color=BODY_RGB, align=None):
     cell.text = ""
     para = cell.paragraphs[0]
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(0)
     if align is not None:
         para.alignment = align
     add_run(para, text, size=size, bold=bold, color=color)
-
-
-def section_heading(document, text):
-    para = document.add_paragraph()
-    para.paragraph_format.space_before = Pt(14)
-    para.paragraph_format.space_after = Pt(4)
-    add_run(para, text.upper(), size=12, bold=True, color=ACCENT_RGB)
     return para
 
 
-def text_color_for_fill(hex_fill):
-    # Amber background needs dark text for contrast; the rest use white.
-    return BODY_RGB if hex_fill.upper() == "F1C40F" else WHITE_RGB
+def set_table_padding(table, top=80, bottom=80, left=110, right=110):
+    """Default cell margins for the whole table, in twentieths of a point.
+    Roomy cells are the single clearest difference between a designed table
+    and Word's cramped default."""
+    tbl_pr = table._tbl.tblPr
+    mar = OxmlElement("w:tblCellMar")
+    for name, val in (("top", top), ("left", left), ("bottom", bottom), ("right", right)):
+        el = OxmlElement(f"w:{name}")
+        el.set(qn("w:w"), str(val))
+        el.set(qn("w:type"), "dxa")
+        mar.append(el)
+    tbl_pr.insert_element_before(mar, *_TBLPR_AFTER_TBLCELLMAR)
+
+
+def set_table_borders(table, **edges):
+    """Explicit border per edge (top/left/bottom/right/insideH/insideV).
+    Each edge is (size_in_eighth_points, hex_color) or None for no border."""
+    tbl_pr = table._tbl.tblPr
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        spec = edges.get(edge)
+        if spec:
+            size, color = spec
+            el.set(qn("w:val"), "single")
+            el.set(qn("w:sz"), str(size))
+            el.set(qn("w:color"), color)
+        else:
+            el.set(qn("w:val"), "nil")
+        borders.append(el)
+    tbl_pr.insert_element_before(borders, *_TBLPR_AFTER_TBLBORDERS)
+
+
+def set_cell_border(cell, edge, size, color):
+    tc_pr = cell._tc.get_or_add_tcPr()
+    borders = tc_pr.find(qn("w:tcBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tcBorders")
+        tc_pr.insert_element_before(borders, *_TCPR_AFTER_TCBORDERS)
+    el = OxmlElement(f"w:{edge}")
+    el.set(qn("w:val"), "single")
+    el.set(qn("w:sz"), str(size))
+    el.set(qn("w:color"), color)
+    borders.append(el)
+
+
+def keep_rows_together(table, header=False):
+    """Stop rows splitting across pages; optionally repeat the header row."""
+    for idx, row in enumerate(table.rows):
+        tr_pr = row._tr.get_or_add_trPr()
+        tr_pr.append(OxmlElement("w:cantSplit"))
+        if header and idx == 0:
+            tr_pr.append(OxmlElement("w:tblHeader"))
 
 
 def set_col_widths(table, widths):
     # python-docx needs the width set on every cell to be reliable.
+    table.autofit = False
     for row in table.rows:
         for idx, width in enumerate(widths):
             row.cells[idx].width = width
+
+
+def text_color_for_fill(hex_fill):
+    return BODY_RGB if hex_fill.upper() in LIGHT_FILLS else WHITE_RGB
+
+
+def add_page_number_field(paragraph, size=8, color=MUTED_RGB):
+    run = paragraph.add_run()
+    run.font.size = Pt(size)
+    run.font.color.rgb = color
+    run.font.name = BODY_FONT
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = "PAGE"
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run._r.append(begin)
+    run._r.append(instr)
+    run._r.append(end)
+
+
+# ------------------------------------------------------------- components --
+
+def section_heading(document, text):
+    para = document.add_paragraph()
+    para.paragraph_format.space_before = Pt(16)
+    para.paragraph_format.space_after = Pt(7)
+    # Thin rule under the heading, drawn as a paragraph bottom border.
+    p_pr = para._p.get_or_add_pPr()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "6")
+    bottom.set(qn("w:color"), HAIRLINE_HEX)
+    borders.append(bottom)
+    p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
+    add_run(para, text.upper(), size=12, bold=True, color=ACCENT_RGB, letter_spacing=16)
+    return para
+
+
+def add_masthead(document, site, target_url, date):
+    table = document.add_table(rows=1, cols=1)
+    set_table_borders(table)
+    set_table_padding(table, top=180, bottom=180, left=220, right=220)
+    cell = table.rows[0].cells[0]
+    shade_cell(cell, ACCENT_HEX)
+    cell.text = ""
+
+    kicker = cell.paragraphs[0]
+    kicker.paragraph_format.space_after = Pt(4)
+    add_run(kicker, "WEBSITE REVIEW  /  EXECUTIVE REPORT", size=8.5,
+            bold=True, color=BANNER_SUB_RGB, letter_spacing=30)
+
+    name = cell.add_paragraph()
+    name.paragraph_format.space_after = Pt(4)
+    add_run(name, site, size=25, bold=True, color=WHITE_RGB)
+
+    meta_bits = [b for b in [target_url, date] if b]
+    if meta_bits:
+        meta = cell.add_paragraph()
+        meta.paragraph_format.space_after = Pt(0)
+        add_run(meta, "   |   ".join(meta_bits), size=9, color=BANNER_SUB_RGB)
+    set_col_widths(table, [PAGE_WIDTH])
+
+    # Thin gold rule directly under the banner.
+    rule = document.add_paragraph()
+    rule.paragraph_format.space_before = Pt(0)
+    rule.paragraph_format.space_after = Pt(10)
+    p_pr = rule._p.get_or_add_pPr()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "18")
+    bottom.set(qn("w:color"), GOLD_HEX)
+    borders.append(bottom)
+    p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
+
+
+def _severity_breakdown(findings):
+    counts = {}
+    for f in findings:
+        sev = f.get("severity", "Low")
+        counts[sev] = counts.get(sev, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: SEVERITY_ORDER.get(kv[0], 9))
+    return " / ".join(f"{n} {sev}" for sev, n in ordered)
+
+
+def add_glance_tiles(document, data):
+    """One row of at-a-glance tiles, every value copied or counted from the
+    supplied data. Nothing here is invented."""
+    findings = data.get("findings", [])
+    recs = data.get("recommendations", [])
+    scorecard = data.get("scorecard") or {}
+    rows = scorecard.get("rows", [])
+    overall = scorecard.get("overall") or "Not measured"
+
+    tiles = [
+        ("OVERALL POSTURE", overall, "measured scan verdicts",
+         RGBColor.from_string(BAND_FILL.get(overall, BAND_FILL["Not measured"]))),
+        ("KEY FINDINGS", str(len(findings)),
+         _severity_breakdown(findings) or "none recorded", ACCENT_RGB),
+        ("RECOMMENDATIONS", str(len(recs)),
+         "ranked by priority" if recs else "to be authored", ACCENT_RGB),
+        ("AREAS MEASURED", str(len(rows)),
+         "scan categories" if rows else "no scorecard supplied", ACCENT_RGB),
+    ]
+
+    table = document.add_table(rows=1, cols=len(tiles))
+    set_table_borders(table)
+    set_table_padding(table, top=110, bottom=110, left=130, right=100)
+    for cell, (label, value, sub, value_color) in zip(table.rows[0].cells, tiles):
+        shade_cell(cell, TILE_FILL_HEX)
+        set_cell_border(cell, "top", 20, ACCENT_HEX)
+        cell.text = ""
+        p1 = cell.paragraphs[0]
+        p1.paragraph_format.space_after = Pt(2)
+        add_run(p1, label, size=7.5, bold=True, color=MUTED_RGB, letter_spacing=16)
+        p2 = cell.add_paragraph()
+        p2.paragraph_format.space_after = Pt(1)
+        add_run(p2, value, size=15, bold=True, color=value_color)
+        p3 = cell.add_paragraph()
+        p3.paragraph_format.space_after = Pt(0)
+        add_run(p3, sub, size=7.5, color=MUTED_RGB)
+    set_col_widths(table, [Inches(1.75)] * len(tiles))
+    keep_rows_together(table)
+
+
+def add_callout(document, text):
+    table = document.add_table(rows=1, cols=1)
+    set_table_borders(table)
+    set_table_padding(table, top=130, bottom=130, left=170, right=170)
+    cell = table.rows[0].cells[0]
+    shade_cell(cell, CALLOUT_FILL_HEX)
+    set_cell_border(cell, "left", 28, ACCENT_HEX)
+    para = set_cell_text(cell, text, size=10.5)
+    para.paragraph_format.line_spacing = 1.15
+    set_col_widths(table, [PAGE_WIDTH])
+
+
+def add_data_table(document, headers, widths, rows):
+    """A hairline-ruled table: navy header row, horizontal rules only, roomy
+    cells. `rows` is a list of cell writers, one callable per row taking the
+    row's cells."""
+    table = document.add_table(rows=1, cols=len(headers))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    set_table_borders(table, bottom=(6, HAIRLINE_HEX), insideH=(4, HAIRLINE_HEX))
+    set_table_padding(table)
+    for cell, label in zip(table.rows[0].cells, headers):
+        shade_cell(cell, ACCENT_HEX)
+        set_cell_text(cell, label.upper(), size=8, bold=True, color=WHITE_RGB)
+    for write_row in rows:
+        write_row(table.add_row().cells)
+    for row in table.rows:
+        for cell in row.cells:
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    set_col_widths(table, widths)
+    keep_rows_together(table, header=True)
+    return table
+
+
+def _chip(cell, text, fill):
+    shade_cell(cell, fill)
+    set_cell_text(cell, text, size=8.5, bold=True, color=text_color_for_fill(fill),
+                  align=WD_ALIGN_PARAGRAPH.CENTER)
 
 
 def _add_marked_runs(paragraph, text, highlights, size=8):
@@ -134,51 +387,70 @@ def add_code_block(document, code, highlight=None):
     """A shaded monospace box holding a literal snippet, with the exact problem
     substring(s) highlighted. `highlight` is a string or list of strings. Each
     source line becomes its own paragraph so line breaks are preserved."""
+    if isinstance(highlight, str):
+        highlight = [highlight]
     table = document.add_table(rows=1, cols=1)
-    table.style = "Table Grid"
+    set_table_borders(table, top=(4, HAIRLINE_HEX), bottom=(4, HAIRLINE_HEX),
+                      left=(4, HAIRLINE_HEX), right=(4, HAIRLINE_HEX))
+    set_table_padding(table, top=110, bottom=110, left=150, right=150)
     cell = table.rows[0].cells[0]
-    shade_cell(cell, "F5F5F5")
+    shade_cell(cell, CODE_FILL_HEX)
     cell.text = ""
     for idx, line in enumerate(code.split("\n")):
         para = cell.paragraphs[0] if idx == 0 else cell.add_paragraph()
+        para.paragraph_format.space_before = Pt(0)
+        para.paragraph_format.space_after = Pt(0)
         _add_marked_runs(para, line, highlight)
-    set_col_widths(table, [Inches(6.5)])
+    set_col_widths(table, [PAGE_WIDTH])
 
+
+def add_footer(document, site):
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    para = footer.paragraphs[0]
+    para.text = ""
+    p_pr = para._p.get_or_add_pPr()
+    borders = OxmlElement("w:pBdr")
+    top = OxmlElement("w:top")
+    top.set(qn("w:val"), "single")
+    top.set(qn("w:sz"), "4")
+    top.set(qn("w:color"), HAIRLINE_HEX)
+    borders.append(top)
+    p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
+    para.paragraph_format.tab_stops.add_tab_stop(PAGE_WIDTH, WD_TAB_ALIGNMENT.RIGHT)
+    add_run(para, f"{site} Website Review", size=8, color=MUTED_RGB)
+    add_run(para, "\tPage ", size=8, color=MUTED_RGB)
+    add_page_number_field(para)
+
+
+# ------------------------------------------------------------------ build --
 
 def build(data, out_path):
     document = Document()
 
     normal = document.styles["Normal"]
-    normal.font.name = "Calibri"
+    normal.font.name = BODY_FONT
     normal.font.size = Pt(10)
     normal.font.color.rgb = BODY_RGB
 
     for section in document.sections:
-        section.top_margin = Inches(0.8)
-        section.bottom_margin = Inches(0.8)
-        section.left_margin = Inches(0.9)
-        section.right_margin = Inches(0.9)
+        section.top_margin = Inches(0.7)
+        section.bottom_margin = Inches(0.7)
+        section.left_margin = Inches(0.75)
+        section.right_margin = Inches(0.75)
 
     site = data.get("site", "Website")
-    target_url = data.get("target_url", "")
-    date = data.get("date", "")
+    document.core_properties.title = f"{site} Website Review"
 
-    title = document.add_paragraph()
-    title.paragraph_format.space_after = Pt(2)
-    add_run(title, f"{site} Website Review", size=20, bold=True, color=ACCENT_RGB)
-
-    subtitle = document.add_paragraph()
-    subtitle.paragraph_format.space_after = Pt(2)
-    add_run(subtitle, "Executive Report", size=12, bold=True, color=ACCENT_RGB)
-
-    meta = document.add_paragraph()
-    meta_bits = [b for b in [target_url, date] if b]
-    add_run(meta, "   |   ".join(meta_bits), size=9, italic=True, color=BODY_RGB)
+    add_masthead(document, site, data.get("target_url", ""), data.get("date", ""))
+    add_glance_tiles(document, data)
+    add_footer(document, site)
 
     # Bottom line
-    section_heading(document, "Bottom line")
-    bl = document.add_paragraph()
-    add_run(bl, data.get("bottom_line", ""), size=10)
+    bottom_line = data.get("bottom_line", "")
+    if bottom_line:
+        section_heading(document, "Bottom line")
+        add_callout(document, bottom_line)
 
     # Measured posture scorecard (optional; only when the scan supplied one)
     scorecard = data.get("scorecard")
@@ -186,23 +458,20 @@ def build(data, out_path):
         heading = "Measured posture"
         overall = scorecard.get("overall")
         if overall:
-            heading += f" (overall: {overall})"
+            heading += f"  (overall: {overall})"
         section_heading(document, heading)
-        table = document.add_table(rows=1, cols=3)
-        table.style = "Table Grid"
-        for cell, label in zip(table.rows[0].cells, ["Area", "Posture", "Measured detail"]):
-            shade_cell(cell, ACCENT_HEX)
-            set_cell_text(cell, label, size=9, bold=True, color=WHITE_RGB)
-        for row in scorecard["rows"]:
-            cells = table.add_row().cells
-            set_cell_text(cells[0], row.get("category", ""), size=9)
-            band = row.get("band", "Not measured")
-            fill = BAND_FILL.get(band, BAND_FILL["Not measured"])
-            shade_cell(cells[1], fill)
-            set_cell_text(cells[1], band, size=9, bold=True,
-                          color=text_color_for_fill(fill), align=WD_ALIGN_PARAGRAPH.CENTER)
-            set_cell_text(cells[2], row.get("detail", ""), size=9)
-        set_col_widths(table, [Inches(1.6), Inches(1.1), Inches(3.2)])
+
+        def scorecard_row(row):
+            def write(cells):
+                set_cell_text(cells[0], row.get("category", ""), size=9, bold=True)
+                band = row.get("band", "Not measured")
+                _chip(cells[1], band, BAND_FILL.get(band, BAND_FILL["Not measured"]))
+                set_cell_text(cells[2], row.get("detail", ""), size=8.5, color=MUTED_RGB)
+            return write
+
+        add_data_table(document, ["Area", "Posture", "Measured detail"],
+                       [Inches(1.75), Inches(1.1), Inches(4.15)],
+                       [scorecard_row(r) for r in scorecard["rows"]])
 
     # Key findings, most severe first
     findings = sorted(
@@ -211,46 +480,37 @@ def build(data, out_path):
     )
     if findings:
         section_heading(document, "Key findings hurting the site")
-        table = document.add_table(rows=1, cols=4)
-        table.style = "Table Grid"
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        for cell, label in zip(table.rows[0].cells,
-                               ["Area", "Finding", "Evidence", "Severity"]):
-            shade_cell(cell, ACCENT_HEX)
-            set_cell_text(cell, label, size=9, bold=True, color=WHITE_RGB)
-        for row_data in findings:
-            cells = table.add_row().cells
-            set_cell_text(cells[0], row_data.get("area", ""), size=9)
-            set_cell_text(cells[1], row_data.get("finding", ""), size=9)
-            set_cell_text(cells[2], row_data.get("evidence", ""), size=8)
-            sev = row_data.get("severity", "Low")
-            fill = SEVERITY_FILL.get(sev, SEVERITY_FILL["Low"])
-            shade_cell(cells[3], fill)
-            set_cell_text(cells[3], sev, size=9, bold=True,
-                          color=text_color_for_fill(fill),
-                          align=WD_ALIGN_PARAGRAPH.CENTER)
-        set_col_widths(table, [Inches(1.0), Inches(3.4), Inches(1.6), Inches(0.9)])
+
+        def finding_row(row):
+            def write(cells):
+                sev = row.get("severity", "Low")
+                _chip(cells[0], sev, SEVERITY_FILL.get(sev, SEVERITY_FILL["Low"]))
+                set_cell_text(cells[1], row.get("area", ""), size=9, bold=True)
+                set_cell_text(cells[2], row.get("finding", ""), size=9)
+                set_cell_text(cells[3], row.get("evidence", ""), size=7.5, color=MUTED_RGB)
+            return write
+
+        add_data_table(document, ["Severity", "Area", "Finding", "Evidence"],
+                       [Inches(0.85), Inches(1.0), Inches(3.6), Inches(1.55)],
+                       [finding_row(f) for f in findings])
 
     # Preferred recommendations, by rank
-    recs = sorted(data.get("recommendations", []),
-                  key=lambda r: r.get("rank", 999))
+    recs = sorted(data.get("recommendations", []), key=lambda r: r.get("rank", 999))
     if recs:
         section_heading(document, "Preferred recommendations")
-        table = document.add_table(rows=1, cols=4)
-        table.style = "Table Grid"
-        for cell, label in zip(table.rows[0].cells,
-                               ["#", "Recommendation", "Expected impact", "Effort"]):
-            shade_cell(cell, ACCENT_HEX)
-            set_cell_text(cell, label, size=9, bold=True, color=WHITE_RGB)
-        for row_data in recs:
-            cells = table.add_row().cells
-            set_cell_text(cells[0], str(row_data.get("rank", "")), size=9,
-                          align=WD_ALIGN_PARAGRAPH.CENTER)
-            set_cell_text(cells[1], row_data.get("recommendation", ""), size=9)
-            set_cell_text(cells[2], row_data.get("impact", ""), size=9)
-            set_cell_text(cells[3], row_data.get("effort", ""), size=9,
-                          align=WD_ALIGN_PARAGRAPH.CENTER)
-        set_col_widths(table, [Inches(0.4), Inches(3.4), Inches(2.2), Inches(0.9)])
+
+        def rec_row(row):
+            def write(cells):
+                set_cell_text(cells[0], str(row.get("rank", "")), size=10, bold=True,
+                              color=ACCENT_RGB, align=WD_ALIGN_PARAGRAPH.CENTER)
+                set_cell_text(cells[1], row.get("recommendation", ""), size=9)
+                set_cell_text(cells[2], row.get("impact", ""), size=8.5, color=MUTED_RGB)
+                _chip(cells[3], str(row.get("effort", "")), CHIP_FILL_HEX)
+            return write
+
+        add_data_table(document, ["#", "Recommendation", "Expected impact", "Effort"],
+                       [Inches(0.4), Inches(3.35), Inches(2.5), Inches(0.75)],
+                       [rec_row(r) for r in recs])
 
     # Quick wins
     quick = data.get("quick_wins", [])
@@ -258,32 +518,36 @@ def build(data, out_path):
         section_heading(document, "Quick wins")
         for item in quick:
             p = document.add_paragraph(style="List Bullet")
+            p.paragraph_format.space_after = Pt(3)
             add_run(p, item, size=10)
 
-    # Evidence appendix (optional): captioned proof for significant findings. Each
-    # item is {"caption": "..."} plus either an "image" (screenshot path) or a
-    # "code" snippet with an optional "highlight" (string or list) that marks the
-    # exact problem so the reader sees precisely where the error is.
+    # Evidence appendix (optional): captioned proof for significant findings.
+    # Each item is {"caption": "..."} plus either an "image" (screenshot path)
+    # or a "code" snippet with an optional "highlight" (string or list) that
+    # marks the exact problem so the reader sees precisely where the error is.
     evidence = data.get("evidence", [])
     if evidence:
         document.add_page_break()
         section_heading(document, "Evidence appendix")
-        for item in evidence:
+        for number, item in enumerate(evidence, start=1):
             cap = document.add_paragraph()
-            cap.paragraph_format.space_before = Pt(10)
-            cap.paragraph_format.space_after = Pt(2)
-            add_run(cap, item.get("caption", ""), size=9, bold=True, color=ACCENT_RGB)
+            cap.paragraph_format.space_before = Pt(12)
+            cap.paragraph_format.space_after = Pt(4)
+            add_run(cap, f"Exhibit {number}.  ", size=9.5, bold=True, color=ACCENT_RGB)
+            add_run(cap, item.get("caption", ""), size=9.5, bold=True)
             if item.get("code") is not None:
                 add_code_block(document, item["code"], item.get("highlight"))
             elif item.get("image"):
                 img = item["image"]
                 if Path(img).exists():
                     try:
-                        document.add_picture(img, width=Inches(6.5))
+                        document.add_picture(img, width=PAGE_WIDTH)
                     except Exception as e:
-                        add_run(document.add_paragraph(), f"[image not embedded: {e}]", size=8, italic=True)
+                        add_run(document.add_paragraph(),
+                                f"[image not embedded: {e}]", size=8, italic=True)
                 else:
-                    add_run(document.add_paragraph(), f"[missing image: {img}]", size=8, italic=True)
+                    add_run(document.add_paragraph(),
+                            f"[missing image: {img}]", size=8, italic=True)
 
     document.save(str(out_path))
 
