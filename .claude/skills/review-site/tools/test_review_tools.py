@@ -1063,6 +1063,40 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
 
 
+class TestDkimSelectorFamilies(unittest.TestCase):
+    def test_probe_list_includes_date_and_provider_families(self):
+        for sel in ("20230601", "20161025", "s2048", "fm1", "protonmail", "zoho"):
+            self.assertIn(sel, dns.DKIM_SELECTORS)
+
+    def test_hit_on_date_selector_is_reported(self):
+        orig = common.doh_query
+
+        def doh(name, rtype, *a, **k):
+            answers = (["v=DKIM1; k=rsa; p=MIIB"]
+                       if name.startswith("20230601._domainkey.") else [])
+            return {"ok": True, "error": None, "status": 0, "ad": False,
+                    "answers": answers, "raw": []}
+
+        common.doh_query = doh
+        try:
+            c = dns.check_dkim("acme.example")
+        finally:
+            common.doh_query = orig
+        self.assertEqual(c["verdict"], "pass")
+        self.assertEqual(c["selectors_found"], ["20230601"])
+
+    def test_absence_note_keeps_the_honest_caveat(self):
+        orig = common.doh_query
+        common.doh_query = lambda *a, **k: {"ok": True, "error": None, "status": 0,
+                                            "ad": False, "answers": [], "raw": []}
+        try:
+            c = dns.check_dkim("acme.example")
+        finally:
+            common.doh_query = orig
+        self.assertEqual(c["verdict"], "info")
+        self.assertIn("absence is not proof", c["note"])
+
+
 class TestHttp2Alpn(unittest.TestCase):
     def _scan_with_alpn(self, alpn):
         orig = (common.tls_info, common.doh_query, tls._probe_legacy)

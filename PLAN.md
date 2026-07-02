@@ -652,7 +652,28 @@ ThreadPoolExecutor pattern as the fan-out scanners (section 11), max 8
 workers, `executor.map` preserving selector order so output stays
 deterministic. Behavior unchanged; existing tests cover it.
 
-## 24. Open design questions
+## 24. Design: DKIM selector families (task G1)
+Problem: the probe list covers provider-name selectors (selector1/2, google,
+k1, s1...) but misses the date-based selectors large providers rotate, so a
+domain signed only with a Google 20230601-style key reports "not found on
+probed selectors".
+
+Design: extend DKIM_SELECTORS with documented, published selector names only
+(no invented guesses, no unbounded date generation):
+- Google date rotation: 20230601, 20161025, 20120113.
+- Yahoo key sizes: s1024, s2048.
+- Fastmail: fm1, fm2, fm3.
+- Proton Mail: protonmail, protonmail2, protonmail3.
+- Zoho: zoho.
+26 selectors total, still probed through the bounded parallel fan-out (F12),
+so wall-clock stays flat. The absence note keeps its honest caveat (random
+per-account selectors like Amazon SES tokens are unguessable by design) and
+now names the probed families. Tests: the new selectors are present in the
+probe list, a stubbed hit on a date selector is reported, and the absence
+note still carries the caveat. Live verification: gmail.com publishes
+20230601._domainkey and must be found.
+
+## 25. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

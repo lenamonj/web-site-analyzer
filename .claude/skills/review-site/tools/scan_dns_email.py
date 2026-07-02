@@ -16,10 +16,16 @@ from concurrent.futures import ThreadPoolExecutor
 
 import common
 
-# Common DKIM selectors across major providers. Absence here is not proof.
+# Common DKIM selectors across major providers: provider-name selectors plus
+# the documented date-based and key-size families large providers rotate
+# (Google 20230601-style, Yahoo s2048, Fastmail fm1-3, Proton, Zoho). Only
+# published selector names; random per-account selectors (for example Amazon
+# SES tokens) are unguessable by design. Absence here is not proof.
 DKIM_SELECTORS = [
     "selector1", "selector2", "google", "default", "k1", "k2",
     "mail", "dkim", "s1", "s2", "mandrill", "mxvault", "dkim1", "smtp",
+    "20230601", "20161025", "20120113", "s1024", "s2048",
+    "fm1", "fm2", "fm3", "protonmail", "protonmail2", "protonmail3", "zoho",
 ]
 
 # Minimal multi-label public suffixes so registrable-domain guessing is sane.
@@ -105,7 +111,9 @@ def check_dkim(domain):
                 "verdict": "pass", "note": f"DKIM key published for selector(s): {', '.join(found)}."}
     return {"selectors_found": [], "selectors_probed": DKIM_SELECTORS,
             "verdict": "info",
-            "note": "No DKIM key on the probed selectors. Provider-specific selectors may still exist."}
+            "note": (f"No DKIM key on the {len(DKIM_SELECTORS)} probed selectors (provider names "
+                     "plus Google/Yahoo/Fastmail/Proton/Zoho families). Random per-account "
+                     "selectors cannot be probed, so absence is not proof.")}
 
 
 def check_mx(domain):

@@ -19,11 +19,12 @@ JOURNAL.md. Order: two quick wins first, then the rendering tier (target
 ~800), then scale and history (target ~900). Spec in PLAN.md before building,
 per the standing rule.
 
-- [ ] **G1 (todo, S)** DKIM date-based selectors. The probe list misses
-  modern date-style selectors (Google rotates keys on selectors like
-  20230601). Add a generated set of recent date-pattern selectors (and
-  s1024/s2048 style) to DKIM_SELECTORS, keep the probe parallel and bounded,
-  and state in the note which selector families were probed.
+- [x] **G1 (done, S)** DKIM selector families. Spec: PLAN.md section 24.
+  DKIM_SELECTORS grew 14 -> 26 with documented published names only (Google
+  20230601/20161025/20120113, Yahoo s1024/s2048, Fastmail fm1-3, Proton
+  protonmail/2/3, Zoho); absence note names the probed families and keeps the
+  honest caveat. Suite 164 -> 167; live: gmail.com now found on 20230601 and
+  20161025 (previously reported not found), full scan 0.7s.
 - [ ] **G2 (todo, S)** Tracker list depth. The curated KNOWN_TRACKERS list is
   a few dozen entries versus tens of thousands in EasyList-class datasets.
   Expand the embedded list to the top ~150 tracker domains by prevalence

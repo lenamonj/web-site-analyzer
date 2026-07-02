@@ -684,6 +684,25 @@ probes plus the transport checks) measured 0.4s live against google.com.
 **Verified:** suite 161 -> 164 tests, all pass; wikipedia.org negotiates h2
 live; README/SKILL check lists updated.
 
+---
+
+## 2026-07-03 - G1: DKIM selector families
+
+**Task:** G1 per PLAN.md section 24 (spec'd first). Phase G loop, iteration 1.
+
+**What I did:** extended DKIM_SELECTORS from 14 to 26 with documented,
+published selector names only: Google's date rotation (20230601, 20161025,
+20120113), Yahoo key-size selectors (s1024, s2048), Fastmail (fm1-fm3),
+Proton Mail (protonmail, protonmail2, protonmail3), and Zoho. No invented
+date generation; random per-account selectors (Amazon SES tokens) are
+unguessable by design and the absence note says so, now naming the probed
+families. The F12 parallel fan-out keeps wall-clock flat.
+
+**What I verified:** suite 164 -> 167 tests, all pass. Live: gmail.com now
+reports DKIM pass with selectors 20230601 and 20161025 found; the previous
+list reported "not found on probed selectors" for the same domain. Full
+dns_email scan measured 0.7s.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,
