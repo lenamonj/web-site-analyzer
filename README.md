@@ -22,7 +22,7 @@ Every run produces two files in `planning\`, named by the target's domain so run
 
 `<slug>` is the host with the scheme and any leading `www.` removed and dots turned into hyphens (for example `example.com` becomes `example-com`).
 
-The review covers seven categories: Content, Design, Accessibility, Navigation and IA, SEO and Technical, Privacy and tracking, and a passive Security posture pass (TLS, security headers, cookie flags, information disclosure, SPF and DMARC).
+The review covers Content, Design (measured signals plus the optional browser pass), Accessibility, Navigation and IA, SEO and Technical, Performance and delivery architecture, Privacy and tracking, and a passive Security posture pass at both the host level (TLS, security headers, cookie flags, email auth, information disclosure) and the page level (Subresource Integrity, form-action downgrades, CSP-blocking inline handlers).
 
 ---
 
@@ -52,16 +52,18 @@ python .claude\skills\review-site\tools\scan_site.py https://example.com https:/
 | Tool | Measures (passively) |
 | --- | --- |
 | `discover_pages.py` | Reads the sitemap and homepage nav to propose a representative in-scope review set (scoping helper; fetches only the homepage and sitemaps) |
-| `scan_http_security.py` | HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners |
-| `scan_tls.py` | Negotiated TLS protocol, certificate issuer, days to expiry, hostname coverage, legacy TLS 1.0/1.1 probe |
+| `scan_http_security.py` | HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners, security.txt (RFC 9116) |
+| `scan_tls.py` | Negotiated TLS protocol, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe |
 | `scan_dns_email.py` | SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, over DNS-over-HTTPS |
-| `scan_crawl.py` | robots.txt presence and sitemap references, XML sitemap reachability (host-level, checked once per run) |
+| `scan_crawl.py` | robots.txt presence and sitemap references, XML sitemap reachability, apex vs www canonicalization (host-level, checked once per run) |
 | `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt |
 | `scan_accessibility.py` | Document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons |
 | `scan_links.py` | Broken links (404/410/5xx only), redirects, access-restricted links, and insecure http resources on an https page (mixed content) |
-| `scan_performance.py` | Initial HTML transfer size, static resource-weight floor, render-blocking head scripts, third-party origins, gzip/brotli compression, Cache-Control posture |
+| `scan_performance.py` | Initial HTML transfer size, static resource-weight floor, render-blocking head scripts, third-party origins, gzip/brotli compression, per-asset caching lifetimes, redirect chains |
 | `scan_readability.py` | Flesch Reading Ease, Flesch-Kincaid grade level, average sentence length (heuristic, on visible text) |
 | `scan_privacy.py` | Third-party resource origins, known tracker/analytics hosts, likely tracking pixels, cookie-consent detection (static HTML only) |
+| `scan_page_security.py` | Subresource Integrity coverage on cross-origin scripts/styles, forms posting to plain HTTP from HTTPS pages, inline event handlers, target=_blank rel hygiene |
+| `scan_design.py` | Favicon and theme-color, deprecated presentational tags, inline-style density, distinct font families from inline and linked CSS, images without dimensions (layout shift) |
 | `scan_site.py` | Orchestrates all of the above across the target and extra pages, rolls the results into a per-category scorecard, writes the evidence JSON and digest |
 | `draft_report_data.py` | Drafts the executive-report data file from the scan JSON: measured scorecard and findings filled in, judgement fields left empty |
 | `run_review.py` | One command for the whole evidence pass: discovery, full scan of the proposed page set, digest, and draft report data |
@@ -140,11 +142,18 @@ To point at a site for a single run without editing the file, give Claude Code t
 
 ## Tests
 
-The scanner suite ships with an offline, zero-dependency regression suite (Python `unittest`, 90 tests). It drives the HTML parser, every pure grading function, the tool contract across the whole registry, and the full pipeline with inline fixtures and stubbed network primitives, so it needs no network and runs in well under a second:
+The scanner suite ships with an offline, zero-dependency regression suite (Python `unittest`, 126 tests). It drives the HTML parser, every pure grading function, the tool contract across the whole registry, and the full pipeline with inline fixtures and stubbed network primitives, so it needs no network and runs in well under a second:
 
 ```
 cd .claude\skills\review-site\tools
 python -m unittest test_review_tools
+```
+
+The report builder has its own suite (9 tests, requires `python-docx`, skipped when absent):
+
+```
+cd .claude\skills\review-site
+python -m unittest test_exec_report
 ```
 
 ---
@@ -169,6 +178,7 @@ README.md                                    This file
   skills\review-site\
     SKILL.md                                 The review workflow and rules
     build_exec_report.py                     Deterministic python-docx report builder
+    test_exec_report.py                      Offline unit tests for the report builder
     tools\                                   Passive evaluation tools (pure standard library)
       common.py                              Shared fetch (gzip-aware), DoH, TLS, JSON helpers
       htmlmeta.py                            Single-pass HTML extractor (SEO and a11y share it)
@@ -184,6 +194,8 @@ README.md                                    This file
       scan_performance.py                    Page-weight and resource analysis
       scan_readability.py                    Readability metrics on visible text
       scan_privacy.py                        Third-party trackers, pixels, consent detection
+      scan_page_security.py                  Page-level security hygiene (SRI, form actions)
+      scan_design.py                         Static design signals (icons, fonts, inline styles)
       scan_site.py                           Orchestrator + scorecard, writes the evidence JSON
       draft_report_data.py                   Drafts exec report data from the scan JSON
       run_review.py                          One-command pipeline: discover, scan, draft
