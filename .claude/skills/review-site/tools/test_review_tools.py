@@ -805,6 +805,55 @@ class TestFetchCache(unittest.TestCase):
         self.assertIsNone(common._FETCH_CACHE)
 
 
+class TestRunLevelDedup(unittest.TestCase):
+    """Orchestrator-level integration for the per-run cache: across a
+    two-page scan of the same host, every HEAD probe (link checks, resource
+    measurement, favicon) goes out exactly once even though both pages
+    declare the same links and assets. Runs the real http_fetch over a fake
+    opener; TLS and DoH are stubbed."""
+
+    class _FakeResponse:
+        def __init__(self):
+            import email.message
+            self.headers = email.message.Message()
+            self.headers["Content-Type"] = "text/html; charset=utf-8"
+            self.status = 200
+
+        def read(self, n):
+            return GOOD_PAGE.encode()
+
+        def close(self):
+            pass
+
+    def test_two_page_scan_repeats_no_head_request(self):
+        calls = []
+        fake_response = self._FakeResponse
+
+        class _FakeOpener:
+            def open(self, req, timeout=None):
+                calls.append((req.get_method(), req.full_url))
+                return fake_response()
+
+        orig = (common._opener, common.tls_info, common.doh_query, tls._probe_legacy)
+        common._opener = lambda: _FakeOpener()
+        common.tls_info = _canned_tls
+        common.doh_query = _canned_doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+        try:
+            result = site.run("https://acme.example/", ["https://acme.example/about"])
+        finally:
+            common._opener, common.tls_info, common.doh_query, tls._probe_legacy = orig
+
+        self.assertEqual(len(result["pages_scanned"]), 2)
+        head_counts = {}
+        for method, url in calls:
+            if method == "HEAD":
+                head_counts[url] = head_counts.get(url, 0) + 1
+        repeated = {u: n for u, n in head_counts.items() if n > 1}
+        self.assertEqual(repeated, {}, f"HEAD requests repeated within one run: {repeated}")
+        self.assertIsNone(common._FETCH_CACHE)
+
+
 class TestAssetCachingAndRedirects(unittest.TestCase):
     def test_cache_max_age_parsing(self):
         self.assertEqual(perf._cache_max_age("public, max-age=31536000, immutable"), 31536000)
