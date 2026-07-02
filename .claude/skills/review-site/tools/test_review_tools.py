@@ -1333,6 +1333,81 @@ class TestFindingsHistory(unittest.TestCase):
         self.assertIn("Overall band moved: Weak -> Adequate.", text)
 
 
+class TestTrendMetrics(unittest.TestCase):
+    def _page(self, lcp=2000, weight=1500.0, ease=55.0, broken=1, checked=10,
+              mixed=0, domains=("a.example",), trackers=(), captured=True):
+        vit = {"captured": captured, "checks": {}}
+        if captured:
+            vit["checks"] = {"lcp": {"value": lcp, "verdict": "pass"},
+                             "cls": {"value": 0.05, "verdict": "pass"},
+                             "tbt": {"value": 100, "verdict": "pass"}}
+        return {
+            "url": "https://acme.example/",
+            "vitals": vit,
+            "performance": {"ok": True, "checks": {"static_weight": {
+                "total_floor_kb": weight, "verdict": "pass"}}},
+            "readability": {"ok": True, "checks": {"reading_ease": {
+                "flesch_reading_ease": ease, "verdict": "pass"}}},
+            "links": {"ok": True, "checks": {
+                "link_health": {"checked": checked, "counts": {"broken": broken}},
+                "mixed_content": {"count": mixed}}},
+            "privacy": {"ok": True, "checks": {
+                "third_party_origins": {"domains": list(domains)},
+                "known_trackers": {"trackers": {t: 1 for t in trackers}}}},
+        }
+
+    def _result(self, pages):
+        return {"scorecard": {"overall": {"score": 0.8, "band": "Strong"},
+                              "categories": {"seo": {"score": 0.9, "band": "Strong"}}},
+                "page_scans": pages}
+
+    def test_metrics_rollup_medians_and_counts(self):
+        m = site.collect_metrics(self._result([
+            self._page(lcp=1000, weight=100.0, ease=40.0, broken=1, checked=10,
+                       domains=("a.example",), trackers=("t.example",)),
+            self._page(lcp=3000, weight=300.0, ease=60.0, broken=2, checked=20,
+                       domains=("a.example", "b.example")),
+            self._page(lcp=2000, weight=200.0, ease=50.0, broken=0, checked=5,
+                       mixed=2),
+        ]))
+        self.assertEqual(m["scores"], {"overall": 0.8, "seo": 0.9})
+        self.assertEqual(m["pages"]["median_lcp_ms"], 2000)
+        self.assertEqual(m["pages"]["median_weight_kb"], 200.0)
+        self.assertEqual(m["pages"]["max_weight_kb"], 300.0)
+        self.assertEqual(m["pages"]["median_reading_ease"], 50.0)
+        self.assertEqual(m["pages"]["broken_links"], 3)
+        self.assertEqual(m["pages"]["links_checked"], 35)
+        self.assertEqual(m["pages"]["mixed_content"], 2)
+        self.assertEqual(m["pages"]["third_party_origins"], 2)
+        self.assertEqual(m["pages"]["known_trackers"], 1)
+        self.assertTrue(m["vitals_captured"])
+
+    def test_even_page_count_uses_midpoint_median(self):
+        m = site.collect_metrics(self._result(
+            [self._page(lcp=1000), self._page(lcp=3000)]))
+        self.assertEqual(m["pages"]["median_lcp_ms"], 2000)
+
+    def test_uncaptured_vitals_are_gaps_not_zeros(self):
+        m = site.collect_metrics(self._result([self._page(captured=False)]))
+        self.assertIsNone(m["pages"]["median_lcp_ms"])
+        self.assertIsNone(m["pages"]["median_cls"])
+        self.assertFalse(m["vitals_captured"])
+
+    def test_missing_page_scans_yield_all_gaps(self):
+        m = site.collect_metrics({"scorecard": {}})
+        self.assertIsNone(m["pages"]["median_weight_kb"])
+        self.assertIsNone(m["pages"]["broken_links"])
+        self.assertIsNone(m["pages"]["third_party_origins"])
+        self.assertEqual(m["scores"], {"overall": None})
+        self.assertFalse(m["vitals_captured"])
+
+    def test_history_entry_carries_metrics(self):
+        e = site.history_entry(TestFindingsHistory.RESULT)
+        self.assertIn("metrics", e)
+        self.assertEqual(e["metrics"]["scores"]["overall"], 0.7)
+        self.assertEqual(e["metrics"]["scores"]["seo"], 0.88)
+
+
 class TestVitals(unittest.TestCase):
     URL = "https://acme.example/"
 

@@ -267,6 +267,84 @@ def issue_line(group):
     return line
 
 
+def _median(values):
+    """Median of the numeric values present; None when none are."""
+    vals = sorted(v for v in values if isinstance(v, (int, float)))
+    if not vals:
+        return None
+    n, mid = len(vals), len(vals) // 2
+    if n % 2:
+        return vals[mid]
+    return round((vals[mid - 1] + vals[mid]) / 2, 3)
+
+
+def _page_check(ps, tool_key, check_name):
+    return ((ps.get(tool_key) or {}).get("checks") or {}).get(check_name) or {}
+
+
+def collect_metrics(result):
+    """Site-level numeric rollups for the trend ledger. Medians for
+    continuous metrics so page-set drift between runs cannot masquerade as
+    change; sums and unions for counts, with the sample size stored beside
+    sampled counts. A metric nobody measured stays None: a gap in the trend,
+    never a fabricated zero."""
+    sc = result.get("scorecard", {}) or {}
+    scores = {"overall": (sc.get("overall") or {}).get("score")}
+    for name, g in (sc.get("categories") or {}).items():
+        scores[name] = g.get("score")
+
+    lcp, cls_vals, tbt, weight, ease = [], [], [], [], []
+    broken_counts, checked_counts, mixed_counts = [], [], []
+    third_party, trackers = set(), set()
+    tp_seen = trk_seen = vitals_captured = False
+    for ps in result.get("page_scans", []) or []:
+        if (ps.get("vitals") or {}).get("captured"):
+            vitals_captured = True
+            for key, acc in (("lcp", lcp), ("cls", cls_vals), ("tbt", tbt)):
+                val = _page_check(ps, "vitals", key).get("value")
+                if isinstance(val, (int, float)):
+                    acc.append(val)
+        w = _page_check(ps, "performance", "static_weight").get("total_floor_kb")
+        if isinstance(w, (int, float)):
+            weight.append(w)
+        e = _page_check(ps, "readability", "reading_ease").get("flesch_reading_ease")
+        if isinstance(e, (int, float)):
+            ease.append(e)
+        lh = _page_check(ps, "links", "link_health")
+        if isinstance(lh.get("checked"), (int, float)):
+            checked_counts.append(lh["checked"])
+            broken_counts.append((lh.get("counts") or {}).get("broken") or 0)
+        mc = _page_check(ps, "links", "mixed_content")
+        if isinstance(mc.get("count"), (int, float)):
+            mixed_counts.append(mc["count"])
+        tpo = _page_check(ps, "privacy", "third_party_origins")
+        if "domains" in tpo:
+            tp_seen = True
+            third_party.update(tpo.get("domains") or [])
+        kt = _page_check(ps, "privacy", "known_trackers")
+        if "trackers" in kt:
+            trk_seen = True
+            trackers.update((kt.get("trackers") or {}).keys())
+
+    return {
+        "scores": scores,
+        "pages": {
+            "median_lcp_ms": _median(lcp),
+            "median_cls": _median(cls_vals),
+            "median_tbt_ms": _median(tbt),
+            "median_weight_kb": _median(weight),
+            "max_weight_kb": max(weight) if weight else None,
+            "median_reading_ease": _median(ease),
+            "broken_links": sum(broken_counts) if checked_counts else None,
+            "links_checked": sum(checked_counts) if checked_counts else None,
+            "mixed_content": sum(mixed_counts) if mixed_counts else None,
+            "third_party_origins": len(third_party) if tp_seen else None,
+            "known_trackers": len(trackers) if trk_seen else None,
+        },
+        "vitals_captured": vitals_captured,
+    }
+
+
 def history_entry(result):
     """One ledger line for this run: identity and context for every issue
     (note truncated to bound line size), totals, and the scorecard bands."""
@@ -284,6 +362,7 @@ def history_entry(result):
         "pages_scanned": len(result.get("pages_scanned", []) or []),
         "totals": result.get("totals", {}),
         "bands": bands,
+        "metrics": collect_metrics(result),
         "issues": {"fail": slim(issues.get("fail", [])),
                    "warn": slim(issues.get("warn", []))},
     }
