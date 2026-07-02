@@ -120,11 +120,10 @@ The manual capture path (`tools/CAPTURE.md`) remains available for pages where a
 The full pipeline produces one deep report per site. The inverse job - sweeping many company sites to find the few worth a closer look - is what `tools/triage.py` does. It runs a static, homepage-only, strictly passive pass over a list of domains, ranks them worst-posture-first (a worse measured posture is a stronger candidate for a review), and gives each site a single measured "why to reach out" hook drawn from the same checks the full report uses.
 
 ```
-# copy the template, add your domains, then run:
-cp PROSPECTS.example.txt sales/prospects.txt
+# put one URL per line in sales/prospects.txt (git-ignored), then run:
 python .claude/skills/review-site/tools/triage.py
 
-# or score domains directly:
+# or score domains directly, no file needed:
 python .claude/skills/review-site/tools/triage.py acme.com globex.com
 ```
 
@@ -255,7 +254,6 @@ The scanner suite drives the HTML parser, every grading function, the tool contr
 ```
 CLAUDE.md                                  Project context and output contract
 TARGET.txt                                 The URL to analyze (edit this to retarget)
-PROSPECTS.example.txt                      Template for the triage domain list (copy to sales/prospects.txt)
 LICENSE                                    MIT
 .github/workflows/ci.yml                   Both test suites, ubuntu + windows, py3.10 + 3.13
 .claude/

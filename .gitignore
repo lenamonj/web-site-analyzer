@@ -39,3 +39,6 @@ Thumbs.db
 # Sales and outreach material: local business documents, not part of the
 # public open-source project.
 sales/
+
+# Prospect lists live only on your machine, never in the repo.
+PROSPECTS.txt
