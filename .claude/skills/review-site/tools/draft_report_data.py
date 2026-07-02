@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 import common
+import trends
 
 MAX_FINDINGS = 15
 # Transparent draft severity per verdict; a human reviews and adjusts these.
@@ -329,8 +330,8 @@ def _key_dates(scan):
             "note": "Public certificate and domain-registration facts, passively measured."}
 
 
-def draft(scan):
-    """Build a first-draft exec_report_data dict from a scan_site result dict."""
+def draft(scan, trend=None):
+    """Build a first-draft exec_report_data dict from a scan_site result dict. trend is the quarterly block from trends.build_trend, when history has one."""
     slug = scan.get("slug", "site")
     scorecard = _scorecard(scan)
     # Grouped issues (one finding per site-wide defect) when the scan provides
@@ -358,6 +359,12 @@ def draft(scan):
                     "new_issues": len(delta.get("new", [])),
                     "resolved_issues": len(delta.get("resolved", []))}
 
+    if trend:
+        # The quarterly trend lives inside the progress area; the builder
+        # renders it as its own report section.
+        progress = dict(progress or {})
+        progress["trend"] = trend
+
     assessment = _assessment(scan)
     action_plan = _action_plan(scan)
     strongest = assessment["strengths"][0].split(":")[0] if assessment["strengths"] else None
@@ -372,6 +379,7 @@ def draft(scan):
 
     return {
         "site": scan.get("host", slug),
+        "slug": slug,
         "target_url": scan.get("target", ""),
         "date": date,
         "bottom_line": bottom_line,
@@ -398,7 +406,9 @@ def main():
         print(f"Scan JSON not found: {in_path}")
         sys.exit(1)
     scan = json.loads(in_path.read_text(encoding="utf-8"))
-    data = draft(scan)
+    history_path = in_path.with_name(f"{scan.get('slug', 'site')}_history.jsonl")
+    trend = trends.trend_from_ledger(history_path) if history_path.exists() else None
+    data = draft(scan, trend=trend)
     out_path = (Path(args[1]) if len(args) > 1
                 else in_path.with_name(f"{scan.get('slug', 'site')}_exec_report_data.draft.json"))
     common.write_json(out_path, data)

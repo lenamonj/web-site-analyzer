@@ -23,6 +23,7 @@ import crawler
 import discover_pages
 import draft_report_data
 import scan_site
+import trends
 
 
 def choose_pages(target, disco):
@@ -92,7 +93,8 @@ def pipeline(target, out_dir=None, crawl_pages=None, fresh_crawl=False, capture=
     paths = scan_site.write_run_outputs(result, out_dir)
 
     draft_path = out_dir / f"{slug}_exec_report_data.draft.json"
-    common.write_json(draft_path, draft_report_data.draft(result))
+    trend = trends.trend_from_ledger(paths["history_path"])
+    common.write_json(draft_path, draft_report_data.draft(result, trend=trend))
 
     return {"scan": result, "discovery": disco, "capture": capture_summary,
             "json_path": paths["json_path"], "digest_path": paths["digest_path"],

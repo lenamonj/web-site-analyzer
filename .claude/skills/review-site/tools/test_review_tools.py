@@ -2303,6 +2303,35 @@ class TestDraftReportData(unittest.TestCase):
         self.assertEqual(len(drpt.draft(big)["findings"]), drpt.MAX_FINDINGS)
 
 
+class TestDraftTrend(unittest.TestCase):
+    SCAN = {
+        "slug": "acme-example", "host": "acme.example",
+        "target": "https://acme.example/",
+        "measured_at_utc": "2026-07-03T10:00:00Z",
+        "pages_scanned": ["https://acme.example/"],
+        "totals": {"fail": 0, "warn": 0},
+        "scorecard": {"overall": {"band": "Strong", "score": 0.9, "pass": 1,
+                                  "warn": 0, "fail": 0},
+                      "categories": {}},
+        "issues": {"fail": [], "warn": []},
+        "issues_grouped": {"fail": [], "warn": []},
+        "page_scans": [],
+    }
+
+    def test_draft_embeds_trend_in_progress(self):
+        trend = {"quarters": ["2026-Q2", "2026-Q3"], "series": {},
+                 "latest_delta": {"new_findings": 0, "resolved_findings": 0}}
+        data = drpt.draft(json.loads(json.dumps(self.SCAN)), trend=trend)
+        self.assertEqual(data["slug"], "acme-example")
+        self.assertEqual(data["progress"]["trend"]["quarters"],
+                         ["2026-Q2", "2026-Q3"])
+
+    def test_draft_without_trend_keeps_progress_shape(self):
+        data = drpt.draft(json.loads(json.dumps(self.SCAN)))
+        self.assertEqual(data["slug"], "acme-example")
+        self.assertIsNone(data["progress"])
+
+
 class TestTitleExtraction(unittest.TestCase):
     def test_title_is_rcdata_with_charrefs_converted(self):
         # Per HTML5, <title> is RCDATA: markup inside is literal text and
