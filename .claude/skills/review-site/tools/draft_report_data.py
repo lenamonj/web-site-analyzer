@@ -102,11 +102,27 @@ ACTION = {
 }
 
 
+# Reports must say exactly what and where; never hide subjects behind
+# "+N more". Full enumeration up to this ceiling (a crawl-scale run), then an
+# explicit pointer to where the complete list lives.
+LIST_ALL_PAGES = 40
+
+
+def _page_list(pages, slug):
+    if len(pages) <= LIST_ALL_PAGES:
+        return ", ".join(pages)
+    rest = len(pages) - LIST_ALL_PAGES
+    return (", ".join(pages[:LIST_ALL_PAGES])
+            + f", and {rest} more listed in {slug}_scan_summary.md")
+
+
 def _affects(issue):
     pages = issue.get("pages")
-    if pages:
-        return f"{len(pages)} page(s)" if len(pages) > 1 else "1 page"
-    return "site-wide"
+    if not pages:
+        return "site-wide"
+    if len(pages) <= 3:
+        return ", ".join(pages)
+    return f"{len(pages)} page(s)"
 
 
 # Issue-list labels differ from scorecard category names; map back so the
@@ -251,11 +267,10 @@ def _finding_from_issue(issue, slug):
     note = issue.get("note", "")
     pages = issue.get("pages")
     if pages:
-        # A grouped issue: one finding whose evidence names the affected pages.
+        # A grouped issue: one finding whose evidence names EVERY affected
+        # page (a severity-ranked finding must say exactly where it applies).
         area = scan_label
-        shown = ", ".join(pages[:3])
-        more = len(pages) - 3
-        evidence = (f"{len(pages)} page(s): {shown}" + (f", +{more} more" if more > 0 else "")
+        evidence = (f"{len(pages)} page(s): {_page_list(pages, slug)}"
                     if len(pages) > 1 else pages[0])
     elif ":" in scan_label:
         area, url = scan_label.split(":", 1)

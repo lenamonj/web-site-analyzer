@@ -2155,7 +2155,7 @@ class TestDraftReportData(unittest.TestCase):
         plan = drpt.draft(scan)["action_plan"]
         # Site-wide (host) first, then 12 pages, then 1 page.
         self.assertEqual([a["affects"] for a in plan[:3]],
-                         ["site-wide", "12 page(s)", "1 page"])
+                         ["site-wide", "12 page(s)", "https://x/a"])
 
     def test_action_plan_maps_checks_to_imperatives_fail_first(self):
         d = drpt.draft(self.SCAN)
@@ -2165,6 +2165,35 @@ class TestDraftReportData(unittest.TestCase):
         self.assertTrue(any(a["priority"] == "Medium" and a["action"] == drpt.ACTION["title"]
                             for a in plan))
         self.assertEqual(plan[0]["affects"], "site-wide")  # host issue
+
+    def test_finding_evidence_enumerates_every_affected_page(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        pages = [f"https://x/p{i}" for i in range(12)]
+        scan["issues_grouped"] = {"fail": [
+            {"scan": "a11y", "check": "landmarks", "verdict": "fail",
+             "note": "Missing landmarks.", "pages": pages}], "warn": []}
+        f = drpt.draft(scan)["findings"][0]
+        for url in pages:  # no page hidden behind a "+N more"
+            self.assertIn(url, f["evidence"])
+        self.assertNotIn("more", f["evidence"])
+
+    def test_finding_evidence_ceiling_points_at_the_full_list(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        pages = [f"https://x/p{i}" for i in range(50)]
+        scan["issues_grouped"] = {"fail": [
+            {"scan": "a11y", "check": "landmarks", "verdict": "fail",
+             "note": "Missing landmarks.", "pages": pages}], "warn": []}
+        f = drpt.draft(scan)["findings"][0]
+        self.assertIn("https://x/p39", f["evidence"])
+        self.assertIn("and 10 more listed in example-com_scan_summary.md", f["evidence"])
+
+    def test_plan_affects_names_urls_for_small_page_sets(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["issues_grouped"] = {"fail": [
+            {"scan": "perf", "check": "static_weight", "verdict": "fail",
+             "note": "Heavy.", "pages": ["https://x/about/"]}], "warn": []}
+        plan = drpt.draft(scan)["action_plan"]
+        self.assertEqual(plan[0]["affects"], "https://x/about/")
 
     def test_bottom_line_names_band_and_top_priority(self):
         d = drpt.draft(self.SCAN)
