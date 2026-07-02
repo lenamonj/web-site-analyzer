@@ -1067,6 +1067,34 @@ and quick wins grounded in measurements, progress since the previous review
 (13 resolved), and evidence exhibits re-verified live before shipping
 (G-XXXXXXXXXX still fires with no consent mechanism, checked 2026-07-03).
 
+---
+
+## 2026-07-03 - Contract trim: the executive report is the only deliverable
+
+**Task:** user direction: "trim it down to just the executive report".
+
+**What changed:** the output contract now names one deliverable,
+`planning/<slug>_Executive_Report.docx`. The former gameplan deliverable is
+dropped; its content (scope, findings by category, prioritized
+recommendations, quick wins) is covered by the report's executive summary,
+findings table, plan of action, and evidence appendix, which the draft
+generator now largely self-writes. Evidence artifacts (scan JSON, digest,
+draft data, history ledger, screenshots) remain internal under
+planning/_evidence/. Updated: CLAUDE.md (purpose, output contract,
+authorization stated in chat instead of a gameplan header), SKILL.md
+(description, single-deliverable section, traceability rule now points at
+the scan JSON and recorded evidence), README (tagline, deliverable table,
+flow diagram), PLAN.md section 1, run_review docstring.
+
+**Files deleted:** planning/client-a-co_GAMEPLAN.md and
+planning/client-b-com_GAMEPLAN.md - stale outputs of the old two-deliverable
+contract from the 2026-07-01 runs, untracked (gitignored), removed so the
+planning folder matches the new contract. Their durable content lives in the
+shipped reports and the evidence dir.
+
+**Verified:** both suites green (205 scanner + 16 builder); no gameplan
+references remain outside historical journal/backlog entries.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

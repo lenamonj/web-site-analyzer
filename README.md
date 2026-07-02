@@ -1,6 +1,6 @@
 # Website Review
 
-> Point Claude Code at any website and get two deliverables: a full prioritized gameplan and a CEO-level Word report. Retargeting is a one-line change.
+> Point Claude Code at any website and get one deliverable: a CEO-level Word report with the measured scorecard, executive summary, findings, and a prioritized plan of action. Retargeting is a one-line change.
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Scanners](https://img.shields.io/badge/scanners-zero%20dependencies-2ea44f)
@@ -13,12 +13,13 @@
 
 ## What you get
 
-Every run produces two files in `planning\`, named by the target's domain so runs on different sites never overwrite each other:
+Every run produces one deliverable in `planning\`, named by the target's domain so runs on different sites never overwrite each other:
 
 | File | What it is |
 | --- | --- |
-| `planning\<slug>_GAMEPLAN.md` | The full working plan: findings by category, prioritized recommendations, quick wins, strategic initiatives, open questions. |
-| `planning\<slug>_Executive_Report.docx` | A one-to-two page CEO-level Word summary: bottom line, severity-ranked findings, preferred fixes, quick wins. |
+| `planning\<slug>_Executive_Report.docx` | The CEO-level Word report: bottom line, executive summary of strengths and weaknesses, measured scorecard, Core Web Vitals, severity-ranked findings, a prioritized plan of action, quick wins, and evidence exhibits. |
+
+Working artifacts (scan JSON, digest, draft data, history ledger, screenshots) land under `planning\_evidence\` and are internal, not deliverables.
 
 `<slug>` is the host with the scheme and any leading `www.` removed and dots turned into hyphens (for example `example.com` becomes `example-com`).
 
@@ -31,7 +32,7 @@ The review covers Content, Design (measured signals plus the optional browser pa
 Claude Code reads `CLAUDE.md` and the `review-site` skill, resolves the target, then runs a bundled suite of passive evaluation tools that produce hard, reproducible measurements. It reads those measurements plus the in-scope page content, forms the findings, and writes both deliverables. The Word report's formatting is owned by a bundled `python-docx` builder, so the report looks identical on every run regardless of the target or who invokes it.
 
 ```
-TARGET.txt  ->  scanner suite (measured evidence)  ->  gameplan  ->  executive report
+TARGET.txt  ->  scanner suite (measured evidence)  ->  drafted report data  ->  executive report
                         |                                  ^
                    WebFetch + optional browser ------------+
 ```
@@ -129,11 +130,11 @@ The scanners detect client-rendered (JavaScript) pages and mark their structural
    /review-site
    ```
 
-   Or ask directly: "Run the website review against the URL in TARGET.txt, write the gameplan, and build the executive report."
+   Or ask directly: "Run the website review against the URL in TARGET.txt and build the executive report."
 
 3. Collect the outputs from `planning\`.
 
-If Claude Code stops after writing the gameplan on the first run, tell it explicitly to build the executive report.
+If Claude Code stops after the scan on the first run, tell it explicitly to build the executive report.
 
 ---
 
@@ -167,7 +168,7 @@ python -m unittest test_exec_report
 
 - The review is passive and external. It inspects what any browser or DNS resolver already receives: page HTML, response headers, cookies, TLS, and public DNS records.
 - It does not log in, submit forms, brute force paths, or port scan.
-- Only run this against sites you own or are authorized to assess. The gameplan states the target and the authorization assumption at the top.
+- Only run this against sites you own or are authorized to assess. The review states the target and the authorization assumption in chat when it starts.
 - "Any website" is subject to that authorization and to the site not hard-blocking automated fetches. Pages behind a login wall or aggressive bot protection may return limited or no data, and the report will say so rather than guess.
 
 ---

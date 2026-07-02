@@ -1,9 +1,13 @@
 # Website Review Project
 
 ## Purpose
-Point this at any website and produce a prioritized change plan plus an executive report. Two deliverables per run:
-1. `planning/<slug>_GAMEPLAN.md` - the full, detailed working plan.
-2. `planning/<slug>_Executive_Report.docx` - a CEO-level Word summary of the key findings hurting the site and the preferred recommendations to fix them.
+Point this at any website and produce one deliverable per run:
+`planning/<slug>_Executive_Report.docx` - a CEO-level Word report with the
+measured scorecard, an executive summary of strengths and weaknesses, the key
+findings hurting the site, a prioritized plan of action, and evidence
+exhibits. Everything else the run produces (scan JSON, digest, draft data,
+history ledger, screenshots) is an internal working artifact under
+`planning/_evidence/` and is not a deliverable.
 
 `<slug>` is derived from the target host (drop scheme and leading `www.`, dots to hyphens), so runs against different sites never overwrite each other.
 
@@ -12,13 +16,12 @@ Open `TARGET.txt` at the repo root and put the URL to analyze on its own line. T
 
 ## How to run
 Invoke the skill: `/review-site`
-Or ask directly: "Run the website review against the URL in TARGET.txt, write the gameplan, and build the executive report."
+Or ask directly: "Run the website review against the URL in TARGET.txt and build the executive report."
 
 ## Output contract
 - Resolve the target from chat if a URL was given, else from `TARGET.txt` (first line beginning with `http`).
-- Derive the slug and use it to name both deliverables.
-- Write the full plan to `planning/<slug>_GAMEPLAN.md` (overwrite if it exists).
-- Distill the top findings and recommendations into `planning/_evidence/exec_report_data.json`, then render `planning/<slug>_Executive_Report.docx` with the bundled builder.
+- Derive the slug and use it to name the deliverable.
+- Distill the findings and recommendations into `planning/_evidence/exec_report_data.json` (start from the machine draft), then render `planning/<slug>_Executive_Report.docx` with the bundled builder. That docx is the only deliverable.
 - Keep raw evidence, notes, and screenshots under `planning/_evidence/`.
 - Every finding cites the specific page URL and the exact element it refers to. No unsourced claims.
 - Do not hand-write the docx formatting. The builder owns formatting so the report looks identical every run.
@@ -28,7 +31,7 @@ Or ask directly: "Run the website review against the URL in TARGET.txt, write th
 - The scanners detect client-rendered pages. When a page's body is injected by JavaScript, its structural SEO and accessibility checks are marked inconclusive. Do not report an empty static body as a clean result; capture the rendered page with the browser instead.
 - `WebFetch` returns page HTML as text. Use it for content, copy, information architecture, and reading anything the scanners flagged. It does NOT render the page, so it cannot judge visual layout, color, typography, spacing, imagery, or responsive behavior.
 - If a Playwright MCP browser is connected, use it to load pages, dismiss any cookie or region overlay, and capture screenshots at desktop (1440px) and mobile (390px) widths. Base all visual findings on those screenshots. For client-rendered pages, the browser is also how you get real content for the structural checks the static scanners could not complete.
-- If no browser tool is available, say so in the gameplan and limit the design section to what is inferable from HTML, CSS, and the scanner JSON (semantic structure, heading order, ARIA, meta tags, declared breakpoints). Do not invent visual judgments.
+- If no browser tool is available, state that limitation in the report's scope line and in chat, and limit design findings to what is inferable from HTML, CSS, and the scanner JSON (semantic structure, heading order, ARIA, meta tags, declared breakpoints). Do not invent visual judgments.
 
 ## Scope
 Do not crawl the entire site by default. An opt-in polite crawl exists for
@@ -47,7 +50,7 @@ To assemble that set, run the scoping helper `python .claude/skills/review-site/
 All checks are passive. Do not attempt logins, form submissions, path brute forcing, port scanning, or any active probing.
 
 ## Authorization
-Only run against sites you own or are authorized to assess. State the target and the authorization assumption at the top of the gameplan.
+Only run against sites you own or are authorized to assess. State the target and the authorization assumption in chat when the review starts.
 
 ## Writing rules for all output
 - Never use em dashes or en dashes. Use hyphens or rewrite the sentence.

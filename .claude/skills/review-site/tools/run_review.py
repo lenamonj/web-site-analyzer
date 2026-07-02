@@ -6,7 +6,7 @@ Composes the registered tools into a single run (see PLAN.md section 10): it
 proposes an in-scope page set with discover_pages, scans the whole set with
 scan_site, writes the scan JSON and markdown digest, and drafts
 <slug>_exec_report_data.draft.json for the executive report. Judgement steps
-(gameplan authoring, severity review, recommendations, the final docx) stay
+(severity review, recommendations, narrative, the final docx) stay
 with the reviewer per SKILL.md. This is not a scanner and is not registered.
 
 Usage:

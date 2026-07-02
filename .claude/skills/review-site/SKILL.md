@@ -1,6 +1,6 @@
 ---
 name: review-site
-description: Analyze any website named in TARGET.txt or given in chat. Reviews content, design, accessibility, IA, SEO/technical, and passive security posture, then writes a full plan to planning/<slug>_GAMEPLAN.md and a CEO-level executive report to planning/<slug>_Executive_Report.docx.
+description: Analyze any website named in TARGET.txt or given in chat. Reviews content, design, accessibility, IA, SEO/technical, and passive security posture, then delivers one file, the CEO-level executive report at planning/<slug>_Executive_Report.docx.
 ---
 
 # Website review skill
@@ -8,7 +8,7 @@ description: Analyze any website named in TARGET.txt or given in chat. Reviews c
 ## Target resolution
 1. If the user gave a URL in chat, use it. Otherwise read the first line beginning with `http` from `TARGET.txt` at the repo root.
 2. Derive a slug from the host: drop the scheme and a leading `www.`, then replace dots with hyphens (example.com -> example-com). Use the slug to name both deliverables.
-3. State the resolved target and the authorization assumption at the top of the gameplan.
+3. State the resolved target and the authorization assumption in chat when the review starts.
 
 ## Deterministic evidence tools (run these first)
 Before any subjective review, run the passive scanner suite. It produces hard, reproducible measurements so findings cite evidence instead of guesses. It is pure standard library (no install beyond Python) and strictly passive. From the repo root:
@@ -23,7 +23,7 @@ Wide reviews (only when the user explicitly asks): add `--crawl N` to run_review
 
 It writes:
 - `planning/_evidence/<slug>_scan.json` - full structured results, one verdict (pass, warn, fail, info) and a note per check.
-- `planning/_evidence/<slug>_scan_summary.md` - every failing check and warning in one list, ready to fold into the gameplan.
+- `planning/_evidence/<slug>_scan_summary.md` - every failing check and warning in one list, ready to fold into the report.
 
 What it measures, passively, with a citable verdict per check:
 - HTTP security: HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners, security.txt (RFC 9116).
@@ -49,7 +49,7 @@ Client-rendered pages: the suite detects when a page's body is injected by JavaS
 Rendered DOM snapshots (browser pass, feeds the scanners): when a browser tool is available, upgrade those inconclusive verdicts to measured ones. For each page the scan flagged as client-rendered, load it in the browser, dismiss any cookie or region overlay, capture the full rendered document (outerHTML), and write:
 - `planning/_evidence/rendered/<slug>/<name>.html` - one file per page.
 - `planning/_evidence/rendered/<slug>/manifest.json` - `{"captured_with": "<tool>", "viewport": "1440px", "pages": {"<exact page url as scanned>": {"file": "<name>.html", "captured_at_utc": "<iso timestamp>"}}}`.
-Then re-run `scan_site.py` (or `run_review.py`). The orchestrator picks the snapshots up automatically: every structural scanner runs against the rendered DOM (results carry `evidence_source: rendered_dom`), while performance keeps the static transfer numbers. The page url key must match the scanned url exactly. If no browser is available, say so in the gameplan; the static inconclusive verdicts stand and are never guessed.
+Then re-run `scan_site.py` (or `run_review.py`). The orchestrator picks the snapshots up automatically: every structural scanner runs against the rendered DOM (results carry `evidence_source: rendered_dom`), while performance keeps the static transfer numbers. The page url key must match the scanned url exactly. If no browser is available, say so in chat and in the report's scope line; the static inconclusive verdicts stand and are never guessed.
 
 Web vitals and contrast (browser pass, feeds scan_vitals): in the same browser session, run the measurement snippets in `tools/CAPTURE.md` (buffered PerformanceObserver for LCP/CLS/TBT; the computed-style WCAG contrast walk) and write `planning/_evidence/rendered/<slug>/metrics.json` per the schema there. The next scan grades them against the published Core Web Vitals and Lighthouse thresholds. Metrics are lab measurements of one load; scan_vitals labels them as such and reports "not captured" when absent.
 
@@ -76,20 +76,14 @@ Treat its `proposed_review_set` as a starting point, then apply the Scope rules 
 - Email-auth DNS when DNS lookups are available: SPF and DMARC records present and sane.
 Report only what you observed. Do not claim a specific CVE or version vulnerability unless verified against an authoritative source; otherwise flag it as unverified.
 
-## Deliverable 1: gameplan
-Write `planning/<slug>_GAMEPLAN.md` with exactly these sections:
-1. Executive summary (10 lines max): the three to five things that matter most and why.
-2. Scope reviewed: target, locale, date, tools used, full URL list, authorization assumption.
-3. Findings by category (Content, Design, Accessibility, Navigation/IA, SEO/Technical, Security). Each finding as a row: page, observation, evidence reference, severity, effort.
-4. Prioritized recommendations: ordered table (rank, recommendation, expected impact, effort, category).
-5. Quick wins: the subset shippable in one sprint.
-6. Strategic initiatives: larger items with dependencies.
-7. Open questions and assumptions: anything needing a human decision or that you could not verify.
+## The deliverable: the executive report
+The docx is the only deliverable. Everything else the run writes (scan JSON,
+digest, draft data, history ledger, screenshots) is internal working material
+under `planning/_evidence/`.
 
-## Deliverable 2: executive report
 1. Seed the data file mechanically, then apply judgement. Run
    `python .claude/skills/review-site/tools/draft_report_data.py planning/_evidence/<slug>_scan.json`
-   (already done if you used run_review.py). It writes `<slug>_exec_report_data.draft.json` with the measured scorecard rows and fail/warn findings filled in and the judgement fields empty. Review the draft severities, rewrite the bottom line for a CEO, add recommendations and quick wins from the gameplan, and save the result as `planning/_evidence/exec_report_data.json` using this schema:
+   (already done if you used run_review.py). It writes `<slug>_exec_report_data.draft.json` with the measured scorecard, executive summary (strengths and weaknesses), web vitals, findings, and a prioritized action plan filled in from measured data. Review the draft severities, sharpen the bottom line for a CEO, replace the auto action plan with authored recommendations where judgement improves on it, attach evidence exhibits for the findings that most need proof, and save the result as `planning/_evidence/exec_report_data.json` using this schema:
    {
      "site": "<display name, e.g. example.com>",
      "target_url": "<full URL>",
@@ -125,5 +119,5 @@ Keep the executive report tight. It should read in under two minutes: bottom lin
 - No em dashes or en dashes. Hyphens only.
 - Every finding cites a specific page and element. No generic advice.
 - Do not fabricate metrics, scores, competitor data, benchmarks, or vulnerabilities. If you did not measure it, say so.
-- If visual design could not be observed, label that section structural-only in the gameplan and reflect the limitation in the executive report.
-- The executive report content must be traceable to the gameplan. Do not introduce findings that are not in `planning/<slug>_GAMEPLAN.md`.
+- If visual design could not be observed, reflect that limitation in the executive report's scope line.
+- Every report finding must be traceable to the scan JSON or to recorded evidence under `planning/_evidence/`. Do not introduce findings that have no measured or captured source.

@@ -9,9 +9,10 @@ change plan plus a CEO-level report. The analyzer evaluates a site across
 multiple independent dimensions (security, TLS, email-auth DNS, SEO, structural
 accessibility, link health, page weight, readability, and later content and
 visual design), rolls the measured results into a transparent scorecard, and
-distills the findings into two deliverables per run:
-1. `planning/<slug>_GAMEPLAN.md` - the full working plan.
-2. `planning/<slug>_Executive_Report.docx` - the CEO summary.
+distills the findings into one deliverable per run:
+`planning/<slug>_Executive_Report.docx` - the CEO report (contract trimmed to
+the single docx on 2026-07-03 at the user's direction; the former gameplan
+deliverable was dropped, and evidence artifacts remain internal).
 
 The engineering objective of this repo (what the Ralph loop advances) is the
 analyzer system itself: the passive scanner suite, the shared tool contract,
@@ -64,7 +65,7 @@ Repo layout that matters to the analyzer:
 Data flow: `scan_site.run(target, extra_pages)` -> host scans + per-page scans
 -> flat issue list (warn/fail) -> scorecard + cross-page -> combined result
 dict -> JSON + markdown digest. The agent interprets that JSON to author the
-gameplan, distills `exec_report_data.json`, then runs `build_exec_report.py`.
+report data, then runs `build_exec_report.py` to render the deliverable.
 
 ## 4. The shared tool contract (normative)
 Every evaluation tool is a module under `tools/` that satisfies all of:
@@ -332,7 +333,7 @@ proposes nothing); run `scan_site.run(target, extra_pages)`; write the scan
 JSON and markdown digest exactly as `scan_site.main` does; then write
 `<slug>_exec_report_data.draft.json` via `draft_report_data.draft`. Prints the
 same console summary as scan_site plus the paths written. Judgement steps
-(gameplan authoring, severity review, recommendations, final docx) remain with
+(severity review, recommendations, narrative, final docx) remain with
 the agent per SKILL.md. Not a scanner: it is not registered and has no
 category; it only composes registered tools. An offline integration test stubs
 the network primitives and asserts the pipeline writes all three artifacts.
