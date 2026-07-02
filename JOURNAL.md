@@ -906,6 +906,43 @@ scope added to its hand-authored data; a fresh machine draft from the
 example.com scan showing the auto-filled progress strip) and sent them to
 the user.
 
+---
+
+## 2026-07-03 - I1: live round trip of the rendered-evidence tier
+
+**Task:** I1 (user: "fix all these"). Prove the G3/G4 pipeline with a real
+browser, not just unit tests, and fix what the live run reveals.
+
+**How:** a deliberately faulty client-rendered SPA served on localhost
+(everything injected by JS: single H1, one alt-less image, a
+placeholder-only email input, a googletagmanager script tag, a 2.81:1
+gray-on-white paragraph, and a /#missing-anchor nav link). The Chrome
+extension was not connected, so capture used headless Chrome --dump-dom
+with the CAPTURE.md vitals/contrast snippets self-run in the page - real
+Chrome rendering and real computed-style measurements either way. LCP came
+back null under virtual time and stayed an honest null.
+
+**Proof:** the static scan flagged the page client-rendered with structural
+checks inconclusive; after the capture handoff, all six structural scanners
+ran on the rendered DOM (evidence_source: rendered_dom): headings measured
+pass, image_alt fail on the planted image, form_labels warn, privacy warned
+on the JS-injected tracker no static scan can see, and scan_vitals graded
+the contrast violation fail at exactly 2.81:1.
+
+**Defects found live and fixed (the point of the exercise):**
+1. anchor_fragments only recognized bare '#x' hrefs; SPA navs write
+   same-page anchors as '/#x', which passed unchecked. Now path-form
+   same-page fragments resolve against the page URL.
+2. Even then, a slashless page URL (http://host) failed string comparison
+   against the resolved http://host/#x; same-page comparison now normalizes
+   the empty path. Note wording also fixed ('page markup', not 'static
+   HTML', since the check runs on rendered evidence too).
+
+**Verified:** suite 188 -> 189, all pass; the live SPA re-scan now warns on
+the planted broken anchor. Test server stopped, localhost evidence removed.
+Out of scope, stated: CrUX field data needs an API key; the crawl ceiling
+and no-JS-execution rules are charter choices.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

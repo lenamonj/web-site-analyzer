@@ -1549,17 +1549,36 @@ class TestRobotsDisallowAllAndFragments(unittest.TestCase):
         self.assertEqual(parsed["ids"], ["faq", "legacy", "pricing"])
 
     def test_fragment_matrix(self):
+        base = "https://acme.example/"
         anchors = [{"href": "#pricing"}, {"href": "#missing"}, {"href": "#"},
                    {"href": "#top"}, {"href": "/other"}]
-        c = links._fragment_check(anchors, ["pricing"], False)
+        c = links._fragment_check(anchors, ["pricing"], base, False)
         self.assertEqual(c["verdict"], "warn")
         self.assertEqual(c["missing"], ["missing"])
-        ok = links._fragment_check([{"href": "#pricing"}], ["pricing"], False)
+        ok = links._fragment_check([{"href": "#pricing"}], ["pricing"], base, False)
         self.assertEqual(ok["verdict"], "pass")
-        none = links._fragment_check([{"href": "/x"}, {"href": "#"}], [], False)
+        none = links._fragment_check([{"href": "/x"}, {"href": "#"}], [], base, False)
         self.assertEqual(none["verdict"], "info")
-        spa = links._fragment_check([{"href": "#a"}], [], True)
+        spa = links._fragment_check([{"href": "#a"}], [], base, True)
         self.assertEqual(spa["verdict"], "info")
+
+    def test_path_form_same_page_fragments_are_checked(self):
+        # Found live: SPA navs write same-page anchors as /#fragment, which a
+        # bare-#-only check missed entirely.
+        base = "https://acme.example/"
+        anchors = [{"href": "/#pricing"}, {"href": "/#missing-anchor"},
+                   {"href": "https://acme.example/#also-missing"},
+                   {"href": "/other#elsewhere"}]
+        c = links._fragment_check(anchors, ["pricing"], base, False)
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["missing"], ["also-missing", "missing-anchor"])
+        # Fragments on other pages cannot be verified and are not counted.
+        self.assertEqual(c["count"], 3)
+        # Found live: a slashless page url (http://host) must still match its
+        # anchors resolved to http://host/#fragment.
+        slashless = links._fragment_check([{"href": "/#missing-anchor"}], [],
+                                          "http://localhost:8819", False)
+        self.assertEqual(slashless["verdict"], "warn")
 
 
 class TestPageSecurity(unittest.TestCase):

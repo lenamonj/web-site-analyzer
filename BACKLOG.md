@@ -13,6 +13,24 @@ serves.
 
 ## Phase D - Reporting automation
 
+## Phase I - Live proof of the rendered-evidence tier (user request 2026-07-03)
+- [x] **I1 (done, M)** Live round trip of the rendered-evidence tier. Served
+  a client-rendered SPA fixture locally; static scan correctly flagged it
+  inconclusive; captured the rendered DOM with headless Chrome (--dump-dom,
+  the Chrome extension was not connected) and ran the CAPTURE.md vitals and
+  contrast snippets in-page (real Chrome measurements: the planted
+  gray-on-white violation measured 2.81:1); wrote the manifest/metrics
+  handoff; re-scan flipped all six structural scanners to
+  evidence_source: rendered_dom (planted alt-less image caught as fail,
+  placeholder-only form control warned, JS-injected googletagmanager found
+  by privacy - invisible to any static scan, contrast fail graded by
+  scan_vitals). The round trip exposed and fixed two real defects in
+  anchor_fragments: path-form same-page anchors (/#x) were invisible to the
+  bare-# check, and a slashless page URL (http://host) failed the same-page
+  comparison against http://host/#x. Suite 188 -> 189; test evidence cleaned
+  up. CrUX field data remains out of scope without an API key; crawl ceiling
+  and no-JS-execution are charter choices.
+
 ## Phase H - Report communication upgrade (user request 2026-07-03)
 - [x] **H1 (done, M)** Executive report review pass. Spec: PLAN.md section 12
   amendment. Added: optional scope line (pages reviewed, method) under the

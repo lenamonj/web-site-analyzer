@@ -14,7 +14,7 @@ Usage:
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 import common
 import htmlmeta
@@ -114,17 +114,37 @@ def _mixed_content(html, is_https):
     return {"count": len(found), "items": found[:15], "verdict": verdict, "note": note}
 
 
-def _fragment_check(anchors, ids, inconclusive):
-    """In-page anchors (#fragment) that point at no element id scroll
-    nowhere. '#top' is a browser built-in and a bare '#' is a JS-link
-    pattern, so both are excluded."""
+def _fragment_check(anchors, ids, base, inconclusive):
+    """In-page anchors that point at no element id scroll nowhere. Both bare
+    '#fragment' hrefs and path-form same-page hrefs ('/#fragment' from the
+    page at '/') count; fragments aimed at other pages cannot be verified
+    without their ids and are skipped. '#top' is a browser built-in and a
+    bare '#' is a JS-link pattern, so both are excluded."""
     if inconclusive:
         return {"verdict": "info",
                 "note": "Page is client-rendered; in-page anchors are not assessable statically."}
-    targets = [a["href"][1:] for a in anchors
-               if (a.get("href") or "").startswith("#") and len(a.get("href") or "") > 1]
+    def _same_page(u1, u2):
+        # An empty path and "/" are the same resource (http://host vs http://host/).
+        p1, p2 = urlparse(u1), urlparse(u2)
+        return ((p1.scheme, p1.netloc, p1.path or "/", p1.query)
+                == (p2.scheme, p2.netloc, p2.path or "/", p2.query))
+
+    page_base = urldefrag(base)[0]
+    targets = []
+    for a in anchors:
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        if href.startswith("#"):
+            frag = href[1:]
+        else:
+            absolute, frag = urldefrag(urljoin(page_base, href))
+            if not _same_page(absolute, page_base):
+                continue
+        if frag:
+            targets.append(frag)
     if not targets:
-        return {"verdict": "info", "count": 0, "note": "No in-page fragment links in the static HTML."}
+        return {"verdict": "info", "count": 0, "note": "No in-page fragment links in the page markup."}
     id_set = set(ids)
     missing = sorted({t for t in targets if t not in id_set and t.lower() != "top"})
     if missing:
@@ -193,7 +213,7 @@ def _scan(url, page=None):
     checks = {
         "link_health": link_check,
         "mixed_content": _mixed_content(res["body"], is_https),
-        "anchor_fragments": _fragment_check(parsed["anchors"], parsed["ids"],
+        "anchor_fragments": _fragment_check(parsed["anchors"], parsed["ids"], base,
                                             render["likely_client_rendered"]),
     }
     tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
