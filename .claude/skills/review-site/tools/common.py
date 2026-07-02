@@ -286,7 +286,12 @@ def http_post_json(url, payload, timeout=DEFAULT_TIMEOUT):
                     "json": json.loads(resp.read().decode("utf-8", errors="replace")),
                     "error": None}
     except urllib.error.HTTPError as e:
-        return {"ok": False, "status": e.code, "json": None,
+        detail = None
+        try:
+            detail = json.loads(e.read().decode("utf-8", errors="replace"))
+        except Exception:
+            pass
+        return {"ok": False, "status": e.code, "json": detail,
                 "error": f"HTTP {e.code}"}
     except Exception as e:
         return {"ok": False, "status": None, "json": None,
