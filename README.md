@@ -1,118 +1,150 @@
-# Website Review
+# Website Analyzer
 
-> Point Claude Code at any website and get one deliverable: a CEO-level Word report with the measured scorecard, executive summary, findings, and a prioritized plan of action. Retargeting is a one-line change.
+> Point it at any website and get one boardroom-ready deliverable: a CEO-level Word report built entirely from measured evidence - a posture scorecard, real browser-measured Core Web Vitals, severity-ranked findings that cite the exact page and element, and a prioritized plan of action. Retargeting is a one-line change.
 
+[![CI](https://github.com/lenamonj/web-site-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/lenamonj/web-site-analyzer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/lenamonj/web-site-analyzer)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Scanners](https://img.shields.io/badge/scanners-zero%20dependencies-2ea44f)
-![Tests](https://img.shields.io/badge/tests-unittest%20passing-2ea44f)
+![Dependencies](https://img.shields.io/badge/scanner%20dependencies-zero-2ea44f)
+![Tests](https://img.shields.io/badge/tests-238%20passing-2ea44f)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Scope](https://img.shields.io/badge/scope-passive%20%26%20external-orange)
+![Rendered evidence](https://img.shields.io/badge/rendered%20evidence-headless%20Chrome%20DevTools-blueviolet)
 ![Report](https://img.shields.io/badge/report-python--docx-informational)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+[![Built with Claude Fable 5](https://img.shields.io/badge/built%20with-Claude%20Fable%205-D97757?logo=anthropic&logoColor=white)](https://www.anthropic.com/claude)
+![Last commit](https://img.shields.io/github/last-commit/lenamonj/web-site-analyzer)
+
+Website Analyzer is a professional site-assessment engine built as a Claude Code project. It combines a deterministic, pure-standard-library scanner suite (14 registered scanners, 10 scorecard categories, zero third-party dependencies) with an automated headless-browser evidence tier and a deterministic Word report builder. Every claim in the final report traces back to a measurement: a header that was actually fetched, a DNS record that was actually resolved, a paint metric a real browser engine actually recorded. Nothing is estimated, nothing is eyeballed, and anything the tool could not measure is labeled exactly that.
+
+---
+
+## Contents
+
+- [What you get](#what-you-get)
+- [How it works](#how-it-works)
+- [The measurement engine](#the-measurement-engine)
+- [Automated rendered evidence](#automated-rendered-evidence)
+- [Evidence discipline](#evidence-discipline)
+- [Install](#install)
+- [Usage](#usage)
+- [Command-line reference](#command-line-reference)
+- [Tests and CI](#tests-and-ci)
+- [Scope and safety](#scope-and-safety)
+- [Project structure](#project-structure)
 
 ---
 
 ## What you get
 
-Every run produces one deliverable in `planning\`, named by the target's domain so runs on different sites never overwrite each other:
+Every run produces one deliverable in `planning/`, named by the target's domain so runs against different sites never overwrite each other:
 
 | File | What it is |
 | --- | --- |
-| `planning\<slug>_Executive_Report.docx` | The CEO-level Word report: bottom line, executive summary of strengths and weaknesses, measured scorecard, Core Web Vitals, severity-ranked findings, a prioritized plan of action, quick wins, and evidence exhibits. |
+| `planning/<slug>_Executive_Report.docx` | The CEO-level Word report: bottom line, executive summary of strengths and weaknesses, measured scorecard, Core Web Vitals panel, severity-ranked findings, a prioritized plan of action, quick wins, and evidence exhibits. |
 
-Working artifacts (scan JSON, digest, draft data, history ledger, screenshots) land under `planning\_evidence\` and are internal, not deliverables.
+Working artifacts (scan JSON, digest, draft data, history ledger, rendered DOM snapshots, screenshots) land under `planning/_evidence/` and are internal, not deliverables.
 
-`<slug>` is the host with the scheme and any leading `www.` removed and dots turned into hyphens (for example `example.com` becomes `example-com`).
+`<slug>` is the host with the scheme and any leading `www.` removed and dots turned into hyphens (`example.com` becomes `example-com`).
 
-The review covers Content, Design (measured signals plus the optional browser pass), Accessibility, Navigation and IA, SEO and Technical, Performance and delivery architecture, Privacy and tracking, and a passive Security posture pass at both the host level (TLS, security headers, cookie flags, email auth, information disclosure) and the page level (Subresource Integrity, form-action downgrades, CSP-blocking inline handlers).
+The review covers Content, Design (measured signals plus browser evidence), Accessibility, Navigation and IA, SEO and Technical, Performance and delivery architecture, Privacy and tracking, and a passive Security posture pass at both the host level (TLS, security headers, cookie flags, email authentication, information disclosure) and the page level (Subresource Integrity, form-action downgrades, inline handlers).
 
 ---
 
 ## How it works
 
-Claude Code reads `CLAUDE.md` and the `review-site` skill, resolves the target, then runs a bundled suite of passive evaluation tools that produce hard, reproducible measurements. It reads those measurements plus the in-scope page content, forms the findings, and writes both deliverables. The Word report's formatting is owned by a bundled `python-docx` builder, so the report looks identical on every run regardless of the target or who invokes it.
+```
+TARGET.txt ──> discovery ──> scanner suite ──> headless-browser capture ──> re-scan ──> draft ──> executive report
+                (sitemap        (14 passive        (rendered DOM +           (consumes     (measured    (deterministic
+                 + nav)          scanners)          vitals + contrast)        evidence)     data file)    docx builder)
+```
 
-```
-TARGET.txt  ->  scanner suite (measured evidence)  ->  drafted report data  ->  executive report
-                        |                                  ^
-                   WebFetch + optional browser ------------+
-```
+One command (`run_review.py`) executes the whole evidence pass:
+
+1. **Discovery** reads the sitemap and homepage navigation and proposes a representative review set (homepage, section landings, deep pages, legal pages). It fetches only the homepage and sitemaps, never the whole site.
+2. **The scanner suite** measures every page and the host once, sharing a single fetch per URL across all scanners, and rolls the results into a per-category scorecard.
+3. **Automated rendered capture** launches a locally installed Chrome or Edge headless, snapshots the browser-built DOM of every client-rendered page, and measures Largest Contentful Paint, Cumulative Layout Shift, Total Blocking Time, and WCAG 1.4.3 contrast on every scanned page.
+4. **A re-scan** (near-free, inside the same per-run fetch cache) upgrades the inconclusive static verdicts to measured `rendered_dom` verdicts and grades the captured vitals against the published Core Web Vitals thresholds.
+5. **The report data drafter** turns the scan JSON into a first-draft report data file: measured scorecard rows, aggregated findings, an auto-derived executive summary (strengths, weaknesses, bottom line) and a prioritized action plan, every item traceable to a check.
+6. **The report builder** renders the final Word document. Formatting is owned entirely by the builder, so the report looks identical on every run regardless of the target or who invokes it.
+
+The scorecard rolls each category into a posture band (Strong, Adequate, Weak, Poor, or Not measured) from its own pass/warn/fail checks, plus an overall band. It is a transparent aggregation of measured checks, not an invented benchmark, and the raw counts always travel with it.
 
 ---
 
-## Evaluation tools
+## The measurement engine
 
-The review does not rely on the model eyeballing headers or markup. A pure standard-library, strictly passive scanner suite runs first and writes its results to `planning\_evidence\<slug>_scan.json` (plus a readable `<slug>_scan_summary.md`). Each check carries a `pass`, `warn`, `fail`, or `info` verdict and a short note that findings cite directly. Run it by hand any time:
-
-```
-python .claude\skills\review-site\tools\run_review.py                                (one command: discover, scan, draft)
-python .claude\skills\review-site\tools\discover_pages.py                            (propose an in-scope page set)
-python .claude\skills\review-site\tools\scan_site.py                                 (reads TARGET.txt)
-python .claude\skills\review-site\tools\scan_site.py https://example.com https://example.com/about
-```
+The review never relies on a language model eyeballing headers or markup. A deterministic, strictly passive scanner suite runs first and writes its results to `planning/_evidence/<slug>_scan.json` (plus a readable `<slug>_scan_summary.md`). Each check carries a `pass`, `warn`, `fail`, or `info` verdict and a short note that findings cite directly. The suite is pure Python standard library: no requests, no BeautifulSoup, no Playwright, nothing to install.
 
 | Tool | Measures (passively) |
 | --- | --- |
-| `discover_pages.py` | Reads the sitemap and homepage nav to propose a representative in-scope review set (scoping helper; fetches only the homepage and sitemaps) |
-| `scan_http_security.py` | HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners, security.txt (RFC 9116) |
-| `scan_tls.py` | Negotiated TLS protocol, HTTP/2 support via ALPN, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe |
-| `scan_dns_email.py` | SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, MTA-STS (record plus policy mode), TLS-RPT, BIMI, over DNS-over-HTTPS |
-| `scan_crawl.py` | robots.txt presence and sitemap references, site-wide Disallow detection, XML sitemap reachability, apex vs www canonicalization (host-level, checked once per run) |
+| `scan_http_security.py` | HTTPS redirect, HSTS, CSP with full directive analysis (Report-Only delivery, wildcard script origins, script-scoped unsafe-inline/eval), clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags incl. SameSite, version banners, security.txt (RFC 9116) |
+| `scan_tls.py` | Negotiated TLS protocol, HTTP/2 via ALPN on the same handshake, certificate issuer and days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe |
+| `scan_dns_email.py` | SPF, DMARC policy, DKIM across 26 documented selector families probed in parallel, MX, DNSSEC, MTA-STS (record plus policy mode), TLS-RPT, BIMI, all over DNS-over-HTTPS |
+| `scan_crawl.py` | robots.txt incl. site-wide Disallow detection, sitemap reachability, apex vs www canonicalization |
+| `scan_crux.py` | Real-user field data from the Chrome UX Report API: origin p75 LCP, CLS, and INP graded against the published Core Web Vitals thresholds (needs `CRUX_API_KEY` or `GOOGLE_API_KEY`; reports honestly when absent or when the origin lacks traffic) |
 | `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt |
-| `scan_accessibility.py` | Document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons |
-| `scan_links.py` | Broken links (404/410/5xx only), redirects, access-restricted links, in-page anchors pointing at missing ids, and insecure http resources on an https page (mixed content) |
-| `scan_performance.py` | Initial HTML transfer size, static resource-weight floor, render-blocking head scripts, third-party origins, gzip/brotli compression, per-asset caching lifetimes, redirect chains |
-| `scan_readability.py` | Flesch Reading Ease, Flesch-Kincaid grade level, average sentence length (heuristic, on visible text) |
-| `scan_privacy.py` | Third-party resource origins, known tracker/analytics hosts, likely tracking pixels, cookie-consent detection (static HTML only) |
-| `scan_page_security.py` | Subresource Integrity coverage on cross-origin scripts/styles, forms posting to plain HTTP from HTTPS pages, inline event handlers, target=_blank rel hygiene |
-| `scan_design.py` | Favicon and theme-color, deprecated presentational tags, inline-style density, distinct font families from inline and linked CSS, images without dimensions (layout shift) |
-| `scan_vitals.py` | Browser-captured LCP, CLS, TBT, and WCAG contrast, graded against the published Core Web Vitals and Lighthouse thresholds; reports "not captured" honestly when no browser pass ran (see `tools\CAPTURE.md`) |
-| `scan_crux.py` | Real-user field data from the Chrome UX Report: origin p75 LCP, CLS, and INP graded against the published CWV thresholds. Needs GOOGLE_API_KEY (env or .env, never committed); reports honestly when absent or when the origin lacks traffic |
-| `scan_site.py` | Orchestrates all of the above across the target and extra pages, rolls the results into a per-category scorecard, writes the evidence JSON and digest |
-| `draft_report_data.py` | Drafts the executive-report data file from the scan JSON: measured scorecard and findings filled in, judgement fields left empty |
-| `crawler.py` | Opt-in polite crawler: breadth-first same-domain discovery, robots.txt compliant (including Crawl-delay), strictly serial with a per-request delay, hard 500-page ceiling, resumable state file |
-| `run_review.py` | One command for the whole evidence pass: discovery (or `--crawl N` for the polite crawler), full scan of the page set, digest, and draft report data |
+| `scan_accessibility.py` | Document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons, viewport zoom restrictions (WCAG 1.4.4) |
+| `scan_links.py` | Broken links (404/410/5xx), redirects, access-restricted links, in-page anchors pointing at missing ids, mixed content |
+| `scan_performance.py` | HTML transfer size, static resource-weight floor, render-blocking head scripts, third-party origins, gzip/brotli compression, per-asset caching lifetimes, redirect chains |
+| `scan_readability.py` | Flesch Reading Ease, Flesch-Kincaid grade, average sentence length on visible text, with listing-page noise suppression |
+| `scan_privacy.py` | Third-party origins, 154 documented tracker domains grouped by function, tracking pixels, cookie-consent platform detection (20 CMP hosts) |
+| `scan_page_security.py` | Subresource Integrity coverage on cross-origin scripts and styles, forms posting to plain HTTP from HTTPS pages, inline event handlers, target=_blank rel hygiene |
+| `scan_design.py` | Favicon and theme-color, deprecated presentational tags, inline-style density, font families from inline and linked CSS, images without dimensions (layout-shift risk) |
+| `scan_vitals.py` | Browser-measured LCP, CLS, TBT and WCAG 1.4.3 contrast graded against the published Core Web Vitals and Lighthouse thresholds; reports "not captured" honestly when no browser evidence exists |
 
-Issues are **aggregated**: an identical finding repeated across pages (a template-level defect) collapses into one entry naming the affected pages, so the digest and the drafted report state "missing landmarks on 12 pages" once instead of twelve times. Each run appends to a per-target **history ledger** (`planning\_evidence\<slug>_history.jsonl`), diffs itself against the previous run (new vs resolved issues), and the digest shows a **trend** of the last five runs with any overall-band movement, so the fix-and-rescan loop shows progress explicitly.
+Supporting tools: `discover_pages.py` (scoping helper), `crawler.py` (opt-in polite crawler: robots.txt compliant including Crawl-delay, strictly serial with a per-request delay, hard 500-page ceiling, resumable state), `capture_rendered.py` (the automated browser tier, below), `draft_report_data.py` (scan JSON to report data), `run_review.py` (the one-command pipeline), and `build_exec_report.py` (the deterministic docx builder).
 
-Each run also produces a **scorecard**: every category is rolled up into a posture band (Strong, Adequate, Weak, Poor, or Not measured) from its own pass/warn/fail checks, plus an overall band. It is a transparent aggregation of measured checks, not an invented benchmark, and the raw counts always travel with it. The executive report renders this scorecard when present. A multi-page run adds a **cross-page** check for titles or meta descriptions reused across pages. Each page is fetched and parsed once and shared across all page-level scanners, so scanning stays light on the target, and one scanner failing never aborts the run.
-
-The scanners detect client-rendered (JavaScript) pages and mark their structural SEO, accessibility, and readability checks inconclusive rather than reporting an empty static body as clean. With the optional browser pass, the agent captures each such page's rendered DOM to `planning\_evidence\rendered\<slug>\` (files plus a small manifest) and the next scan runs the structural scanners against the browser-built DOM, labeling those verdicts `evidence_source: rendered_dom`; performance numbers always stay measured from the real network transfer. Without a browser, the inconclusive verdicts stand - nothing is guessed.
+**Analyst-grade output handling.** Identical findings repeated across pages (a template-level defect) collapse into one entry naming every affected page, so the report says "missing landmarks on 12 pages" once instead of twelve times, and severe findings enumerate every affected URL with no truncation. Each run appends to a per-target history ledger, diffs itself against the previous run (new vs resolved issues), and the digest shows a trend of the last five runs with any overall-band movement, so a fix-and-rescan loop shows progress explicitly.
 
 ---
 
-## Prerequisites
+## Automated rendered evidence
 
-- Claude Code (this is a Claude Code project, not a standalone script).
-- Python 3.10 or later on your PATH. Verify with `python --version`.
-- The scanner suite needs nothing beyond the standard library.
-- `python-docx`, for the Word report only (installed in the Install step below).
-- Optional: Playwright MCP, for real visual and screenshot analysis. Without it the design section is limited to what is inferable from HTML and CSS (structural-only). Everything else still runs. Playwright MCP needs Node.js 18 or later.
+Static analysis cannot see what JavaScript builds, and most modern sites build a lot. This is where site scanners usually either lie (reporting an empty SPA shell as a clean page) or give up. Website Analyzer does neither.
+
+The suite detects client-rendered pages and marks their structural checks inconclusive rather than falsely clean. Then `capture_rendered.py` closes the gap automatically:
+
+- It finds a locally installed Chrome or Edge (standard install paths, then PATH; `REVIEW_BROWSER` overrides) and drives it headless over the **Chrome DevTools Protocol**, using a minimal RFC 6455 WebSocket client written on raw standard-library sockets. Zero dependencies survives contact with a real browser.
+- For every client-rendered page it captures the browser-built DOM, and the next scan runs every structural scanner against that rendered document, stamping the verdicts `evidence_source: rendered_dom`. A planted image without alt text that no static scanner on earth could see gets caught and cited.
+- For every scanned page it measures **LCP, CLS, and TBT** with buffered PerformanceObserver entries and samples **WCAG 1.4.3 contrast** with a computed-style walk (the axe-core approach), grading everything against the published Core Web Vitals and Lighthouse thresholds. Real-user CrUX field data is preferred when available; lab capture fills in when it is not.
+- `run_review.py` orchestrates it end to end: scan, capture, re-scan, draft, in one command, with the capture page set capped and every dropped page named. Snapshots refresh on every run, so rendered evidence never goes stale.
+- No browser installed? The run says so, plainly, and the inconclusive verdicts stand. Nothing is guessed. Performance numbers always stay measured from the real network transfer, never simulated from a snapshot.
+
+The manual capture path (`tools/CAPTURE.md`) remains available for pages where a cookie overlay must be dismissed before capture, and a manual capture is merged with, never clobbered by, the automated one.
 
 ---
 
-## Install (Windows)
+## Evidence discipline
 
-1. Extract the zip into a working folder, for example `website-review\`. It merges with any existing `planning\` folder rather than replacing it. Confirm the hidden folder landed with `dir /a` (you should see `.claude`).
+The rules that make the output trustworthy, enforced by code and tests rather than good intentions:
 
-2. Install the report dependency:
+- **Every finding cites its evidence.** The page URL, the exact element or header, and the scanner check it came from. No unsourced claims survive into the report.
+- **Nothing unmeasured is reported.** No fabricated scores, no invented benchmarks, no competitor numbers. A category with no evidence is "Not measured", not a guess.
+- **Inconclusive is not clean.** A client-rendered page without a snapshot keeps its inconclusive verdicts, stated as such.
+- **One scanner failing never aborts the run**, and a scanner that cannot reach its target reports that as its result instead of raising.
+- **Honest degradation everywhere.** Missing CrUX key, origin absent from the dataset, no browser installed, a page that never fires its load event: each has an explicit, tested code path that names the limitation.
+- **No silent truncation.** Capped lists (capture pages, findings) name what was dropped.
 
-   ```
-   pip install python-docx
-   ```
+---
 
-3. Optional, for visual analysis. Requires Node.js 18 or later:
+## Install
 
-   ```
-   claude mcp add playwright npx @playwright/mcp@latest
-   claude mcp list
-   ```
+Requirements: Python 3.10+ and, for the Word report only, one package:
 
-4. Open Claude Code in that folder:
+```
+pip install python-docx
+```
 
-   ```
-   cd website-review
-   claude
-   ```
+The scanner suite itself needs nothing beyond the standard library. The automated browser tier uses any locally installed Chrome or Edge; without one, everything else still runs.
+
+Clone and enter:
+
+```
+git clone https://github.com/lenamonj/web-site-analyzer.git
+cd web-site-analyzer
+```
+
+This is a Claude Code project: open Claude Code in the folder and the `review-site` skill, output contract, and permission allowlist are picked up automatically. The evidence pipeline also runs standalone from any terminal (see below), no Claude Code required.
 
 ---
 
@@ -132,90 +164,102 @@ The scanners detect client-rendered (JavaScript) pages and mark their structural
 
    Or ask directly: "Run the website review against the URL in TARGET.txt and build the executive report."
 
-3. Collect the outputs from `planning\`.
+3. Collect the deliverable from `planning/`.
 
-If Claude Code stops after the scan on the first run, tell it explicitly to build the executive report.
+To retarget, edit the one URL line in `TARGET.txt` and run again. A URL given in chat ("run the review against https://another.com") overrides `TARGET.txt` for that run.
+
+### Standalone evidence pipeline
+
+The full measured-evidence pass runs without Claude Code:
+
+```
+python .claude/skills/review-site/tools/run_review.py                       # reads TARGET.txt
+python .claude/skills/review-site/tools/run_review.py https://example.com  # explicit target
+```
+
+This discovers pages, scans, captures rendered evidence when a browser is present, re-scans, and drafts the report data file. Any single scanner also runs alone, for example `python .claude/skills/review-site/tools/scan_tls.py example.com`.
 
 ---
 
-## Run it on a different site
+## Command-line reference
 
-Edit the one URL line in `TARGET.txt` and run `/review-site` again. That is the only change needed to retarget.
+| Command | Flags |
+| --- | --- |
+| `run_review.py [url]` | `--crawl N` use the polite crawler for discovery with an N-page budget, `--fresh` restart a resumable crawl, `--no-browser` skip the rendered capture |
+| `capture_rendered.py [url]` | `--pages N` raise or lower the capture cap (default 15), `--browser PATH` explicit browser binary |
+| `scan_site.py [url] [extra pages...]` | scan an explicit page set |
+| `discover_pages.py [url]` | propose the in-scope review set |
+| `build_exec_report.py <data.json> <out.docx>` | render the report from a data file |
 
-To point at a site for a single run without editing the file, give Claude Code the URL in chat ("run the review against https://another.com"). A URL given in chat overrides `TARGET.txt` for that run.
+Environment (via env or a git-ignored `.env` at the repo root): `CRUX_API_KEY` or `GOOGLE_API_KEY` for Chrome UX Report field data, `REVIEW_BROWSER` to pin the browser binary.
 
 ---
 
-## Tests
+## Tests and CI
 
-The scanner suite ships with an offline, zero-dependency regression suite (Python `unittest`, 126 tests). It drives the HTML parser, every pure grading function, the tool contract across the whole registry, and the full pipeline with inline fixtures and stubbed network primitives, so it needs no network and runs in well under a second:
-
-```
-cd .claude\skills\review-site\tools
-python -m unittest test_review_tools
-```
-
-The report builder has its own suite (9 tests, requires `python-docx`, skipped when absent):
+Two offline suites, 238 tests total, no network, run in about a second:
 
 ```
-cd .claude\skills\review-site
-python -m unittest test_exec_report
+cd .claude/skills/review-site/tools
+python -m unittest test_review_tools        # 222 tests: parsers, graders, tool contract, pipeline, capture
+cd ..
+python -m unittest test_exec_report         # 16 tests: the docx builder (needs python-docx)
 ```
+
+The scanner suite drives the HTML parser, every grading function, the tool contract across the whole registry (every registered tool is swept for result shape, category stamping, and no-raise-on-network-failure), the full pipeline with stubbed network primitives, and the browser tier with crafted WebSocket bytes and a fake DevTools session (including the RFC 6455 accept-key test vector). Network primitives are stubbed suite-wide so no test can ever reach a real network or read a real key.
+
+[GitHub Actions](https://github.com/lenamonj/web-site-analyzer/actions) runs both suites on every push across Ubuntu and Windows, on Python 3.10 and 3.13.
 
 ---
 
 ## Scope and safety
 
-- The review is passive and external. It inspects what any browser or DNS resolver already receives: page HTML, response headers, cookies, TLS, and public DNS records.
-- It does not log in, submit forms, brute force paths, or port scan.
-- Only run this against sites you own or are authorized to assess. The review states the target and the authorization assumption in chat when it starts.
-- "Any website" is subject to that authorization and to the site not hard-blocking automated fetches. Pages behind a login wall or aggressive bot protection may return limited or no data, and the report will say so rather than guess.
+- The review is **passive and external**. It inspects what any browser or DNS resolver already receives: page HTML, response headers, cookies, TLS handshakes, and public DNS records. The browser tier loads pages exactly as a visitor would, strictly serially, with a delay between pages.
+- It does **not** log in, submit forms, brute force paths, or port scan.
+- Crawling is opt-in only, robots.txt compliant (including Crawl-delay), serial, and hard-capped at 500 pages.
+- Only run this against sites you own or are authorized to assess. The review states the target and the authorization assumption when it starts.
+- Sites behind a login wall or aggressive bot protection may return limited data; the report says so rather than guessing.
 
 ---
 
 ## Project structure
 
 ```
-CLAUDE.md                                    Project context and output contract
-TARGET.txt                                   The URL to analyze (edit this to retarget)
-README.md                                    This file
-.claude\
-  settings.json                              Permission allowlist for the skill
-  skills\review-site\
-    SKILL.md                                 The review workflow and rules
-    build_exec_report.py                     Deterministic python-docx report builder
-    test_exec_report.py                      Offline unit tests for the report builder
-    tools\                                   Passive evaluation tools (pure standard library)
-      common.py                              Shared fetch (gzip-aware), DoH, TLS, JSON helpers
-      htmlmeta.py                            Single-pass HTML extractor (SEO and a11y share it)
-      registry.py                            Central tool registry (single source of discovery)
-      discover_pages.py                      Sitemap/nav page-discovery scoping helper
-      scan_http_security.py                  Security-header and cookie posture
-      scan_tls.py                            TLS and certificate posture
-      scan_dns_email.py                      SPF, DMARC, DKIM, MX, DNSSEC
-      scan_crawl.py                          robots.txt and sitemap (host-level, once per run)
-      scan_seo.py                            On-page SEO and technical structure
-      scan_accessibility.py                  Static accessibility checks
-      scan_links.py                          Link health and mixed content
-      scan_performance.py                    Page-weight and resource analysis
-      scan_readability.py                    Readability metrics on visible text
-      scan_privacy.py                        Third-party trackers, pixels, consent detection
-      scan_page_security.py                  Page-level security hygiene (SRI, form actions)
-      scan_design.py                         Static design signals (icons, fonts, inline styles)
-      scan_site.py                           Orchestrator + scorecard, writes the evidence JSON
-      draft_report_data.py                   Drafts exec report data from the scan JSON
-      run_review.py                          One-command pipeline: discover, scan, draft
-      test_review_tools.py                   Offline unit tests for the suite
-planning\
-  _evidence\                                 Scan JSON and digest, screenshots, notes, exec_report_data.json
-    README.txt
+CLAUDE.md                                  Project context and output contract
+TARGET.txt                                 The URL to analyze (edit this to retarget)
+LICENSE                                    MIT
+.github/workflows/ci.yml                   Both test suites, ubuntu + windows, py3.10 + 3.13
+.claude/
+  settings.json                            Permission allowlist for the skill
+  skills/review-site/
+    SKILL.md                               The review workflow and rules
+    build_exec_report.py                   Deterministic python-docx report builder
+    test_exec_report.py                    Builder test suite
+    tools/                                 The evidence engine (pure standard library)
+      common.py                            Shared fetch (cached, gzip-aware), DoH, TLS, grading
+      htmlmeta.py                          Single-pass HTML extractor shared by all page scanners
+      registry.py                          Central tool registry (single source of discovery)
+      discover_pages.py                    Sitemap/nav page-discovery scoping helper
+      crawler.py                           Opt-in polite crawler (robots-compliant, resumable)
+      capture_rendered.py                  Automated headless-browser capture (DevTools protocol)
+      scan_http_security.py ... scan_vitals.py   The 14 registered scanners (see table above)
+      scan_site.py                         Orchestrator + scorecard, writes the evidence JSON
+      draft_report_data.py                 Drafts report data incl. executive summary and action plan
+      run_review.py                        One command: discover, scan, capture, re-scan, draft
+      test_review_tools.py                 Offline scanner suite (222 tests)
+      CAPTURE.md                           Manual browser-capture reference (fallback path)
+planning/
+  _evidence/                               Scan JSON, digests, ledgers, rendered snapshots (internal)
 ```
 
 ---
 
 ## Notes
 
-- If `python` is not found, the skill falls back to `py`.
 - All generated output avoids em dashes and en dashes by design.
 - To rebrand the Word report, change the single `ACCENT_HEX` constant near the top of `build_exec_report.py`.
 - Findings never carry fabricated metrics, scores, or vulnerabilities. Anything not measured is labeled as such.
+
+## License
+
+[MIT](LICENSE)
