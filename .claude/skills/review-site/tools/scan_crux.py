@@ -60,10 +60,12 @@ def _threshold_check(value, bounds, unit, name):
 def _scan(target):
     host = common.host_of(target) or target.strip()
     origin = f"https://{host}"
-    key = common.env_value("GOOGLE_API_KEY")
+    # A dedicated CRUX_API_KEY wins over the general GOOGLE_API_KEY, so the
+    # general key can stay restricted to its own APIs.
+    key = common.env_value("CRUX_API_KEY") or common.env_value("GOOGLE_API_KEY")
 
     if not key:
-        note = "Field data not queried: no GOOGLE_API_KEY in the environment or .env."
+        note = "Field data not queried: no CRUX_API_KEY or GOOGLE_API_KEY in the environment or .env."
         checks = {name: {"verdict": "info", "note": note}
                   for name in ("field_lcp", "field_cls", "field_inp")}
         return _result(host, origin, queried=False, checks=checks)
