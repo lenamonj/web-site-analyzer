@@ -1134,3 +1134,48 @@ network is touched.
 Docs: README triage section, a SKILL.md note, and a committed
 PROSPECTS.example.txt template at the repo root (the live prospects.txt and
 all triage output stay under the ignored sales/).
+
+## 37. Design: key-dates conversation starters (task J4)
+Purpose: outreach opens better with a specific, true, time-relevant fact than
+with a generic pitch. The scan already knows the TLS certificate expiry; the
+domain registration expiry and age are one RDAP lookup away. Surfaced together
+as a "Key dates" panel, they give the salesperson natural openers ("your
+certificate renews next month - is that automated?"; "you've held this domain
+since 1995"). These are facts, not posture judgements, so they are never
+scored.
+
+Measurement:
+- Certificate renewal: already measured by scan_tls (days_to_expiry). Add an
+  ISO `expires_on` (YYYY-MM-DD) to the scan_tls output so the report has a
+  clean date without re-parsing the peer's notAfter string.
+- Domain registration: new common.rdap_domain(domain). RDAP is the JSON
+  successor to WHOIS; it resolves the registry's RDAP server via the cached
+  IANA bootstrap (data.iana.org/rdap/dns.json) and reads the standard
+  registration/expiration events. Passive (public registration data),
+  stdlib-only, and part of the stubbed network-primitive set so the offline
+  suite never touches it. parse_rdap_domain is split out pure for testing.
+  Unsupported TLDs (many ccTLDs, e.g. .co, are absent from the bootstrap) and
+  any lookup failure return ok=False, so the tool degrades honestly and never
+  fabricates a date.
+- scan_dns_email gains check_domain_registration: domain_expiry and (when
+  known) domain_created checks, both INFO verdicts. Info is not graded, so the
+  email-auth band is untouched - the semantics of the dns_email score stay
+  about email auth. iso_days is a pure helper (days-from-now, ISO date).
+
+Report:
+- draft_report_data._key_dates assembles items from the tls cert date and the
+  dns_email domain checks: "SSL certificate renews", "Domain renews", "Domain
+  registered", each with the date and a relative-time detail. None when nothing
+  is measurable (so a TLS-less or RDAP-less target simply omits the panel or
+  the missing card).
+- build_exec_report.add_key_dates_panel renders a white-card strip (same
+  language as the vitals panel) under a numbered "Key dates" section, placed
+  after Core Web Vitals. The section joins the cover contents list and the
+  numbering automatically.
+
+Tests (offline): parse_rdap_domain on a canned RDAP body, iso_days matrix
+(future/past/None/garbage), check_domain_registration against a stubbed
+rdap_domain (info verdicts, dates carried, honest degradation, no grade
+change), _key_dates assembly and the None case, _in_days phrasing, and the
+builder panel render (three cards, section in contents). common.rdap_domain is
+stubbed in the suite header alongside http_post_json and env_value.

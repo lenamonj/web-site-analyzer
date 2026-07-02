@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/github/license/lenamonj/web-site-analyzer)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/scanner%20dependencies-zero-2ea44f)
-![Tests](https://img.shields.io/badge/tests-243%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-263%20passing-2ea44f)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Scope](https://img.shields.io/badge/scope-passive%20%26%20external-orange)
 ![Rendered evidence](https://img.shields.io/badge/rendered%20evidence-headless%20Chrome%20DevTools-blueviolet)
@@ -41,7 +41,7 @@ Every run produces one deliverable in `planning/`, named by the target's domain 
 
 | File | What it is |
 | --- | --- |
-| `planning/<slug>_Executive_Report.docx` | The CEO-level Word report, designed as a board document: a cover page with the measured posture and contents, the bottom line as a quotable statement, an executive summary of strengths and weaknesses, a scorecard with per-category score bars, a Core Web Vitals panel, severity-ranked findings that enumerate every affected page, a prioritized plan of action, quick wins, and an evidence appendix with highlighted header snippets and screenshots. |
+| `planning/<slug>_Executive_Report.docx` | The CEO-level Word report, designed as a board document: a cover page with the measured posture and contents, the bottom line as a quotable statement, an executive summary of strengths and weaknesses, a scorecard with per-category score bars, a Core Web Vitals panel, a Key dates panel (certificate and domain renewal dates, domain age), severity-ranked findings that enumerate every affected page, a prioritized plan of action, quick wins, and an evidence appendix with highlighted header snippets and screenshots. |
 
 Working artifacts (scan JSON, digest, draft data, history ledger, rendered DOM snapshots, screenshots) land under `planning/_evidence/` and are internal, not deliverables.
 
@@ -80,7 +80,7 @@ The review never relies on a language model eyeballing headers or markup. A dete
 | --- | --- |
 | `scan_http_security.py` | HTTPS redirect, HSTS, CSP with full directive analysis (Report-Only delivery, wildcard script origins, script-scoped unsafe-inline/eval), clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags incl. SameSite, version banners, security.txt (RFC 9116) |
 | `scan_tls.py` | Negotiated TLS protocol, HTTP/2 via ALPN on the same handshake, certificate issuer and days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe |
-| `scan_dns_email.py` | SPF, DMARC policy, DKIM across 26 documented selector families probed in parallel, MX, DNSSEC, MTA-STS (record plus policy mode), TLS-RPT, BIMI, all over DNS-over-HTTPS |
+| `scan_dns_email.py` | SPF, DMARC policy, DKIM across 26 documented selector families probed in parallel, MX, DNSSEC, MTA-STS (record plus policy mode), TLS-RPT, BIMI over DNS-over-HTTPS, plus domain registration and expiry dates via RDAP (the JSON successor to WHOIS) as ungraded conversation-starter facts |
 | `scan_crawl.py` | robots.txt incl. site-wide Disallow detection, sitemap reachability, apex vs www canonicalization |
 | `scan_crux.py` | Real-user field data from the Chrome UX Report API: origin p75 LCP, CLS, and INP graded against the published Core Web Vitals thresholds (needs `CRUX_API_KEY` or `GOOGLE_API_KEY`; reports honestly when absent or when the origin lacks traffic) |
 | `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt |
@@ -224,13 +224,13 @@ Environment (via env or a git-ignored `.env` at the repo root): `CRUX_API_KEY` o
 
 ## Tests and CI
 
-Two offline suites, 243 tests total, no network, run in about a second:
+Two offline suites, 263 tests total, no network, run in about a second:
 
 ```
 cd .claude/skills/review-site/tools
-python -m unittest test_review_tools        # 223 tests: parsers, graders, tool contract, pipeline, capture
+python -m unittest test_review_tools        # 242 tests: parsers, graders, tool contract, pipeline, capture
 cd ..
-python -m unittest test_exec_report         # 20 tests: the docx builder (needs python-docx)
+python -m unittest test_exec_report         # 21 tests: the docx builder (needs python-docx)
 ```
 
 The scanner suite drives the HTML parser, every grading function, the tool contract across the whole registry (every registered tool is swept for result shape, category stamping, and no-raise-on-network-failure), the full pipeline with stubbed network primitives, and the browser tier with crafted WebSocket bytes and a fake DevTools session (including the RFC 6455 accept-key test vector). Network primitives are stubbed suite-wide so no test can ever reach a real network or read a real key.
@@ -273,7 +273,7 @@ LICENSE                                    MIT
       scan_site.py                         Orchestrator + scorecard, writes the evidence JSON
       draft_report_data.py                 Drafts report data incl. executive summary and action plan
       run_review.py                        One command: discover, scan, capture, re-scan, draft
-      test_review_tools.py                 Offline scanner suite (223 tests)
+      test_review_tools.py                 Offline scanner suite (242 tests)
       CAPTURE.md                           Manual browser-capture reference (fallback path)
 planning/
   _evidence/                               Scan JSON, digests, ledgers, rendered snapshots (internal)

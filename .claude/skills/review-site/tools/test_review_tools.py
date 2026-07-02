@@ -50,6 +50,12 @@ import triage as triage_mod
 common.http_post_json = lambda url, payload, timeout=None: {
     "ok": False, "status": None, "json": None, "error": "stubbed offline (suite default)"}
 common.env_value = lambda name: None
+# RDAP is a network primitive too: default it to "unavailable" so the whole
+# suite (including the tool-contract sweep) stays offline. Tests that exercise
+# domain registration override this locally and restore it after.
+common.rdap_domain = lambda domain, timeout=None: {
+    "ok": False, "expiration": None, "registration": None,
+    "error": "stubbed offline (suite default)"}
 
 # A well-formed static page: language, title, one H1, ordered headings, images
 # with alt, a labeled input, landmarks, descriptive links, Open Graph, JSON-LD.
@@ -2672,6 +2678,108 @@ class TestCaptureRendered(unittest.TestCase):
         finally:
             common.env_value = orig
             Path(fake).unlink(missing_ok=True)
+
+
+class TestDomainRegistration(unittest.TestCase):
+    """RDAP domain-registration facts (PLAN.md section 37). Offline: the parse
+    step is pure, and check_domain_registration runs against a stubbed
+    common.rdap_domain."""
+
+    RDAP_RESPONSE = {
+        "events": [
+            {"eventAction": "registration", "eventDate": "2015-04-02T00:00:00Z"},
+            {"eventAction": "expiration", "eventDate": "2027-04-02T00:00:00Z"},
+            {"eventAction": "last changed", "eventDate": "2024-03-01T00:00:00Z"},
+        ]
+    }
+
+    def test_parse_rdap_reads_the_standard_events(self):
+        parsed = common.parse_rdap_domain(self.RDAP_RESPONSE)
+        self.assertTrue(parsed["ok"])
+        self.assertEqual(parsed["expiration"], "2027-04-02T00:00:00Z")
+        self.assertEqual(parsed["registration"], "2015-04-02T00:00:00Z")
+
+    def test_iso_days_returns_days_and_a_date(self):
+        # A fixed far-future date is always positive; a fixed past date negative.
+        days, date = dns.iso_days("2999-01-01T00:00:00Z")
+        self.assertGreater(days, 0)
+        self.assertEqual(date, "2999-01-01")
+        past_days, past_date = dns.iso_days("2000-01-01T00:00:00Z")
+        self.assertLess(past_days, 0)
+        self.assertEqual(past_date, "2000-01-01")
+        self.assertEqual(dns.iso_days(None), (None, None))
+        self.assertEqual(dns.iso_days("not a date"), (None, None))
+
+    def test_registration_checks_are_info_and_carry_dates(self):
+        orig = common.rdap_domain
+        common.rdap_domain = lambda domain, timeout=None: {
+            "ok": True, "expiration": "2999-04-02T00:00:00Z",
+            "registration": "2015-04-02T00:00:00Z", "error": None}
+        try:
+            checks = dns.check_domain_registration("example.com")
+        finally:
+            common.rdap_domain = orig
+        self.assertEqual(checks["domain_expiry"]["verdict"], "info")  # never scored
+        self.assertEqual(checks["domain_expiry"]["date"], "2999-04-02")
+        self.assertIn("2999-04-02", checks["domain_expiry"]["note"])
+        self.assertEqual(checks["domain_created"]["date"], "2015-04-02")
+        self.assertIsNotNone(checks["domain_created"]["age_years"])
+
+    def test_unavailable_rdap_degrades_to_one_info_check(self):
+        orig = common.rdap_domain
+        common.rdap_domain = lambda domain, timeout=None: {
+            "ok": False, "expiration": None, "registration": None,
+            "error": "No RDAP service published for .example"}
+        try:
+            checks = dns.check_domain_registration("acme.example")
+        finally:
+            common.rdap_domain = orig
+        self.assertEqual(checks["domain_expiry"]["verdict"], "info")
+        self.assertIsNone(checks["domain_expiry"]["date"])
+        self.assertNotIn("domain_created", checks)
+        self.assertIn("unavailable", checks["domain_expiry"]["note"].lower())
+
+    def test_registration_does_not_change_the_email_auth_grade(self):
+        # info verdicts are not graded, so adding them leaves the band intact.
+        base = {"spf": {"verdict": "pass"}, "dmarc": {"verdict": "pass"}}
+        before = common.grade([c["verdict"] for c in base.values()])
+        with_dates = dict(base, domain_expiry={"verdict": "info"},
+                          domain_created={"verdict": "info"})
+        after = common.grade([c["verdict"] for c in with_dates.values()])
+        self.assertEqual(before["band"], after["band"])
+        self.assertEqual(before["score"], after["score"])
+
+
+class TestKeyDates(unittest.TestCase):
+    """The key_dates conversation-starter panel data (PLAN.md section 37)."""
+
+    def _scan(self):
+        return {
+            "host_scans": {
+                "tls": {"expires_on": "2026-09-10", "days_to_expiry": 70.0},
+                "dns_email": {"checks": {
+                    "domain_expiry": {"date": "2027-04-02", "days_to_expiry": 640.0},
+                    "domain_created": {"date": "2015-04-02", "age_years": 11.0},
+                }},
+            }
+        }
+
+    def test_key_dates_collects_cert_and_domain_facts(self):
+        kd = drpt._key_dates(self._scan())
+        labels = [i["label"] for i in kd["items"]]
+        self.assertEqual(labels, ["SSL certificate renews", "Domain renews",
+                                  "Domain registered"])
+        cert = kd["items"][0]
+        self.assertEqual(cert["value"], "2026-09-10")
+        self.assertEqual(cert["detail"], "in 70 days")
+        self.assertEqual(kd["items"][2]["detail"], "about 11.0 years ago")
+
+    def test_key_dates_is_none_when_nothing_measured(self):
+        self.assertIsNone(drpt._key_dates({"host_scans": {}}))
+
+    def test_in_days_handles_expired(self):
+        self.assertEqual(drpt._in_days(-3.0), "expired 3 days ago")
+        self.assertEqual(drpt._in_days(None), "")
 
 
 def _triage_result(host, overall_score, categories, host_checks=None,

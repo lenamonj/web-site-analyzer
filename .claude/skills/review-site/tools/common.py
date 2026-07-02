@@ -298,6 +298,61 @@ def http_post_json(url, payload, timeout=DEFAULT_TIMEOUT):
                 "error": f"{type(e).__name__}: {e}"}
 
 
+RDAP_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
+_rdap_bootstrap = None
+
+
+def _http_get_json(url, timeout=DEFAULT_TIMEOUT):
+    req = urllib.request.Request(
+        url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _rdap_base_for(tld, timeout=DEFAULT_TIMEOUT):
+    """The registry's RDAP base URL for a TLD, from the cached IANA bootstrap."""
+    global _rdap_bootstrap
+    if _rdap_bootstrap is None:
+        data = _http_get_json(RDAP_BOOTSTRAP_URL, timeout=timeout)
+        mapping = {}
+        for service in data.get("services", []):
+            tlds, urls = service[0], service[1]
+            if urls:
+                base = urls[0].rstrip("/")
+                for t in tlds:
+                    mapping[t.lower()] = base
+        _rdap_bootstrap = mapping
+    return _rdap_bootstrap.get(tld.lower())
+
+
+def parse_rdap_domain(data):
+    """Registration facts from an RDAP domain response (pure, so it is unit
+    tested offline). Reads the standard event actions."""
+    events = {e.get("eventAction"): e.get("eventDate")
+              for e in (data.get("events") or []) if e.get("eventAction")}
+    return {"ok": True, "error": None,
+            "expiration": events.get("expiration"),
+            "registration": events.get("registration")}
+
+
+def rdap_domain(domain, timeout=DEFAULT_TIMEOUT):
+    """Public domain-registration facts via RDAP, the JSON successor to WHOIS,
+    using the IANA bootstrap to find the registry's RDAP server. Passive (public
+    registration data). Never raises: an unsupported TLD or any lookup failure
+    returns ok=False so callers degrade honestly. Part of the stubbed
+    network-primitive set (see the offline test header)."""
+    tld = domain.rsplit(".", 1)[-1] if "." in domain else domain
+    empty = {"ok": False, "expiration": None, "registration": None}
+    try:
+        base = _rdap_base_for(tld, timeout=timeout)
+        if not base:
+            return {**empty, "error": f"No RDAP service published for .{tld}"}
+        data = _http_get_json(f"{base}/domain/{domain}", timeout=timeout)
+    except Exception as e:
+        return {**empty, "error": f"{type(e).__name__}: {e}"}
+    return parse_rdap_domain(data)
+
+
 def doh_query(name, rtype, timeout=DEFAULT_TIMEOUT):
     """
     Resolve a DNS record over HTTPS (Google public resolver).

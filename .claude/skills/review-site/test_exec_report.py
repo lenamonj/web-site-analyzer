@@ -38,6 +38,13 @@ SAMPLE = {
                    "metrics": [{"label": "LCP", "value": "0.9s", "rating": "Good"},
                                {"label": "CLS", "value": "0.31", "rating": "Poor"},
                                {"label": "INP", "value": "350ms", "rating": "Needs work"}]},
+    "key_dates": {"note": "Public certificate and domain-registration facts, passively measured.",
+                  "items": [{"label": "SSL certificate renews", "value": "2026-09-10",
+                             "detail": "in 70 days"},
+                            {"label": "Domain renews", "value": "2027-04-02",
+                             "detail": "in 640 days"},
+                            {"label": "Domain registered", "value": "2015-04-02",
+                             "detail": "about 11.0 years ago"}]},
     "bottom_line": "The site is sound overall; the one urgent item is consent.",
     "assessment": {
         "strengths": ["TLS and certificates: strong (4 checks pass)"],
@@ -130,8 +137,8 @@ class TestExecReport(unittest.TestCase):
         idx = self.text.index("IN THIS REPORT")
         listing = self.text[idx:idx + 600]
         for name in ("Executive summary", "Measured posture", "Core Web Vitals",
-                     "Key findings hurting the site", "Preferred recommendations",
-                     "Quick wins", "Evidence appendix"):
+                     "Key dates", "Key findings hurting the site",
+                     "Preferred recommendations", "Quick wins", "Evidence appendix"):
             self.assertIn(name, listing)
 
     def test_running_header_skips_the_cover(self):
@@ -170,6 +177,15 @@ class TestExecReport(unittest.TestCase):
         chip_fills = {_cell_fill_of_run(c) for c in panel.rows[0].cells}
         self.assertIn(ber.VITALS_FILL["Good"], chip_fills)
         self.assertIn(ber.VITALS_FILL["Poor"], chip_fills)
+
+    def test_key_dates_panel_renders_cert_and_domain_dates(self):
+        self.assertIn("KEY DATES", self.text)  # section heading, uppercased
+        self.assertIn("2026-09-10", self.text)   # cert renewal date
+        self.assertIn("2027-04-02", self.text)   # domain renewal date
+        self.assertIn("about 11.0 years ago", self.text)
+        panel = next(t for t in self.doc.tables
+                     if any("2026-09-10" in c.text for c in t.rows[0].cells))
+        self.assertEqual(len(panel.columns), 3)
 
     def test_section_headings_are_numbered_and_keep_with_next(self):
         heading = next(p for p in self.doc.paragraphs

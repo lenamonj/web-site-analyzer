@@ -11,6 +11,7 @@ Usage:
     python scan_dns_email.py <domain-or-url> [output.json]
 """
 
+import datetime
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -186,6 +187,58 @@ def check_bimi(domain, has_mx):
     return {"present": False, "verdict": "info", "note": "No BIMI record."}
 
 
+def iso_days(iso):
+    """(days_from_now, YYYY-MM-DD) for an ISO-8601 timestamp, or (None, None).
+    Pure, so it is unit tested offline."""
+    if not iso:
+        return None, None
+    try:
+        s = iso.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        days = round((dt - now).total_seconds() / 86400, 1)
+        return days, dt.date().isoformat()
+    except (ValueError, TypeError):
+        return None, None
+
+
+def check_domain_registration(domain):
+    """Public registration facts as conversation-starter info, never scored
+    (info verdicts are not graded, so the email-auth band is untouched): when
+    the domain registration expires and when it was first registered. RDAP is
+    the public JSON successor to WHOIS; unsupported TLDs degrade to info."""
+    rd = common.rdap_domain(domain)
+    if not rd.get("ok"):
+        return {"domain_expiry": {"verdict": "info", "date": None,
+                                  "days_to_expiry": None,
+                                  "note": f"Domain registration lookup unavailable "
+                                          f"({rd.get('error', 'no RDAP data')})."}}
+    exp_days, exp_date = iso_days(rd.get("expiration"))
+    reg_days, reg_date = iso_days(rd.get("registration"))
+    checks = {}
+    if exp_date and exp_days is not None and exp_days < 0:
+        note = f"Domain registration expired on {exp_date}."
+    elif exp_date and exp_days is not None:
+        note = f"Domain registration expires {exp_date} ({exp_days:.0f} days away)."
+    elif exp_date:
+        note = f"Domain registration expires {exp_date}."
+    else:
+        note = "Domain expiry date not published by the registry."
+    checks["domain_expiry"] = {"verdict": "info", "date": exp_date,
+                               "days_to_expiry": exp_days, "note": note}
+    if reg_date:
+        years = round(abs(reg_days) / 365.25, 1) if reg_days is not None else None
+        rnote = (f"Domain first registered {reg_date}"
+                 + (f" (about {years} years ago)." if years else "."))
+        checks["domain_created"] = {"verdict": "info", "date": reg_date,
+                                    "age_years": years, "note": rnote}
+    return checks
+
+
 def _scan(target):
     host = common.host_of(target) or target.strip()
     domain = registrable_domain(host)
@@ -201,6 +254,7 @@ def _scan(target):
         "tls_rpt": check_tls_rpt(domain, has_mx),
         "bimi": check_bimi(domain, has_mx),
     }
+    checks.update(check_domain_registration(domain))
     tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
     for c in checks.values():
         tally[c["verdict"]] = tally.get(c["verdict"], 0) + 1

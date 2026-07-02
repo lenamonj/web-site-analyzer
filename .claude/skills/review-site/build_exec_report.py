@@ -473,6 +473,43 @@ def add_vitals_panel(document, web_vitals):
     add_run(src, web_vitals.get("captured_note", ""), size=8, italic=True, color=MUTED_RGB)
 
 
+def add_key_dates_panel(document, key_dates):
+    """A card strip of conversation-starter dates (certificate and domain
+    renewal, domain age). Same white-card language as the vitals panel; the
+    value is a date, with a small relative-time line beneath it."""
+    items = key_dates.get("items") or []
+    if not items:
+        return
+    table = document.add_table(rows=1, cols=len(items))
+    set_table_borders(table, top=(4, HAIRLINE_HEX), bottom=(4, HAIRLINE_HEX),
+                      left=(4, HAIRLINE_HEX), right=(4, HAIRLINE_HEX),
+                      insideV=(4, HAIRLINE_HEX))
+    set_table_padding(table, top=110, bottom=110, left=130, right=130)
+    for cell, item in zip(table.rows[0].cells, items):
+        cell.text = ""
+        p1 = cell.paragraphs[0]
+        p1.paragraph_format.space_after = Pt(2)
+        add_run(p1, item.get("label", "").upper(), size=8, bold=True,
+                color=MUTED_RGB, letter_spacing=12)
+        p2 = cell.add_paragraph()
+        p2.paragraph_format.space_after = Pt(2)
+        add_run(p2, str(item.get("value", "")), size=14, bold=True,
+                color=ACCENT_RGB, font=DISPLAY_FONT)
+        detail = item.get("detail", "")
+        if detail:
+            p3 = cell.add_paragraph()
+            p3.paragraph_format.space_after = Pt(0)
+            add_run(p3, detail, size=8, color=MUTED_RGB)
+    set_col_widths(table, [Inches(7.0 / len(items))] * len(items))
+    keep_rows_together(table)
+    note = key_dates.get("note")
+    if note:
+        src = document.add_paragraph()
+        src.paragraph_format.space_before = Pt(3)
+        src.paragraph_format.space_after = Pt(0)
+        add_run(src, note, size=8, italic=True, color=MUTED_RGB)
+
+
 def _shade_run(run, hex_fill):
     """Highlight one run with a solid fill (a chip inside a paragraph)."""
     shd = OxmlElement("w:shd")
@@ -699,6 +736,9 @@ def build(data, out_path):
         section_titles.append("Measured posture")
     if web_vitals and web_vitals.get("metrics"):
         section_titles.append("Core Web Vitals")
+    key_dates = data.get("key_dates")
+    if key_dates and key_dates.get("items"):
+        section_titles.append("Key dates")
     if data.get("findings"):
         section_titles.append("Key findings hurting the site")
     if data.get("recommendations"):
@@ -770,6 +810,11 @@ def build(data, out_path):
     if web_vitals and web_vitals.get("metrics"):
         section_heading(document, "Core Web Vitals", number_of.get("Core Web Vitals"))
         add_vitals_panel(document, web_vitals)
+
+    # Key dates: conversation-starter facts (certificate and domain renewal)
+    if key_dates and key_dates.get("items"):
+        section_heading(document, "Key dates", number_of.get("Key dates"))
+        add_key_dates_panel(document, key_dates)
 
     # Key findings, most severe first
     findings = sorted(

@@ -106,10 +106,11 @@ def _scan(target):
     covered = any(_host_matches(host, s) for s in sans)
 
     not_after = cert.get("notAfter")
-    expiry_epoch, days_left = (None, None)
+    expiry_epoch, days_left, expires_on = (None, None, None)
     expiry_verdict, expiry_note = "info", "Certificate expiry not reported by peer."
     if not_after:
         expiry_epoch, days_left = _parse_not_after(not_after)
+        expires_on = time.strftime("%Y-%m-%d", time.gmtime(expiry_epoch))
         if days_left < 0:
             expiry_verdict, expiry_note = "fail", f"Certificate expired {abs(days_left)} days ago."
         elif days_left < EXPIRY_WARN_DAYS:
@@ -146,6 +147,7 @@ def _scan(target):
         "subject_cn": subject.get("commonName"),
         "not_before": cert.get("notBefore"),
         "not_after": not_after,
+        "expires_on": expires_on,
         "days_to_expiry": days_left,
         "san_dns": sans,
         "hostname_covered": covered,

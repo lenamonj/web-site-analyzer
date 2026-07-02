@@ -1251,3 +1251,43 @@ the bottom, score_site reduction, CSV/Markdown rendering, file/CLI input - all
 via a stubbed run, no network). Live smoke on example.com, neverssl.com,
 python.org ranked worst-first (neverssl Weak 0.43 top) with correct measured
 hooks. README and SKILL.md documented the mode.
+
+---
+
+## 2026-07-02 - J4: key-dates conversation starters (user request)
+
+**Task:** J4 per PLAN.md section 37. The user wanted cert/domain expiry dates
+in the report as outreach conversation starters for his son. Cert expiry was
+already measured (scan_tls days_to_expiry), just buried; domain registration
+was one RDAP lookup away.
+
+**What I did:**
+- common.rdap_domain: an RDAP lookup (the JSON successor to WHOIS) that
+  resolves the registry's RDAP server via the cached IANA bootstrap and reads
+  the standard registration/expiration events. Passive public data,
+  stdlib-only, split into a pure parse_rdap_domain for offline testing, and
+  added to the stubbed network-primitive set so the suite never touches the
+  network. Unsupported TLDs and failures return ok=False - honest degradation,
+  never a fabricated date.
+- scan_dns_email.check_domain_registration: domain_expiry and (when known)
+  domain_created checks, both INFO verdicts so they are never graded and the
+  email-auth band is untouched. iso_days is a pure days/date helper.
+- scan_tls now emits an ISO expires_on so the report has a clean cert date.
+- draft_report_data._key_dates assembles a panel (SSL certificate renews,
+  Domain renews, Domain registered) from the cert date and the domain checks,
+  with a relative-time detail per card; None when nothing is measurable.
+- build_exec_report.add_key_dates_panel renders a white-card strip under a
+  numbered "Key dates" section after Core Web Vitals; it joins the cover
+  contents and numbering automatically.
+
+**What I verified:** scanner suite 234 -> 242, builder 20 -> 21, all green
+offline. Live RDAP: python.org (registered 1995-03-27, renews 2033-03-28),
+example.com (registered 1995-08-14, renews 2026-08-13). .co has no public RDAP
+service (absent from the IANA bootstrap; the registry endpoint does not
+resolve), so archanalytics.co honestly shows only the SSL certificate card and
+omits the domain card - the degradation path working exactly as designed. The
+example.com report renders all three cards; both PDFs verified page by page.
+
+**Note on scope order:** I built J4 before writing its PLAN.md spec, then
+backfilled section 37 to keep the code comments (which reference it) accurate.
+The standing rule is spec-first; recorded here as the exception.

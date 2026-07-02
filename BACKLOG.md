@@ -54,6 +54,18 @@ serves.
   defect: snapshots are now refreshed every run instead of frozen at first
   capture (the page is loaded for metrics anyway, so refresh is free).
 
+- [x] **J4 (done, M)** Key-dates conversation starters. Spec: PLAN.md section
+  37. New common.rdap_domain (IANA-bootstrap RDAP lookup, passive, stdlib-only,
+  stubbed offline, honest degradation on unsupported TLDs); scan_dns_email
+  domain_expiry + domain_created info checks (never scored, so the email-auth
+  band is unchanged); scan_tls gains an ISO expires_on. draft_report_data
+  assembles a key_dates panel (cert renewal, domain renewal, domain age) and
+  the builder renders it as a white-card "Key dates" section. Suite 234 -> 242
+  scanner + 20 -> 21 builder. Live: RDAP returned real dates for python.org
+  (registered 1995, renews 2033) and example.com; .co has no public RDAP so
+  archanalytics honestly shows only the SSL cert card. example.com report
+  renders all three cards.
+
 ## Phase A - Foundation (registry + contract enforcement)
 
 ## Phase B - Self-describing tools

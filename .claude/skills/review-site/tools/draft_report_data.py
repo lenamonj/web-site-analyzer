@@ -291,6 +291,44 @@ def _finding_from_issue(issue, slug):
     }
 
 
+def _in_days(days):
+    """A short relative-time phrase for a day count, or '' when unknown."""
+    if days is None:
+        return ""
+    d = round(days)
+    if d < 0:
+        return f"expired {abs(d)} days ago"
+    return f"in {d} days"
+
+
+def _key_dates(scan):
+    """Conversation-starter facts for the report: when the SSL certificate and
+    the domain registration renew, and how long the domain has been held. All
+    passively measured; nothing here is a posture judgement."""
+    host_scans = scan.get("host_scans") or {}
+    items = []
+
+    tls = host_scans.get("tls") or {}
+    if tls.get("expires_on"):
+        items.append({"label": "SSL certificate renews", "value": tls["expires_on"],
+                      "detail": _in_days(tls.get("days_to_expiry"))})
+
+    dns = (host_scans.get("dns_email") or {}).get("checks") or {}
+    de = dns.get("domain_expiry") or {}
+    if de.get("date"):
+        items.append({"label": "Domain renews", "value": de["date"],
+                      "detail": _in_days(de.get("days_to_expiry"))})
+    dc = dns.get("domain_created") or {}
+    if dc.get("date"):
+        detail = f"about {dc['age_years']} years ago" if dc.get("age_years") else ""
+        items.append({"label": "Domain registered", "value": dc["date"], "detail": detail})
+
+    if not items:
+        return None
+    return {"items": items,
+            "note": "Public certificate and domain-registration facts, passively measured."}
+
+
 def draft(scan):
     """Build a first-draft exec_report_data dict from a scan_site result dict."""
     slug = scan.get("slug", "site")
@@ -340,6 +378,7 @@ def draft(scan):
         "scope": scope,
         "progress": progress,
         "web_vitals": _web_vitals(scan),
+        "key_dates": _key_dates(scan),
         "assessment": assessment,
         "scorecard": scorecard,
         "findings": findings,
