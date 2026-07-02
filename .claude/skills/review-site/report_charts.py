@@ -151,7 +151,12 @@ def render_trend_charts(trend, out_dir, prefix):
             ax.set_title(key[:-len("_score")], fontsize=8.5, color=INK, pad=3)
             ax.set_ylim(0, 1.08)
             ax.set_yticks([0, 1])
-            if i // cols == rows - 1:
+            _label_endpoint(ax, series[key], lambda v: f"{v:.2f}",
+                            fontsize=7)
+            if i + cols >= len(cats):
+                # No panel below this one in its column, so it carries the
+                # quarter labels; on a ragged grid that is not always the
+                # global last row.
                 _quarter_ticks(ax, quarters, full=False, fontsize=6.5)
             else:
                 ax.set_xticks([])
@@ -174,7 +179,10 @@ def render_trend_charts(trend, out_dir, prefix):
             _style_axis(ax)
             ax.set_title(title, fontsize=8.5, color=INK, pad=3)
             _quarter_ticks(ax, quarters, full=False, fontsize=6.5)
-            ax.set_ylim(bottom=0)
+            # Explicit top headroom so an endpoint at the series maximum
+            # keeps its label clear of the panel title.
+            top = max(v for v in series[key] if v is not None)
+            ax.set_ylim(0, top * 1.18 if top > 0 else 1)
             _label_endpoint(ax, series[key], fmt, fontsize=8)
         fig.tight_layout()
         path = out_dir / f"{prefix}_trend_metrics.png"
