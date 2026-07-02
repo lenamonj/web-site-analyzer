@@ -43,6 +43,7 @@ import scan_site as site
 import scan_tls as tls
 import scan_vitals as vitals
 import triage as triage_mod
+import trends as trends_mod
 
 # The suite is offline by definition: no test may reach the real CrUX API or
 # read real keys from the developer's environment or .env. Tests that need
@@ -3043,6 +3044,98 @@ class TestRunOutputsAndArchive(unittest.TestCase):
             # The second run's delta compared against the first ledger entry.
             self.assertEqual(second["delta"]["previous_measured_at"],
                              "2026-07-03T10:00:00Z")
+
+
+class TestTrends(unittest.TestCase):
+    def _entry(self, ts, overall=0.7, seo=0.8, lcp=2000, fails=(), pages=5,
+               with_metrics=True):
+        e = {
+            "measured_at_utc": ts,
+            "pages_scanned": pages,
+            "bands": {"overall": "Adequate", "seo": "Strong"},
+            "issues": {"fail": [{"scan": "http_security", "check": c,
+                                 "verdict": "fail", "note": f"{c} missing"}
+                                for c in fails],
+                       "warn": []},
+        }
+        if with_metrics:
+            e["metrics"] = {
+                "scores": {"overall": overall, "seo": seo},
+                "pages": {"median_lcp_ms": lcp, "median_cls": None,
+                          "median_tbt_ms": None, "median_weight_kb": None,
+                          "max_weight_kb": None, "median_reading_ease": None,
+                          "broken_links": None, "links_checked": None,
+                          "mixed_content": None, "third_party_origins": None,
+                          "known_trackers": None},
+                "vitals_captured": lcp is not None,
+            }
+        return e
+
+    def test_quarter_of(self):
+        self.assertEqual(trends_mod.quarter_of("2026-07-02T15:37:23Z"), "2026-Q3")
+        self.assertEqual(trends_mod.quarter_of("2025-12-31T23:59:59Z"), "2025-Q4")
+        self.assertEqual(trends_mod.quarter_of("2026-01-01T00:00:00Z"), "2026-Q1")
+        self.assertIsNone(trends_mod.quarter_of(None))
+        self.assertIsNone(trends_mod.quarter_of("garbage"))
+
+    def test_latest_run_per_quarter_wins(self):
+        entries = [self._entry("2026-01-10T10:00:00Z", overall=0.5),
+                   self._entry("2026-07-01T10:00:00Z", overall=0.6),
+                   self._entry("2026-09-20T10:00:00Z", overall=0.9)]
+        points = trends_mod.quarterly_points(entries)
+        self.assertEqual([q for q, _ in points], ["2026-Q1", "2026-Q3"])
+        self.assertEqual(points[-1][1]["metrics"]["scores"]["overall"], 0.9)
+
+    def test_no_trend_under_two_quarterly_points(self):
+        self.assertIsNone(trends_mod.build_trend([]))
+        same_quarter = [self._entry("2026-07-01T10:00:00Z"),
+                        self._entry("2026-09-01T10:00:00Z")]
+        self.assertIsNone(trends_mod.build_trend(same_quarter))
+
+    def test_series_align_to_quarters_with_gaps(self):
+        entries = [self._entry("2026-01-10T10:00:00Z", overall=0.6, lcp=3000),
+                   self._entry("2026-04-10T10:00:00Z", with_metrics=False),
+                   self._entry("2026-07-10T10:00:00Z", overall=0.8, lcp=2000)]
+        t = trends_mod.build_trend(entries)
+        self.assertEqual(t["quarters"], ["2026-Q1", "2026-Q2", "2026-Q3"])
+        self.assertEqual(t["series"]["overall_score"], [0.6, None, 0.8])
+        self.assertEqual(t["series"]["median_lcp_ms"], [3000, None, 2000])
+        # A metric never measured in any quarter gets no series at all.
+        self.assertNotIn("median_weight_kb", t["series"])
+
+    def test_latest_delta_directions_and_named_resolved(self):
+        entries = [self._entry("2026-01-10T10:00:00Z", overall=0.6, seo=0.8,
+                               fails=("hsts", "csp")),
+                   self._entry("2026-04-10T10:00:00Z", overall=0.8, seo=0.9,
+                               fails=("csp",), pages=6)]
+        d = trends_mod.build_trend(entries)["latest_delta"]
+        self.assertEqual(d["prev_quarter"], "2026-Q1")
+        self.assertEqual(d["quarter"], "2026-Q2")
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        self.assertEqual(seo_row["direction"], "improved")
+        self.assertEqual(seo_row["prev_score"], 0.8)
+        self.assertEqual(seo_row["score"], 0.9)
+        self.assertEqual(d["new_findings"], 0)
+        self.assertEqual(d["resolved_findings"], 1)
+        self.assertEqual(d["resolved_examples"],
+                         ["[http_security] hsts: hsts missing"])
+        self.assertEqual(d["pages_scanned"], {"prev": 5, "current": 6})
+
+    def test_pre_metrics_entries_hold_direction(self):
+        entries = [self._entry("2026-01-10T10:00:00Z", with_metrics=False),
+                   self._entry("2026-04-10T10:00:00Z", with_metrics=False)]
+        d = trends_mod.build_trend(entries)["latest_delta"]
+        self.assertTrue(all(r["direction"] == "held" for r in d["scorecard"]))
+
+    def test_trend_from_ledger_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "h.jsonl"
+            with open(path, "w", encoding="utf-8") as f:
+                for e in [self._entry("2026-01-10T10:00:00Z"),
+                          self._entry("2026-04-10T10:00:00Z")]:
+                    f.write(json.dumps(e) + "\n")
+            t = trends_mod.trend_from_ledger(path)
+        self.assertEqual(t["quarters"], ["2026-Q1", "2026-Q2"])
 
 
 if __name__ == "__main__":
