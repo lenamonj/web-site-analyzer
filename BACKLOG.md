@@ -63,7 +63,7 @@ serves.
   Analytics origin). Fixed the three defects the shakedown confirmed, each
   with regression tests: (1) logo-link false positive - anchors wrapping an
   image with alt text now carry that accessible name (was flagged on all 12
-  arch pages and 15 python.org pages, and had to be hand-corrected in the
+  client-a pages and 15 python.org pages, and had to be hand-corrected in the
   July 1 report); (2) prose metrics on listing pages - readability now
   reports info when sentences are absurd (wps > 50) or when over half the
   visible words are link text (python.org events pages scored Flesch -13.6);
