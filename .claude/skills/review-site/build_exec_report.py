@@ -442,6 +442,10 @@ def add_trend_section(document, trend, chart_dir, prefix, number):
     # Charts start at three quarterly points; a two-point line implies a
     # slope one interval cannot support, so the table carries the QoQ story.
     if len(trend.get("quarters") or []) >= 3:
+        if not prefix:
+            raise ValueError("data['slug'] is required to name trend chart "
+                             "files; refusing to guess a shared prefix that "
+                             "could collide across clients")
         charts = report_charts.render_trend_charts(trend, chart_dir, prefix)
         for chart in charts:
             cap = document.add_paragraph()
@@ -856,8 +860,7 @@ def build(data, out_path, chart_dir=None):
         add_assessment(document, assessment)
 
     if trend:
-        add_trend_section(document, trend, chart_dir,
-                          data.get("slug") or "site",
+        add_trend_section(document, trend, chart_dir, data.get("slug"),
                           number_of.get("Progress this quarter"))
 
     # Measured posture scorecard (optional; only when the scan supplied one)

@@ -41,13 +41,19 @@ def quarter_of(ts):
 
 
 def quarterly_points(entries):
-    """One (quarter, entry) pair per quarter, oldest quarter first. The
-    ledger is append-only and chronological, so the last entry seen in a
-    quarter is that quarter's data point."""
+    """One (quarter, entry) pair per quarter, oldest quarter first. Within a
+    quarter the entry with the greatest measured_at_utc wins (ISO 8601
+    timestamps compare lexicographically; a missing stamp sorts as ""), so a
+    backfilled ledger line appended out of chronological order can never
+    shadow a later run just by coming after it in the file."""
     by_quarter = {}
     for e in entries:
         q = quarter_of(e.get("measured_at_utc"))
-        if q:
+        if not q:
+            continue
+        ts = e.get("measured_at_utc") or ""
+        winner = by_quarter.get(q)
+        if winner is None or ts >= (winner.get("measured_at_utc") or ""):
             by_quarter[q] = e
     return sorted(by_quarter.items())
 
@@ -106,6 +112,17 @@ def _delta_rows(prev, curr):
                      "prev_band": prev_band,
                      "band": band,
                      "prev_score": p, "score": c, "direction": direction})
+    # A category scored last quarter but absent this quarter (retired check,
+    # or simply not yet measured) still belongs in the scorecard rather than
+    # silently disappearing; it reads as held with no current band.
+    for name in prev_bands:
+        if name == "overall" or name in curr_bands:
+            continue
+        rows.append({"category": name,
+                     "prev_band": prev_bands.get(name),
+                     "band": None,
+                     "prev_score": _score(prev, name), "score": _score(curr, name),
+                     "direction": "held"})
     return rows
 
 

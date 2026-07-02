@@ -44,6 +44,30 @@ class TestPanelSelection(unittest.TestCase):
         self.assertEqual(keys, ["broken_links"])
 
 
+class TestMatplotlibGuard(unittest.TestCase):
+    """K2: the missing-matplotlib failure must track actual need, not just
+    presence of a trend. Always runs (fakes HAVE_MPL rather than depending
+    on whether matplotlib happens to be installed here)."""
+
+    def setUp(self):
+        self._real_have_mpl = rc.HAVE_MPL
+        rc.HAVE_MPL = False
+        self.addCleanup(setattr, rc, "HAVE_MPL", self._real_have_mpl)
+
+    def test_all_sparse_trend_returns_empty_without_matplotlib(self):
+        trend = {"quarters": ["2026-Q1", "2026-Q2", "2026-Q3"],
+                 "series": {"overall_score": [None, None, 0.8],
+                            "median_lcp_ms": [None, None, 2100]},
+                 "latest_delta": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(rc.render_trend_charts(trend, tmp, "x"), [])
+
+    def test_drawable_trend_raises_without_matplotlib(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                rc.render_trend_charts(TREND, tmp, "acme-example")
+
+
 @unittest.skipUnless(rc.HAVE_MPL, "matplotlib not installed")
 class TestRenderTrendCharts(unittest.TestCase):
     def test_renders_three_pngs_with_captions(self):

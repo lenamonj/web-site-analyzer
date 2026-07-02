@@ -106,9 +106,28 @@ def _save(fig, path):
     plt.close(fig)
 
 
+def _any_series_drawable(series):
+    """Whether render_trend_charts would draw anything at all: the overall
+    line, any category score line, or any metric panel. Pure and mpl-free,
+    so callers can decide whether matplotlib is actually needed before
+    demanding it."""
+    if drawable(series.get("overall_score")):
+        return True
+    if any(k.endswith("_score") and k != "overall_score" and drawable(v)
+           for k, v in series.items()):
+        return True
+    return bool(metric_panels(series))
+
+
 def render_trend_charts(trend, out_dir, prefix):
     """Render the report's trend PNGs; returns {'caption','path'} dicts in
-    embed order. Only series with at least two measured quarters draw."""
+    embed order. Only series with at least two measured quarters draw. A
+    trend with nothing drawable (e.g. an all-pre-metrics ledger) returns []
+    without needing matplotlib at all; matplotlib is only demanded once
+    something is actually about to be drawn."""
+    series = trend.get("series") or {}
+    if not _any_series_drawable(series):
+        return []
     if not HAVE_MPL:
         raise RuntimeError("matplotlib is required to draw the trend charts "
                            "in this report: pip install matplotlib")
@@ -117,7 +136,6 @@ def render_trend_charts(trend, out_dir, prefix):
     plt.rcParams["font.family"] = "sans-serif"
     plt.rcParams["font.sans-serif"] = SANS
     quarters = trend["quarters"]
-    series = trend.get("series") or {}
     charts = []
 
     overall = series.get("overall_score")

@@ -419,8 +419,13 @@ def attach_delta(result, json_path, history_path=None):
 def archive_scan(result, out_dir):
     """Immutable per-run copy of the full scan JSON. The ledger keeps the
     chosen metrics; the archive keeps everything, so a metric not in today's
-    ledger schema can still be backfilled into future trends."""
-    stamp = re.sub(r"[-:]", "", result.get("measured_at_utc") or "unknown")
+    ledger schema can still be backfilled into future trends. The archive is
+    irreplaceable business data, so a run with no timestamp is refused
+    rather than silently stamped (and later overwritten) as "unknown"."""
+    if not result.get("measured_at_utc"):
+        raise ValueError("scan result has no measured_at_utc; refusing to "
+                          "archive without a timestamp")
+    stamp = re.sub(r"[-:]", "", result["measured_at_utc"])
     archive_dir = Path(out_dir) / "archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
     path = archive_dir / f"{result['slug']}_scan_{stamp}.json"

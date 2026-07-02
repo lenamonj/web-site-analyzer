@@ -373,6 +373,25 @@ class TestTrendSection(unittest.TestCase):
         # overall + categories (one drawable category) + metrics figure
         self.assertEqual(len(doc.inline_shapes), 3)
 
+    def test_three_quarter_trend_without_slug_raises(self):
+        """K4: chart file names are prefixed with the slug so two clients'
+        trend PNGs can never collide under the shared rendered/ directory;
+        a missing slug must fail loudly rather than fall back to "site"."""
+        data = self._data(TREND_3Q)
+        del data["slug"]
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                self._doc(data, tmp)
+
+    def test_two_quarter_trend_without_slug_still_builds(self):
+        """No charts render below three quarters, so the missing slug never
+        matters and the report must still build."""
+        data = self._data(TREND_2Q)
+        del data["slug"]
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._doc(data, tmp)
+        self.assertEqual(len(doc.inline_shapes), 0)
+
     def test_cover_contents_list_includes_progress_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             doc = self._doc(self._data(TREND_2Q), tmp)

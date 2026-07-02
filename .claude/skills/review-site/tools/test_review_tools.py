@@ -2331,6 +2331,23 @@ class TestDraftTrend(unittest.TestCase):
         self.assertEqual(data["slug"], "acme-example")
         self.assertIsNone(data["progress"])
 
+    def test_draft_with_delta_and_trend_keeps_both(self):
+        """K5: a scan carrying both a run-over-run delta and a quarterly
+        trend must surface both in progress, not let one crowd out the
+        other."""
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["delta"] = {"previous_measured_at": "2026-04-01T09:00:00Z",
+                         "new": [{"check": "x"}],
+                         "resolved": [{"check": "y"}, {"check": "z"}]}
+        trend = {"quarters": ["2026-Q2", "2026-Q3"], "series": {},
+                 "latest_delta": {"new_findings": 1, "resolved_findings": 2}}
+        data = drpt.draft(scan, trend=trend)
+        progress = data["progress"]
+        self.assertEqual(progress["previous_date"], "2026-04-01")
+        self.assertEqual(progress["new_issues"], 1)
+        self.assertEqual(progress["resolved_issues"], 2)
+        self.assertEqual(progress["trend"]["quarters"], ["2026-Q2", "2026-Q3"])
+
 
 class TestTitleExtraction(unittest.TestCase):
     def test_title_is_rcdata_with_charrefs_converted(self):
@@ -3074,6 +3091,16 @@ class TestRunOutputsAndArchive(unittest.TestCase):
             self.assertEqual(second["delta"]["previous_measured_at"],
                              "2026-07-03T10:00:00Z")
 
+    def test_archive_scan_refuses_without_measured_at_utc(self):
+        """K3: the archive is irreplaceable business data, so a scan result
+        with no timestamp must not silently land as an overwritable
+        'unknown' file; it must raise instead."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._result("2026-07-03T10:00:00Z")
+            result["measured_at_utc"] = ""
+            with self.assertRaises(ValueError):
+                site.archive_scan(result, Path(tmp))
+
 
 class TestTrends(unittest.TestCase):
     def _entry(self, ts, overall=0.7, seo=0.8, lcp=2000, fails=(), pages=5,
@@ -3114,6 +3141,28 @@ class TestTrends(unittest.TestCase):
         points = trends_mod.quarterly_points(entries)
         self.assertEqual([q for q, _ in points], ["2026-Q1", "2026-Q3"])
         self.assertEqual(points[-1][1]["metrics"]["scores"]["overall"], 0.9)
+
+    def test_quarter_winner_by_latest_timestamp_regardless_of_file_order(self):
+        """K1: a backfilled ledger line appended after a later run must not
+        shadow the run with the later measured_at_utc within the quarter."""
+        entries = [self._entry("2026-07-20T10:00:00Z", overall=0.9),
+                   self._entry("2026-07-05T09:00:00Z", overall=0.4)]
+        points = trends_mod.quarterly_points(entries)
+        self.assertEqual([q for q, _ in points], ["2026-Q3"])
+        self.assertEqual(points[0][1]["metrics"]["scores"]["overall"], 0.9)
+
+    def test_quarter_sort_and_winner_across_year_boundary(self):
+        """K5 year-boundary case: quarters spanning 2025-Q4 into 2026-Q1
+        sort in calendar order, and the K1 winner rule still holds inside
+        the 2026-Q1 group even though its later-timestamp entry comes
+        first in file order."""
+        entries = [self._entry("2026-01-20T10:00:00Z", overall=0.9),
+                   self._entry("2025-12-15T09:00:00Z", overall=0.5),
+                   self._entry("2026-01-05T08:00:00Z", overall=0.3)]
+        points = trends_mod.quarterly_points(entries)
+        self.assertEqual([q for q, _ in points], ["2025-Q4", "2026-Q1"])
+        by_quarter = dict(points)
+        self.assertEqual(by_quarter["2026-Q1"]["metrics"]["scores"]["overall"], 0.9)
 
     def test_no_trend_under_two_quarterly_points(self):
         self.assertIsNone(trends_mod.build_trend([]))
@@ -3182,6 +3231,23 @@ class TestTrends(unittest.TestCase):
         d = trends_mod.build_trend(entries)["latest_delta"]
         seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
         self.assertEqual(seo_row["direction"], "held")
+
+    def test_delta_includes_prev_only_category_as_held(self):
+        """K5: a category present in the previous quarter's bands but
+        retired (or not yet scored) this quarter must still surface, not
+        vanish from the scorecard."""
+        entries = [self._entry("2026-01-10T10:00:00Z",
+                               bands={"overall": "Adequate", "seo": "Strong",
+                                      "design": "Strong"}),
+                   self._entry("2026-04-10T10:00:00Z",
+                               bands={"overall": "Adequate", "seo": "Strong"})]
+        d = trends_mod.build_trend(entries)["latest_delta"]
+        self.assertEqual([r["category"] for r in d["scorecard"]],
+                         ["seo", "design"])
+        design_row = next(r for r in d["scorecard"] if r["category"] == "design")
+        self.assertEqual(design_row["prev_band"], "Strong")
+        self.assertIsNone(design_row["band"])
+        self.assertEqual(design_row["direction"], "held")
 
     def test_trend_from_ledger_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
