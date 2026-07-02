@@ -1076,3 +1076,61 @@ existing invariants (chip fills, ordering, appendix). Visual verdict on a
 rendered PDF of the machine-draft example.com report (converted via the
 Adobe document service when no local converter exists), then the docx goes
 to the user for the final call, per the F1 precedent.
+
+## 36. Design: prospect triage mode (task J3)
+Purpose: the full pipeline produces one deep, browser-driven report per site.
+The outreach workflow is the inverse - sweep many company sites quickly and
+find the few worth a full review and a pitch. Triage serves that: a fast,
+static-only, homepage-only pass across a domain list that ranks sites
+worst-first (a worse measured posture is a stronger prospect) and hands the
+salesperson a one-line door-opener per site.
+
+Constraints:
+- Reuses the existing scoring engine (scan_site.run homepage-only); no new
+  measurement. Strictly passive and external, same charter as every scanner.
+- Static-only: no browser capture, no crawl, no page discovery. One homepage
+  scan per domain (host scans plus the homepage page scans). This is the
+  light path, so a large list finishes in minutes.
+- Serial across domains with a fixed inter-domain delay. Serial is both the
+  polite choice (each host sees one visitor) and the correct one:
+  scan_site.run toggles the module-global fetch cache, which is not safe to
+  drive from concurrent scans. A concurrent mode is possible later but is out
+  of scope here.
+- Prospect data is sensitive business material and never enters git: input
+  and output live under the already-ignored sales/ directory.
+
+New tools/triage.py (a utility like crawler.py, not a registered scanner):
+- read_domains(source): domains/URLs from a file (one per line, # comments
+  ignored) or a passed list; normalized via common.normalize_url.
+- score_site(url): runs scan_site.run(url, []) and reduces the result to a
+  triage row: domain, reachable, overall_band, overall_score, worst
+  category (lowest-scoring measured category) and its band, fail/warn counts,
+  and hook (below). An unreachable or crashing domain yields a reachable=False
+  row (itself a prospect signal), never aborting the batch.
+- pick_hook(result): the single most compelling measured door-opener, chosen
+  by a fixed priority so the cold open is specific and true. Priority order:
+  (1) no HTTPS at all / no HTTP->HTTPS redirect; (2) TLS certificate expiring
+  soon or expired (with the measured days); (3) analytics/trackers firing with
+  no consent mechanism (GDPR/CCPA framing); (4) missing baseline security
+  headers (HSTS/CSP/clickjacking); (5) Poor/Weak performance band; (6) Poor/
+  Weak accessibility band; (7) homepage SEO gaps (no H1 or no meta
+  description); else the worst category as a generic hook. Each hook is a
+  short phrase plus the measured fact it rests on.
+- rank(rows): reachable sites sorted by overall_score ascending (worst first);
+  unreachable sites listed after, flagged. Deterministic tie-break by domain.
+- write_csv / write_markdown: a ranked CSV (CRM import) and a ranked Markdown
+  table (quick read) under sales/. Columns: rank, domain, band, score,
+  worst area, fails, warns, hook.
+- main(): reads sales/prospects.txt (or PROSPECTS.txt at root, or CLI-listed
+  domains), scores each serially with a delay, writes both outputs, and
+  prints the ranked table.
+
+Tests (offline, canned scan results, no network): hook priority matrix (each
+tier wins when higher tiers are absent), worst-category selection, rank order
+including an unreachable row sinking to the bottom, and CSV/Markdown row
+rendering. score_site is exercised against a stubbed scan_site.run so no
+network is touched.
+
+Docs: README triage section, a SKILL.md note, and a committed
+PROSPECTS.example.txt template at the repo root (the live prospects.txt and
+all triage output stay under the ignored sales/).

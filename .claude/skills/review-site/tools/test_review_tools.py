@@ -42,6 +42,7 @@ import scan_crux as crux_scan
 import scan_site as site
 import scan_tls as tls
 import scan_vitals as vitals
+import triage as triage_mod
 
 # The suite is offline by definition: no test may reach the real CrUX API or
 # read real keys from the developer's environment or .env. Tests that need
@@ -2671,6 +2672,152 @@ class TestCaptureRendered(unittest.TestCase):
         finally:
             common.env_value = orig
             Path(fake).unlink(missing_ok=True)
+
+
+def _triage_result(host, overall_score, categories, host_checks=None,
+                   page_checks=None, totals=None):
+    """A minimal scan_site.run-shaped result for triage tests (PLAN.md 36)."""
+    def grade(score):
+        band = ("Strong" if score >= 0.85 else "Adequate" if score >= 0.65
+                else "Weak" if score >= 0.4 else "Poor")
+        return {"score": score, "band": band, "pass": 0, "warn": 0, "fail": 0}
+    return {
+        "target": f"https://{host}", "host": host, "slug": host.replace(".", "-"),
+        "scorecard": {
+            "overall": grade(overall_score),
+            "categories": {name: grade(s) for name, s in categories.items()},
+        },
+        "totals": totals or {"fail": 0, "warn": 0},
+        "host_scans": {tool: {"checks": checks}
+                       for tool, checks in (host_checks or {}).items()},
+        "page_scans": [{"url": f"https://{host}", **{
+            tool: {"ok": True, "checks": checks}
+            for tool, checks in (page_checks or {}).items()}}],
+    }
+
+
+class TestTriage(unittest.TestCase):
+    def test_plain_http_is_the_top_hook(self):
+        r = _triage_result("a.example", 0.3, {"security": 0.3},
+                           host_checks={"http_security": {
+                               "https_redirect": {"verdict": "fail", "note": "no redirect"}}})
+        self.assertIn("plain HTTP", triage_mod.pick_hook(r))
+
+    def test_cert_expiry_hook_when_https_is_fine(self):
+        r = _triage_result("a.example", 0.6, {"tls": 0.5},
+                           host_checks={
+                               "http_security": {"https_redirect": {"verdict": "pass"}},
+                               "tls": {"expiry": {"verdict": "warn",
+                                                  "note": "Certificate expires in 12.0 days."}}})
+        hook = triage_mod.pick_hook(r)
+        self.assertIn("certificate", hook.lower())
+        self.assertIn("12.0 days", hook)
+
+    def test_consent_hook_needs_both_trackers_and_no_consent(self):
+        base_host = {"http_security": {"https_redirect": {"verdict": "pass"}},
+                     "tls": {"expiry": {"verdict": "pass"}}}
+        r = _triage_result("a.example", 0.7, {"privacy": 0.6}, host_checks=base_host,
+                           page_checks={"privacy": {
+                               "known_trackers": {"verdict": "warn"},
+                               "cookie_consent": {"verdict": "warn"}}})
+        self.assertIn("consent", triage_mod.pick_hook(r).lower())
+        # Trackers present but a consent mechanism detected: no consent hook.
+        r2 = _triage_result("a.example", 0.7, {"privacy": 0.9}, host_checks=base_host,
+                            page_checks={"privacy": {
+                                "known_trackers": {"verdict": "warn"},
+                                "cookie_consent": {"verdict": "pass"}}})
+        self.assertNotIn("consent", triage_mod.pick_hook(r2).lower())
+
+    def test_hook_falls_through_to_weakest_area(self):
+        # Everything higher-priority is clean; the hook names the worst category.
+        r = _triage_result("a.example", 0.7,
+                           {"security": 0.95, "design": 0.6, "seo": 0.8},
+                           host_checks={
+                               "http_security": {"https_redirect": {"verdict": "pass"},
+                                                 "hsts": {"verdict": "pass"},
+                                                 "content_security_policy": {"verdict": "pass"},
+                                                 "clickjacking": {"verdict": "pass"}},
+                               "tls": {"expiry": {"verdict": "pass"}}})
+        hook = triage_mod.pick_hook(r)
+        self.assertIn("design", hook)
+
+    def test_worst_category_picks_the_lowest_score(self):
+        r = _triage_result("a.example", 0.7,
+                           {"security": 0.9, "readability": 0.4, "seo": 0.8})
+        name, band = triage_mod.worst_category(r)
+        self.assertEqual(name, "readability")
+        self.assertEqual(band, "Weak")
+
+    def test_score_site_reduces_a_scan_to_a_row(self):
+        result = _triage_result("weak.example", 0.35, {"security": 0.2},
+                                totals={"fail": 9, "warn": 4},
+                                host_checks={"http_security": {
+                                    "https_redirect": {"verdict": "fail"}}})
+        row = triage_mod.score_site("https://weak.example/", run=lambda url: result)
+        self.assertTrue(row["reachable"])
+        self.assertEqual(row["domain"], "weak.example")
+        self.assertEqual(row["band"], "Poor")
+        self.assertEqual(row["fails"], 9)
+        self.assertIn("plain HTTP", row["hook"])
+
+    def test_unreachable_domain_becomes_a_flagged_row_not_a_crash(self):
+        def boom(url):
+            raise ConnectionError("refused")
+        row = triage_mod.score_site("https://dead.example/", run=boom)
+        self.assertFalse(row["reachable"])
+        self.assertEqual(row["band"], "Unreachable")
+        self.assertIsNone(row["score"])
+        self.assertIn("did not respond", row["hook"])
+
+    def test_rank_orders_worst_first_and_sinks_unreachable(self):
+        rows = [
+            {"domain": "strong.example", "reachable": True, "score": 0.95, "band": "Strong"},
+            {"domain": "poor.example", "reachable": True, "score": 0.30, "band": "Poor"},
+            {"domain": "dead.example", "reachable": False, "score": None, "band": "Unreachable"},
+            {"domain": "mid.example", "reachable": True, "score": 0.60, "band": "Weak"},
+        ]
+        ordered = triage_mod.rank(rows)
+        self.assertEqual([r["domain"] for r in ordered],
+                         ["poor.example", "mid.example", "strong.example", "dead.example"])
+        self.assertEqual([r["rank"] for r in ordered], [1, 2, 3, 4])
+
+    def test_triage_scores_every_domain_serially(self):
+        results = {
+            "https://a.example/": _triage_result("a.example", 0.9, {"security": 0.9}),
+            "https://b.example/": _triage_result("b.example", 0.2, {"security": 0.2}),
+        }
+        ordered = triage_mod.triage(list(results), delay=0,
+                                    run=lambda url: results[url])
+        self.assertEqual(ordered[0]["domain"], "b.example")  # worst first
+        self.assertEqual([r["rank"] for r in ordered], [1, 2])
+
+    def test_read_domains_from_a_list_and_a_file(self):
+        self.assertEqual(triage_mod.read_domains(cli_domains=["acme.com"]),
+                         ["https://acme.com"])
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "list.txt"
+            p.write_text("# a comment\nacme.com\n\nhttps://globex.com\n", encoding="utf-8")
+            self.assertEqual(triage_mod.read_domains(source=str(p)),
+                             ["https://acme.com", "https://globex.com"])
+
+    def test_csv_and_markdown_render_the_ranked_rows(self):
+        rows = triage_mod.rank([
+            {"domain": "poor.example", "reachable": True, "score": 0.30, "band": "Poor",
+             "worst_area": "security headers (Poor)", "fails": 9, "warns": 4,
+             "hook": "Homepage served over plain HTTP with no redirect to HTTPS"},
+            {"domain": "dead.example", "reachable": False, "score": None,
+             "band": "Unreachable", "worst_area": "", "fails": None, "warns": None,
+             "hook": "Site did not respond (ConnectionError)"},
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = triage_mod.write_csv(rows, Path(td) / "t.csv")
+            md_path = triage_mod.write_markdown(rows, Path(td) / "t.md")
+            csv_text = csv_path.read_text(encoding="utf-8")
+            self.assertIn("rank,domain,band,score,worst_area,fails,warns,hook", csv_text)
+            self.assertIn("1,poor.example,Poor,0.30", csv_text)
+            self.assertIn(",dead.example,Unreachable,,", csv_text)  # empty score/counts
+            md_text = md_path.read_text(encoding="utf-8")
+            self.assertIn("| 1 | poor.example | Poor | 0.30 |", md_text)
 
 
 if __name__ == "__main__":

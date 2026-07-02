@@ -1214,3 +1214,40 @@ check the design bar requires (rendered PDF, not just a reopened docx) ran
 locally. Caught and fixed one visual redundancy in review (the score
 suffix duplicated by the bar). Preview docx and PDF went to the user for
 the final visual verdict on the machine-draft example.com report.
+
+---
+
+## 2026-07-02 - J3: prospect triage mode (user request)
+
+**Task:** J3 per PLAN.md section 36 (spec'd first). The user's son will
+review many company sites to find outreach targets. The full pipeline is the
+wrong shape for that (one deep report per site); triage is the inverse - a
+fast pre-screen across many sites that ranks the worst posture first (the
+hottest prospects) and hands over one measured door-opener each.
+
+**What I did:** new tools/triage.py (a utility like crawler.py, not a
+registered scanner). Static, homepage-only, strictly passive, serial with a
+polite inter-domain delay - reuses scan_site.run homepage-only, so triage
+scores and the eventual full-report scores come from the identical engine and
+never contradict each other. Serial is both polite (one visit per host) and
+correct (scan_site.run toggles the module-global fetch cache, unsafe to drive
+concurrently). pick_hook chooses one door-opener by a fixed priority so the
+cold open is specific and true: plain HTTP with no redirect, then TLS cert
+expiry, then trackers firing with no consent (GDPR/CCPA), then missing
+security headers, then a Poor/Weak performance or accessibility band, then
+homepage SEO gaps, else the weakest measured category. Unreachable or crashing
+domains become a flagged row (itself a signal), never aborting the batch.
+Output: a ranked CSV (CRM import) and Markdown table under the git-ignored
+sales/, plus a printed ranked table. Input from sales/prospects.txt, a --file,
+or CLI-listed domains.
+
+**Data hygiene:** prospect lists and results are business material, so they
+live under the already-ignored sales/ directory and never enter git; a
+committed PROSPECTS.example.txt at the repo root is the template.
+
+**What I verified:** suite 223 -> 234 (11 offline triage tests: hook-priority
+matrix, worst-category selection, rank order with an unreachable row sinking to
+the bottom, score_site reduction, CSV/Markdown rendering, file/CLI input - all
+via a stubbed run, no network). Live smoke on example.com, neverssl.com,
+python.org ranked worst-first (neverssl Weak 0.43 top) with correct measured
+hooks. README and SKILL.md documented the mode.

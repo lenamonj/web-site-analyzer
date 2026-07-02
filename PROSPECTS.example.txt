@@ -1,0 +1,15 @@
+# Prospect list template for the triage tool.
+#
+# Copy this to sales/prospects.txt and add one company URL per line. That path
+# lives under the git-ignored sales/ directory, so your prospect data never
+# enters version control. Blank lines and lines starting with # are ignored.
+#
+# Then run, from the repo root:
+#   python .claude/skills/review-site/tools/triage.py
+#
+# It scores each site's homepage (static, passive, one visit each), ranks them
+# worst-posture-first (the hottest prospects), and writes sales/triage_results.csv
+# and sales/triage_results.md.
+
+https://example.com
+https://www.python.org

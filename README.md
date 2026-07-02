@@ -24,6 +24,7 @@ Website Analyzer is a professional site-assessment engine built as a Claude Code
 - [How it works](#how-it-works)
 - [The measurement engine](#the-measurement-engine)
 - [Automated rendered evidence](#automated-rendered-evidence)
+- [Prospect triage: scoring many sites at once](#prospect-triage-scoring-many-sites-at-once)
 - [Evidence discipline](#evidence-discipline)
 - [Install](#install)
 - [Usage](#usage)
@@ -111,6 +112,32 @@ The suite detects client-rendered pages and marks their structural checks inconc
 - No browser installed? The run says so, plainly, and the inconclusive verdicts stand. Nothing is guessed. Performance numbers always stay measured from the real network transfer, never simulated from a snapshot.
 
 The manual capture path (`tools/CAPTURE.md`) remains available for pages where a cookie overlay must be dismissed before capture, and a manual capture is merged with, never clobbered by, the automated one.
+
+---
+
+## Prospect triage: scoring many sites at once
+
+The full pipeline produces one deep report per site. The inverse job - sweeping many company sites to find the few worth a closer look - is what `tools/triage.py` does. It runs a static, homepage-only, strictly passive pass over a list of domains, ranks them worst-posture-first (a worse measured posture is a stronger candidate for a review), and gives each site a single measured "why to reach out" hook drawn from the same checks the full report uses.
+
+```
+# copy the template, add your domains, then run:
+cp PROSPECTS.example.txt sales/prospects.txt
+python .claude/skills/review-site/tools/triage.py
+
+# or score domains directly:
+python .claude/skills/review-site/tools/triage.py acme.com globex.com
+```
+
+It writes a ranked `sales/triage_results.csv` (for a spreadsheet or CRM) and a `sales/triage_results.md` (for a quick read), and prints the ranked table:
+
+```
+ #  Domain              Posture    Score  Door-opener
+ 1  neverssl.com        Weak        0.43  Missing baseline security headers (HSTS/CSP/clickjacking)
+ 2  example.com         Adequate    0.81  Homepage served over plain HTTP with no redirect to HTTPS
+ 3  www.python.org      Adequate    0.83  Weakest measured area: security headers (Weak)
+```
+
+The sweep is serial with a polite delay (one homepage visit per site), so it stays light on every target. Unreachable sites become a flagged row rather than aborting the batch. The `sales/` directory is git-ignored, so prospect lists and results never enter version control. The triage score and a site's eventual full-report score come from the identical scoring engine, so a triage sweep never contradicts the report you later hand the client.
 
 ---
 

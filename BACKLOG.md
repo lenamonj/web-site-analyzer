@@ -6,6 +6,19 @@ in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
 ## Phase J - Automation of the rendered tier (user request 2026-07-02)
+- [x] **J3 (done, M)** Prospect triage mode. Spec: PLAN.md section 36. New
+  tools/triage.py sweeps a domain list (static, homepage-only, serial,
+  polite), ranks sites worst-first as prospects, and picks a measured
+  door-opener hook per site (priority: plain HTTP, cert expiry, trackers
+  without consent, missing security headers, poor perf/a11y band, SEO gaps,
+  else weakest area). CSV + Markdown output under the git-ignored sales/;
+  input from sales/prospects.txt, a --file, or CLI domains; unreachable
+  domains become a flagged row, not a crash. Reuses scan_site.run
+  homepage-only; no new measurement. Suite 223 -> 234 (11 triage tests, all
+  offline via stubbed run). Live: ranked example.com/neverssl.com/python.org
+  worst-first with correct measured hooks. Committed PROSPECTS.example.txt
+  template; README + SKILL documented.
+
 - [x] **J2 (done, L)** CEO-grade report refresh. Spec: PLAN.md section 35.
   Cover page (kicker, Georgia display title, short gold rule, posture chip,
   meta, static contents list, method line), Georgia/Calibri two-face

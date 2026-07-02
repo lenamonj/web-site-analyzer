@@ -55,6 +55,13 @@ Then re-run `scan_site.py` (or `run_review.py`). The orchestrator picks the snap
 
 Web vitals and contrast (browser pass, feeds scan_vitals): in the same browser session, run the measurement snippets in `tools/CAPTURE.md` (buffered PerformanceObserver for LCP/CLS/TBT; the computed-style WCAG contrast walk) and write `planning/_evidence/rendered/<slug>/metrics.json` per the schema there. The next scan grades them against the published Core Web Vitals and Lighthouse thresholds. Metrics are lab measurements of one load; scan_vitals labels them as such and reports "not captured" when absent.
 
+## Prospect triage (bulk pre-screen, optional)
+Before committing to a full review of any one site, you can pre-screen many at once. `tools/triage.py` runs a static, homepage-only, passive pass over a list of domains, ranks them worst-posture-first (a worse measured posture is a stronger prospect), and gives each a single measured door-opener drawn from the same checks the full report uses. Use it to decide which sites earn a full `/review-site` run.
+
+`python .claude/skills/review-site/tools/triage.py [domains...] [--file list.txt] [--delay S]`
+
+With no arguments it reads `sales/prospects.txt` (or `PROSPECTS.txt` at the repo root). It writes a ranked `sales/triage_results.csv` and `sales/triage_results.md`. The sweep is serial and polite (one homepage visit per site); unreachable sites become a flagged row rather than aborting the batch. Prospect data lives under the git-ignored `sales/` directory.
+
 ## Scoping the review (optional helper)
 To choose which pages to review, run the passive discovery tool. It reads the sitemap and homepage navigation and proposes a representative in-scope set (homepage, section landings, a couple of deep pages per section, and footer or legal pages). It fetches only the homepage and sitemaps, not the whole site.
 
