@@ -32,6 +32,8 @@ SAMPLE = {
     "site": "example.com",
     "target_url": "https://example.com",
     "date": "2026-07-02",
+    "scope": {"pages_reviewed": 12, "method": "Passive external scan"},
+    "progress": {"previous_date": "2026-06-01", "new_issues": 1, "resolved_issues": 4},
     "bottom_line": "The site is sound overall; the one urgent item is consent.",
     "scorecard": {
         "overall": "Adequate",
@@ -104,6 +106,34 @@ class TestExecReport(unittest.TestCase):
         self.assertIn("Adequate", tile_text)          # overall band
         self.assertIn("3", tile_text)                 # findings count
         self.assertIn("1 Critical / 1 High / 1 Low", tile_text)
+        # With scope present the fourth tile shows pages reviewed.
+        self.assertIn("PAGES REVIEWED", tile_text)
+        self.assertIn("12", tile_text)
+
+    def test_scope_line_and_progress_strip(self):
+        self.assertIn("12 page(s) reviewed  |  Passive external scan", self.text)
+        self.assertIn("Since the previous review (2026-06-01):", self.text)
+        self.assertIn("4 resolved", self.text)
+        self.assertIn("1 new", self.text)
+
+    def test_section_headings_keep_with_next(self):
+        heading = next(p for p in self.doc.paragraphs if p.text == "BOTTOM LINE")
+        self.assertTrue(heading.paragraph_format.keep_with_next)
+
+    def test_image_exhibit_renders_in_a_framed_cell(self):
+        png_1x1 = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
+                   b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc"
+                   b"\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+        img_path = Path(self.tmp.name) / "shot.png"
+        img_path.write_bytes(png_1x1)
+        data = dict(SAMPLE)
+        data["evidence"] = [{"caption": "Screenshot", "image": str(img_path)}]
+        out = Path(self.tmp.name) / "framed.docx"
+        ber.build(data, out)
+        doc = Document(str(out))
+        # The last table is the frame; it must contain exactly one drawing.
+        frame_xml = doc.tables[-1]._tbl.xml
+        self.assertIn("<pic:pic", frame_xml)
 
     def test_bottom_line_renders_in_callout(self):
         self.assertIn(SAMPLE["bottom_line"], self.text)

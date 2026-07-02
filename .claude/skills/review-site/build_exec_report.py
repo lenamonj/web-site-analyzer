@@ -213,6 +213,7 @@ def section_heading(document, text):
     para = document.add_paragraph()
     para.paragraph_format.space_before = Pt(16)
     para.paragraph_format.space_after = Pt(7)
+    para.paragraph_format.keep_with_next = True  # never strand a title at a page bottom
     # Thin rule under the heading, drawn as a paragraph bottom border.
     p_pr = para._p.get_or_add_pPr()
     borders = OxmlElement("w:pBdr")
@@ -264,6 +265,41 @@ def add_masthead(document, site, target_url, date):
     p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
 
 
+def add_scope_line(document, scope):
+    """One small line stating what was reviewed and how."""
+    bits = []
+    pages = scope.get("pages_reviewed")
+    if pages:
+        bits.append(f"{pages} page(s) reviewed")
+    if scope.get("method"):
+        bits.append(scope["method"])
+    if not bits:
+        return
+    para = document.add_paragraph()
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(2)
+    add_run(para, "  |  ".join(bits), size=8.5, color=MUTED_RGB, italic=True)
+
+
+def add_progress_strip(document, progress):
+    """The re-review headline: what changed since the previous report."""
+    prev = progress.get("previous_date")
+    resolved = progress.get("resolved_issues")
+    new = progress.get("new_issues")
+    if resolved is None and new is None:
+        return
+    para = document.add_paragraph()
+    para.paragraph_format.space_before = Pt(6)
+    para.paragraph_format.space_after = Pt(0)
+    add_run(para, "Since the previous review" + (f" ({prev})" if prev else "") + ":  ",
+            size=9.5, color=MUTED_RGB)
+    add_run(para, f"{resolved or 0} resolved", size=9.5, bold=True,
+            color=RGBColor.from_string(SEVERITY_FILL["Low"]))
+    add_run(para, "   ", size=9.5)
+    add_run(para, f"{new or 0} new", size=9.5, bold=True,
+            color=RGBColor.from_string(SEVERITY_FILL["High"] if new else "5A6672"))
+
+
 def _severity_breakdown(findings):
     counts = {}
     for f in findings:
@@ -282,6 +318,13 @@ def add_glance_tiles(document, data):
     rows = scorecard.get("rows", [])
     overall = scorecard.get("overall") or "Not measured"
 
+    scope = data.get("scope") or {}
+    if scope.get("pages_reviewed"):
+        fourth = ("PAGES REVIEWED", str(scope["pages_reviewed"]),
+                  "in-scope pages scanned", ACCENT_RGB)
+    else:
+        fourth = ("AREAS MEASURED", str(len(rows)),
+                  "scan categories" if rows else "no scorecard supplied", ACCENT_RGB)
     tiles = [
         ("OVERALL POSTURE", overall, "measured scan verdicts",
          RGBColor.from_string(BAND_FILL.get(overall, BAND_FILL["Not measured"]))),
@@ -289,8 +332,7 @@ def add_glance_tiles(document, data):
          _severity_breakdown(findings) or "none recorded", ACCENT_RGB),
         ("RECOMMENDATIONS", str(len(recs)),
          "ranked by priority" if recs else "to be authored", ACCENT_RGB),
-        ("AREAS MEASURED", str(len(rows)),
-         "scan categories" if rows else "no scorecard supplied", ACCENT_RGB),
+        fourth,
     ]
 
     table = document.add_table(rows=1, cols=len(tiles))
@@ -404,6 +446,23 @@ def add_code_block(document, code, highlight=None):
     set_col_widths(table, [PAGE_WIDTH])
 
 
+def add_framed_picture(document, image_path):
+    """A screenshot inside a hairline-framed cell so it reads as an exhibit
+    instead of bleeding into the page."""
+    table = document.add_table(rows=1, cols=1)
+    set_table_borders(table, top=(4, HAIRLINE_HEX), bottom=(4, HAIRLINE_HEX),
+                      left=(4, HAIRLINE_HEX), right=(4, HAIRLINE_HEX))
+    set_table_padding(table, top=40, bottom=40, left=40, right=40)
+    cell = table.rows[0].cells[0]
+    cell.text = ""
+    para = cell.paragraphs[0]
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(0)
+    run = para.add_run()
+    run.add_picture(image_path, width=PAGE_WIDTH - Inches(0.12))
+    set_col_widths(table, [PAGE_WIDTH])
+
+
 def add_footer(document, site):
     footer = document.sections[0].footer
     footer.is_linked_to_previous = False
@@ -443,6 +502,9 @@ def build(data, out_path):
     document.core_properties.title = f"{site} Website Review"
 
     add_masthead(document, site, data.get("target_url", ""), data.get("date", ""))
+    scope = data.get("scope")
+    if scope:
+        add_scope_line(document, scope)
     add_glance_tiles(document, data)
     add_footer(document, site)
 
@@ -451,6 +513,9 @@ def build(data, out_path):
     if bottom_line:
         section_heading(document, "Bottom line")
         add_callout(document, bottom_line)
+    progress = data.get("progress")
+    if progress:
+        add_progress_strip(document, progress)
 
     # Measured posture scorecard (optional; only when the scan supplied one)
     scorecard = data.get("scorecard")
@@ -533,6 +598,7 @@ def build(data, out_path):
             cap = document.add_paragraph()
             cap.paragraph_format.space_before = Pt(12)
             cap.paragraph_format.space_after = Pt(4)
+            cap.paragraph_format.keep_with_next = True  # caption stays with its exhibit
             add_run(cap, f"Exhibit {number}.  ", size=9.5, bold=True, color=ACCENT_RGB)
             add_run(cap, item.get("caption", ""), size=9.5, bold=True)
             if item.get("code") is not None:
@@ -541,7 +607,7 @@ def build(data, out_path):
                 img = item["image"]
                 if Path(img).exists():
                     try:
-                        document.add_picture(img, width=PAGE_WIDTH)
+                        add_framed_picture(document, img)
                     except Exception as e:
                         add_run(document.add_paragraph(),
                                 f"[image not embedded: {e}]", size=8, italic=True)

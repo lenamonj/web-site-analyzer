@@ -879,6 +879,33 @@ committed atomically):**
 
 RALPH: NOTHING TO DO
 
+---
+
+## 2026-07-03 - H1: executive report review pass (user request)
+
+**Task:** H1. The user asked for a review of the final report to make it
+better. Reviewed it as a communication artifact and fixed the gaps: no scope
+statement, no progress story on re-reviews, headings could strand at page
+bottoms, screenshots floated borderless, and the weakest tile spoke
+analyst-language.
+
+**What I did (all optional fields, backward compatible, approved design
+preserved):** scope line under the masthead ("N page(s) reviewed | method"),
+progress strip under the bottom line ("Since the previous review (date): N
+resolved, M new" with semantic colors), PAGES REVIEWED tile when scope is
+present, keep-with-next on section headings and exhibit captions, and
+exhibit images framed in a hairline cell. `draft_report_data` fills scope
+(page count plus an honest method string that names rendered-DOM capture
+only when the scan actually used snapshots) and progress (from the scan
+delta) automatically.
+
+**What I verified:** builder suite 9 -> 12 tests including a real 1x1 PNG
+framed-exhibit render; scanner suite 186 -> 188 (draft scope/progress and
+first-run None); all green. Re-rendered both previews (client-a with factual
+scope added to its hand-authored data; a fresh machine draft from the
+example.com scan showing the auto-filled progress strip) and sent them to
+the user.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

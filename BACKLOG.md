@@ -13,6 +13,18 @@ serves.
 
 ## Phase D - Reporting automation
 
+## Phase H - Report communication upgrade (user request 2026-07-03)
+- [x] **H1 (done, M)** Executive report review pass. Spec: PLAN.md section 12
+  amendment. Added: optional scope line (pages reviewed, method) under the
+  masthead; optional progress strip (resolved vs new since the previous
+  review) that draft_report_data auto-fills from the scan delta with an
+  honest method string (rendered-DOM capture named only when actually used);
+  PAGES REVIEWED tile when scope is present; keep-with-next on section
+  headings and exhibit captions; hairline frames around exhibit images. All
+  optional and backward compatible; approved design preserved. Builder suite
+  9 -> 12, scanner suite 186 -> 188, all green; both previews re-rendered
+  and sent to the user.
+
 ## Phase G - Path from 680 to 900 (queued 2026-07-02, start 2026-07-03)
 Derived one-for-one from the honest capability assessment recorded in
 JOURNAL.md. Order: two quick wins first, then the rendering tier (target

@@ -381,6 +381,21 @@ exhibit numbering, and that a minimal data dict renders without the optional
 sections. Visual verification: render the two real evidence datasets and
 inspect the PDF (Word COM export).
 
+Amendment (task H1, user-approved baseline preserved, all additions
+optional and backward compatible):
+- `scope` field: {"pages_reviewed": n, "method": "..."} renders as a small
+  gray line under the gold rule, and the fourth glance tile becomes PAGES
+  REVIEWED when scope is present (AREAS MEASURED otherwise).
+- `progress` field: {"previous_date", "new_issues", "resolved_issues"}
+  renders as a one-line strip under the bottom line ("Since the previous
+  review (date): N resolved, M new."). `draft_report_data` fills it from the
+  scan's delta when one exists, and fills scope from pages_scanned plus an
+  honest method string (noting rendered-DOM capture only when the scan
+  actually used snapshots).
+- Section headings and exhibit captions set keep-with-next so a title never
+  strands at a page bottom; exhibit images render inside a hairline-framed
+  cell instead of floating borderless.
+
 ## 13. Design: security depth (task F2)
 Purpose: close the gaps between the current header-only security view and what
 a world-class passive analyzer reports. Three additions, all passive.

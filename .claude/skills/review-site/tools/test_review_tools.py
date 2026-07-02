@@ -1940,8 +1940,26 @@ class TestDraftReportData(unittest.TestCase):
     def test_schema_has_every_builder_key(self):
         d = drpt.draft(self.SCAN)
         for key in ("site", "target_url", "date", "bottom_line", "scorecard",
-                    "findings", "recommendations", "quick_wins"):
+                    "findings", "recommendations", "quick_wins", "scope", "progress"):
             self.assertIn(key, d)
+
+    def test_scope_and_progress_are_filled_from_measured_data(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["pages_scanned"] = ["https://x/", "https://x/a"]
+        scan["page_scans"] = [{"url": "https://x/", "rendered_snapshot_used": True}]
+        scan["delta"] = {"previous_measured_at": "2026-07-01T09:00:00Z",
+                         "new": [{"scan": "s", "check": "c", "verdict": "warn", "note": "n"}],
+                         "resolved": []}
+        d = drpt.draft(scan)
+        self.assertEqual(d["scope"]["pages_reviewed"], 2)
+        self.assertIn("rendered-DOM capture", d["scope"]["method"])
+        self.assertEqual(d["progress"], {"previous_date": "2026-07-01",
+                                         "new_issues": 1, "resolved_issues": 0})
+
+    def test_progress_is_none_on_a_first_run(self):
+        d = drpt.draft(self.SCAN)
+        self.assertIsNone(d["progress"])
+        self.assertEqual(d["scope"]["method"], "Passive external scan")
 
     def test_findings_are_capped(self):
         big = {**self.SCAN, "issues": {"fail": [{"scan": "x", "check": "c", "verdict": "fail",

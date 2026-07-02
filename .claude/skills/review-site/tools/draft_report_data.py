@@ -80,6 +80,20 @@ def draft(scan):
     totals = scan.get("totals", {}) or {}
     n_pages = len(scan.get("pages_scanned", []) or [])
 
+    rendered = any(ps.get("rendered_snapshot_used")
+                   for ps in scan.get("page_scans", []) or [])
+    scope = {"pages_reviewed": n_pages,
+             "method": ("Passive external scan with rendered-DOM capture"
+                        if rendered else "Passive external scan")}
+
+    progress = None
+    delta = scan.get("delta")
+    if delta:
+        prev = delta.get("previous_measured_at") or ""
+        progress = {"previous_date": prev.split("T", 1)[0] if "T" in prev else prev,
+                    "new_issues": len(delta.get("new", [])),
+                    "resolved_issues": len(delta.get("resolved", []))}
+
     return {
         "site": scan.get("host", slug),
         "target_url": scan.get("target", ""),
@@ -88,6 +102,8 @@ def draft(scan):
                         f"{scorecard['overall']} across {n_pages} page(s), with "
                         f"{totals.get('fail', 0)} failing checks and "
                         f"{totals.get('warn', 0)} warnings."),
+        "scope": scope,
+        "progress": progress,
         "scorecard": scorecard,
         "findings": findings,
         "recommendations": [],
