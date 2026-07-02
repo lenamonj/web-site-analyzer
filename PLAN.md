@@ -557,7 +557,47 @@ Tests: directive parsing (quoted policy strings), the report-only path, the
 no-script-directive path, wildcard sources, unsafe-inline scoped to
 script-src vs style-src, SameSite matrix including None-without-Secure.
 
-## 18. Open design questions
+## 18. Design: email transport posture (task F7)
+Purpose: complete the dns_email dimension to the level of dedicated posture
+tools. Three checks added to `scan_dns_email`, all passive:
+
+1. `mta_sts` (pass|info): TXT lookup on `_mta-sts.<domain>` for `v=STSv1`;
+   when present, one GET to `https://mta-sts.<domain>/.well-known/mta-sts.txt`
+   (a standardized well-known URI) to confirm the policy file answers and
+   report its mode (enforce/testing/none). Record plus readable policy in
+   enforce mode -> pass; record with testing/none or an unreachable policy
+   file -> info with the specific gap; no record -> info (adoption is
+   minority; absence is an observation, consistent with security.txt/CAA).
+2. `tls_rpt` (pass|info): TXT on `_smtp._tls.<domain>` for `v=TLSRPTv1` ->
+   pass listing the rua; absent -> info.
+3. `bimi` (pass|info): TXT on `default._bimi.<domain>` for `v=BIMI1` -> pass
+   noting the logo URL presence; absent -> info.
+All three are skipped with an info note when the domain has no MX records
+(a domain that receives no mail has no transport posture to grade).
+
+Tests: stubbed DoH/fetch for the record-present, policy-mode, and absent
+paths, plus the no-MX skip.
+
+## 19. Design: robots disallow-all and in-page anchor integrity (task F8)
+1. `scan_crawl.check_robots_txt` additionally parses the `User-agent: *`
+   group: a bare `Disallow: /` in that group (and no bare `Allow: /`) means
+   the site tells every crawler to stay out entirely -> the check becomes
+   fail with the offending lines quoted (on a production site this is an SEO
+   catastrophe; presence-only checking missed it completely).
+2. In-page anchor integrity, in `scan_links` (new check `anchor_fragments`):
+   `htmlmeta` collects every element `id` (plus legacy `<a name>`) into
+   `parsed["ids"]`; anchors whose href is `#fragment` (excluding bare `#`)
+   are resolved against that set. Any unresolved fragment -> warn with capped
+   examples (the link scrolls nowhere); all resolved -> pass; none or
+   client-rendered -> info. Fragments in full URLs pointing at other pages
+   are out of scope (cannot be verified without fetching the target's ids).
+
+Tests: robots group parsing (global disallow, path-scoped disallow stays
+warn-free, disallow in a non-* group ignored), id collection including
+`<a name>`, and the fragment matrix (resolved, missing, bare `#`,
+client-rendered).
+
+## 20. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

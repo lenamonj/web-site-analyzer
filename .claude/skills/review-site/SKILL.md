@@ -27,11 +27,11 @@ What it measures, passively, with a citable verdict per check:
 - HTTP security: HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners, security.txt (RFC 9116).
 - Page-level security hygiene: Subresource Integrity coverage on cross-origin scripts and stylesheets, forms posting to plain HTTP from an HTTPS page, inline event handlers (they block a strict CSP), target=_blank rel hygiene.
 - TLS: negotiated protocol, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe.
-- DNS email-auth: SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, over DNS-over-HTTPS.
-- Crawlability (host-level, checked once per run): robots.txt presence and its sitemap references, XML sitemap reachability, apex vs www canonicalization.
+- DNS email-auth and transport: SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, MTA-STS (record and policy mode), TLS-RPT, BIMI, over DNS-over-HTTPS.
+- Crawlability (host-level, checked once per run): robots.txt presence and its sitemap references, site-wide Disallow detection (a production robots.txt blocking all crawlers is a fail), XML sitemap reachability, apex vs www canonicalization.
 - SEO and on-page: title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD structured data, hreflang, image alt.
 - Accessibility (structural subset): document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons.
-- Link health and mixed content: broken links (only 404, 410, and 5xx count as broken; 401/403/429 are reported as access-restricted, not broken), redirects, and insecure http resources on an https page.
+- Link health and mixed content: broken links (only 404, 410, and 5xx count as broken; 401/403/429 are reported as access-restricted, not broken), redirects, in-page anchors that point at no element id, and insecure http resources on an https page.
 - Page weight and delivery: initial HTML transfer size, a static resource-weight floor, render-blocking head scripts, third-party origins, whether the HTML is served compressed (gzip/brotli), per-asset caching lifetimes, and redirect chains. JS-loaded resources are not counted, so the weight is a floor.
 - Readability: Flesch Reading Ease, Flesch-Kincaid grade level, and average sentence length on the page's visible text (heuristic; inconclusive on client-rendered pages).
 - Privacy and tracking (static-only): third-party resource origins, known tracker/analytics hosts, likely tracking pixels, and whether a cookie-consent mechanism is detectable in the markup.

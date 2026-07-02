@@ -117,15 +117,75 @@ def check_dnssec(domain):
     return {"signed": False, "verdict": "info", "note": "No DNSKEY; zone is not DNSSEC-signed."}
 
 
+def check_mta_sts(domain, has_mx):
+    """MTA-STS (RFC 8461): protects inbound SMTP from TLS downgrade. Record
+    in DNS plus a policy file at a standardized well-known URI. Absence is
+    reported, not graded down (adoption is minority)."""
+    if not has_mx:
+        return {"verdict": "info", "note": "Domain has no MX records; MTA-STS not applicable."}
+    records, _ = _txt_records(f"_mta-sts.{domain}")
+    rec = next((r for r in records if r.lower().startswith("v=stsv1")), None)
+    if not rec:
+        return {"present": False, "verdict": "info",
+                "note": "No MTA-STS record; SMTP delivery to this domain accepts silent TLS downgrade."}
+    res = common.http_fetch(f"https://mta-sts.{domain}/.well-known/mta-sts.txt", want_body=True)
+    body = res.get("body") or ""
+    if res.get("final_status") != 200 or "version" not in body.lower():
+        return {"present": True, "policy_reachable": False, "verdict": "info",
+                "note": "MTA-STS record published but the policy file at mta-sts."
+                        f"{domain} is not readable, so the policy cannot take effect."}
+    mode = None
+    for line in body.splitlines():
+        if line.lower().strip().startswith("mode:"):
+            mode = line.split(":", 1)[1].strip().lower()
+    if mode == "enforce":
+        return {"present": True, "policy_reachable": True, "mode": mode, "verdict": "pass",
+                "note": "MTA-STS enforced (record plus policy in enforce mode)."}
+    return {"present": True, "policy_reachable": True, "mode": mode, "verdict": "info",
+            "note": f"MTA-STS present but the policy mode is {mode or 'unspecified'}, not enforce."}
+
+
+def check_tls_rpt(domain, has_mx):
+    """TLS-RPT (RFC 8460): where SMTP TLS failures get reported."""
+    if not has_mx:
+        return {"verdict": "info", "note": "Domain has no MX records; TLS-RPT not applicable."}
+    records, _ = _txt_records(f"_smtp._tls.{domain}")
+    rec = next((r for r in records if r.lower().startswith("v=tlsrptv1")), None)
+    if rec:
+        return {"present": True, "record": rec, "verdict": "pass",
+                "note": "TLS-RPT record published; SMTP TLS failures are reported."}
+    return {"present": False, "verdict": "info",
+            "note": "No TLS-RPT record; SMTP TLS failures go unreported."}
+
+
+def check_bimi(domain, has_mx):
+    """BIMI: brand logo shown next to authenticated mail. Cosmetic but a
+    signal of mature email posture; requires DMARC enforcement to work."""
+    if not has_mx:
+        return {"verdict": "info", "note": "Domain has no MX records; BIMI not applicable."}
+    records, _ = _txt_records(f"default._bimi.{domain}")
+    rec = next((r for r in records if r.lower().startswith("v=bimi1")), None)
+    if rec:
+        has_logo = "l=" in rec.lower()
+        return {"present": True, "record": rec, "verdict": "pass",
+                "note": "BIMI record published" + (" with a logo URL." if has_logo else " (no logo URL).")}
+    return {"present": False, "verdict": "info", "note": "No BIMI record."}
+
+
 def _scan(target):
     host = common.host_of(target) or target.strip()
     domain = registrable_domain(host)
+    mx = check_mx(domain)
+    has_mx = bool(mx["records"])
     checks = {
         "spf": check_spf(domain),
         "dmarc": check_dmarc(domain),
         "dkim": check_dkim(domain),
-        "mx": check_mx(domain),
+        "mx": mx,
         "dnssec": check_dnssec(domain),
+        "mta_sts": check_mta_sts(domain, has_mx),
+        "tls_rpt": check_tls_rpt(domain, has_mx),
+        "bimi": check_bimi(domain, has_mx),
     }
     tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
     for c in checks.values():

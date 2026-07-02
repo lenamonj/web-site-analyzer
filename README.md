@@ -54,11 +54,11 @@ python .claude\skills\review-site\tools\scan_site.py https://example.com https:/
 | `discover_pages.py` | Reads the sitemap and homepage nav to propose a representative in-scope review set (scoping helper; fetches only the homepage and sitemaps) |
 | `scan_http_security.py` | HTTPS redirect, HSTS, CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, cookie flags, version banners, security.txt (RFC 9116) |
 | `scan_tls.py` | Negotiated TLS protocol, certificate issuer, days to expiry, hostname coverage, CAA issuance records, legacy TLS 1.0/1.1 probe |
-| `scan_dns_email.py` | SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, over DNS-over-HTTPS |
-| `scan_crawl.py` | robots.txt presence and sitemap references, XML sitemap reachability, apex vs www canonicalization (host-level, checked once per run) |
+| `scan_dns_email.py` | SPF, DMARC policy, DKIM (common selectors), MX, DNSSEC, MTA-STS (record plus policy mode), TLS-RPT, BIMI, over DNS-over-HTTPS |
+| `scan_crawl.py` | robots.txt presence and sitemap references, site-wide Disallow detection, XML sitemap reachability, apex vs www canonicalization (host-level, checked once per run) |
 | `scan_seo.py` | Title and meta-description length, canonical, viewport, robots meta, heading hierarchy, Open Graph, Twitter cards, JSON-LD, hreflang, image alt |
 | `scan_accessibility.py` | Document language and title, image alt, form labels, heading order, landmarks, link text, positive tabindex, empty buttons |
-| `scan_links.py` | Broken links (404/410/5xx only), redirects, access-restricted links, and insecure http resources on an https page (mixed content) |
+| `scan_links.py` | Broken links (404/410/5xx only), redirects, access-restricted links, in-page anchors pointing at missing ids, and insecure http resources on an https page (mixed content) |
 | `scan_performance.py` | Initial HTML transfer size, static resource-weight floor, render-blocking head scripts, third-party origins, gzip/brotli compression, per-asset caching lifetimes, redirect chains |
 | `scan_readability.py` | Flesch Reading Ease, Flesch-Kincaid grade level, average sentence length (heuristic, on visible text) |
 | `scan_privacy.py` | Third-party resource origins, known tracker/analytics hosts, likely tracking pixels, cookie-consent detection (static HTML only) |
