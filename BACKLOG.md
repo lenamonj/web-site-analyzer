@@ -31,6 +31,25 @@ serves.
   up. CrUX field data remains out of scope without an API key; crawl ceiling
   and no-JS-execution are charter choices.
 
+## Phase I continued - real-site shakedown (user request 2026-07-03)
+- [x] **I2 (done, M)** Real-site shakedown. Ran the full pipeline against
+  client-a.example (12 pages; delta correctly identified 17 new-check issues
+  vs the July 1 baseline with 0 false resolutions; new checks caught real
+  issues the manual review missed: zero asset caching site-wide, CSP
+  Report-Only, apex/www non-convergence), python.org (13 pages, no crashes;
+  the one "broken link" is genuinely 503), and excalidraw.com (correctly
+  flagged client-rendered; headless-Chrome DOM capture produced measured
+  rendered_dom verdicts on a real production SPA including its Simple
+  Analytics origin). Fixed the three defects the shakedown confirmed, each
+  with regression tests: (1) logo-link false positive - anchors wrapping an
+  image with alt text now carry that accessible name (was flagged on all 12
+  arch pages and 15 python.org pages, and had to be hand-corrected in the
+  July 1 report); (2) prose metrics on listing pages - readability now
+  reports info when sentences are absurd (wps > 50) or when over half the
+  visible words are link text (python.org events pages scored Flesch -13.6);
+  (3) covered by I1 (anchor forms). Suite 189 -> 192. Also added .env to
+  .gitignore before any key could be committed.
+
 ## Phase H - Report communication upgrade (user request 2026-07-03)
 - [x] **H1 (done, M)** Executive report review pass. Spec: PLAN.md section 12
   amendment. Added: optional scope line (pages reviewed, method) under the

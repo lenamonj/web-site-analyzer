@@ -53,6 +53,7 @@ class _Extractor(HTMLParser):
         self._heading_buf = []
         self._cur_anchor = None
         self._anchor_buf = []
+        self._anchor_img_alt = None
         self._label_depth = 0
         self._in_jsonld = False
         self._jsonld_buf = []
@@ -86,6 +87,11 @@ class _Extractor(HTMLParser):
             self.links.append(a)
         if tag == "img":
             self.images.append({"src": a.get("src", ""), "has_alt": "alt" in a, "alt": a.get("alt")})
+            if self._cur_anchor is not None and a.get("alt"):
+                # An image with alt text gives its wrapping link an accessible
+                # name (the logo-link pattern); record it so the link-text
+                # check does not flag an accessible link as empty.
+                self._anchor_img_alt = a["alt"]
         if tag in LANDMARK_TAGS:
             self.landmarks.add(tag)
         if "role" in a:
@@ -107,6 +113,7 @@ class _Extractor(HTMLParser):
         if tag == "a" and "href" in a:
             self._cur_anchor = a
             self._anchor_buf = []
+            self._anchor_img_alt = None
         if tag == "label":
             self._label_depth += 1
             if "for" in a:
@@ -147,9 +154,11 @@ class _Extractor(HTMLParser):
                 "href": self._cur_anchor.get("href", ""),
                 "text": text,
                 "aria_label": self._cur_anchor.get("aria-label"),
+                "img_alt": self._anchor_img_alt,
                 "tabindex": self._cur_anchor.get("tabindex"),
             })
             self._cur_anchor = None
+            self._anchor_img_alt = None
         if tag == "label" and self._label_depth > 0:
             self._label_depth -= 1
         if tag == "script" and self._in_jsonld:

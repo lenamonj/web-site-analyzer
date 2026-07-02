@@ -1064,6 +1064,57 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
 
 
+class TestShakedownFixes(unittest.TestCase):
+    """Regressions for defects confirmed on real sites (I2)."""
+
+    def test_logo_link_with_img_alt_is_not_empty(self):
+        # Found on client-a.example and python.org: a home link wrapping an
+        # image WITH alt text is accessible and was falsely flagged empty.
+        html = ('<a href="/"><img src="/logo.png" alt="Acme logo"></a>'
+                '<a href="/bare"><img src="/x.png"></a>')
+        parsed = htmlmeta.parse_html(html)
+        self.assertEqual(parsed["anchors"][0]["img_alt"], "Acme logo")
+        self.assertIsNone(parsed["anchors"][1]["img_alt"])
+        c = a11y._link_text_check(parsed, inconclusive=False)
+        self.assertEqual(c["verdict"], "fail")
+        self.assertEqual(c["examples"], ["/bare"])
+        clean = htmlmeta.parse_html('<a href="/"><img src="/l.png" alt="Logo"></a>')
+        ok = a11y._link_text_check(clean, inconclusive=False)
+        self.assertEqual(ok["verdict"], "pass")
+
+    def test_list_like_pages_are_not_graded_as_prose(self):
+        # Found on python.org event listings: hundreds of words with almost no
+        # sentence punctuation drove Flesch to -13.6. Not prose; report info.
+        listing = " ".join(f"Event {i} Springfield March {i}" for i in range(60)) + "."
+        html = f"<html><body><p>{listing}</p></body></html>"
+        parsed = htmlmeta.parse_html(html)
+        render = htmlmeta.render_assessment(parsed, html)
+        ctx = {"url": "https://acme.example/", "parsed": parsed, "render": render,
+               "res": {"ok": True, "body": html, "final_url": "https://acme.example/",
+                       "error": None}}
+        r = rd.scan("https://acme.example/", page=ctx)
+        c = r["checks"]["readability"]
+        self.assertEqual(c["verdict"], "info")
+        self.assertIn("not meaningful", c["note"])
+
+    def test_link_heavy_pages_are_not_graded_as_prose(self):
+        # Event-listing pages punctuate enough to dodge the sentence guard but
+        # most visible words are link text; still not prose.
+        items = " ".join(
+            f'<a href="/e{i}">Regional Python Conference Number {i} Spring.</a>'
+            for i in range(40))
+        html = f"<html><body><p>A few plain words here.</p>{items}</body></html>"
+        parsed = htmlmeta.parse_html(html)
+        render = htmlmeta.render_assessment(parsed, html)
+        ctx = {"url": "https://acme.example/", "parsed": parsed, "render": render,
+               "res": {"ok": True, "body": html, "final_url": "https://acme.example/",
+                       "error": None}}
+        r = rd.scan("https://acme.example/", page=ctx)
+        c = r["checks"]["readability"]
+        self.assertEqual(c["verdict"], "info")
+        self.assertIn("link text", c["note"])
+
+
 class TestCrawler(unittest.TestCase):
     SITE = {
         "https://acme.example/robots.txt":

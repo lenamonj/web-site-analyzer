@@ -22,6 +22,13 @@ import htmlmeta
 SKIP_TAGS = {"script", "style", "noscript", "template"}
 MIN_WORDS = 100          # below this, readability metrics are not meaningful
 LONG_SENTENCE_WORDS = 25
+# Above this, the "sentences" are not prose: listing and navigation pages have
+# almost no sentence punctuation, and Flesch assumptions break (scores go
+# negative). Found live on python.org event-listing pages (Flesch -13.6).
+NON_PROSE_WPS = 50
+# When most visible words sit inside links, the page is navigation or a
+# listing, not prose (also found live on python.org event pages).
+LINK_TEXT_RATIO = 0.5
 
 CATEGORY = "readability"
 SCOPE = "page"
@@ -95,8 +102,21 @@ def _scan(url, page=None):
                        "note": f"Not assessable ({why}). Capture the rendered page for real content."}},
         }
 
-    syllables = sum(_syllables(w) for w in words)
     wps = word_count / sentence_count
+    link_words = sum(len((a.get("text") or "").split()) for a in parsed["anchors"])
+    link_ratio = link_words / word_count if word_count else 0
+    if wps > NON_PROSE_WPS or link_ratio > LINK_TEXT_RATIO:
+        why = (f"about {round(wps)} words per detected sentence" if wps > NON_PROSE_WPS
+               else f"{round(link_ratio * 100)} percent of the visible words are link text")
+        return {
+            "tool": "scan_readability", "target": url, "final_url": res["final_url"], "ok": True,
+            "render": render, "word_count": word_count,
+            "checks": {"readability": {"verdict": "info",
+                       "note": (f"The page reads as listings or navigation ({why}), so prose "
+                                "readability metrics are not meaningful here.")}},
+        }
+
+    syllables = sum(_syllables(w) for w in words)
     spw = syllables / word_count
     flesch = round(206.835 - 1.015 * wps - 84.6 * spw, 1)
     fk_grade = round(0.39 * wps + 11.8 * spw - 15.59, 1)

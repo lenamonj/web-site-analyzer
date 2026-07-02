@@ -153,9 +153,12 @@ def _link_text_check(parsed, inconclusive):
     empty, vague = [], []
     for a in anchors:
         text = (a["text"] or "").strip().lower()
-        if not text and not a["aria_label"]:
+        # An aria-label or a wrapped image's alt text is an accessible name
+        # (the logo-link pattern), so such links are not empty.
+        named = a["aria_label"] or a.get("img_alt")
+        if not text and not named:
             empty.append(a["href"])
-        elif text in generic and not a["aria_label"]:
+        elif text in generic and not named:
             vague.append(text)
     if empty:
         return {"count": len(anchors), "empty_links": len(empty), "vague_links": len(vague),
