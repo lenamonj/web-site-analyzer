@@ -1,10 +1,18 @@
 # Browser capture reference (rendered DOM, web vitals, contrast)
 
-The scanners are stdlib-only and never launch a browser. The agent's browser
-pass produces two artifacts per reviewed site under
+The scanners are stdlib-only and never launch a browser. The browser pass
+produces two artifacts per reviewed site under
 `planning/_evidence/rendered/<slug>/`; the next `scan_site.py` run consumes
 them automatically. All numbers are lab measurements of one page load and are
 reported as such.
+
+`tools/capture_rendered.py` automates this whole document (PLAN.md section
+34): it drives a locally installed headless Chrome or Edge over the DevTools
+protocol, runs these exact snippets, and writes both handoff files.
+`run_review.py` invokes it by default. The manual pass below remains the
+fallback for pages where an overlay must be dismissed or interaction is
+needed before capture; a manual capture is merged with, never clobbered by,
+the automated one.
 
 ## 1. Rendered DOM snapshots (feeds the structural scanners)
 

@@ -11,13 +11,16 @@ deterministic. Run from the tools directory:
 """
 
 import gzip
+import io
 import json
+import struct
 import tempfile
 import unittest
 import urllib.error
 import zlib
 from pathlib import Path
 
+import capture_rendered as caprend
 import common
 import discover_pages as disco
 import draft_report_data as drpt
@@ -2376,7 +2379,8 @@ class TestRunReview(unittest.TestCase):
         tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
         try:
             with tempfile.TemporaryDirectory() as td:
-                out = run_review.pipeline("https://acme.example/", out_dir=td)
+                out = run_review.pipeline("https://acme.example/", out_dir=td,
+                                          capture=False)
                 for key in ("json_path", "digest_path", "draft_path"):
                     self.assertTrue(Path(out[key]).exists(), f"{key} not written")
                 draft = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
@@ -2385,6 +2389,281 @@ class TestRunReview(unittest.TestCase):
                 self.assertGreaterEqual(len(out["scan"]["pages_scanned"]), 1)
         finally:
             common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy = orig
+
+    def test_pipeline_reports_missing_browser_honestly(self):
+        orig = (common.http_fetch, common.tls_info, common.doh_query,
+                tls._probe_legacy, caprend.find_browser)
+        common.http_fetch, common.tls_info, common.doh_query = _canned_fetch, _canned_tls, _canned_doh
+        tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+        caprend.find_browser = lambda: None
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                out = run_review.pipeline("https://acme.example/", out_dir=td)
+                # The rest of the pipeline still delivered its artifacts.
+                self.assertTrue(Path(out["json_path"]).exists())
+        finally:
+            (common.http_fetch, common.tls_info, common.doh_query,
+             tls._probe_legacy, caprend.find_browser) = orig
+        self.assertFalse(out["capture"]["ok"])
+        self.assertIn("no Chrome or Edge found", out["capture"]["note"])
+
+    def test_pipeline_capture_and_rescan_consumes_snapshot(self):
+        def spa_fetch(url, *args, **kwargs):
+            res = dict(_canned_fetch(url))
+            res["body"] = SPA_SHELL
+            res["body_bytes"] = len(SPA_SHELL)
+            res["uncompressed_bytes"] = len(SPA_SHELL)
+            return res
+
+        target = "https://acme.example/"
+
+        def fake_capture(slug, plan, **kwargs):
+            base = common.evidence_dir() / "rendered" / slug
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "home.html").write_text(GOOD_PAGE, encoding="utf-8")
+            common.write_json(base / "manifest.json", {
+                "captured_with": "stub", "viewport": "1440px",
+                "pages": {target: {"file": "home.html",
+                                   "captured_at_utc": "2026-01-01T00:00:00Z"}}})
+            return {"ok": True, "captured": [target], "failed": {}, "dropped": []}
+
+        orig = (common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy,
+                caprend.find_browser, caprend.capture_pages, common.evidence_dir)
+        with tempfile.TemporaryDirectory() as td:
+            common.http_fetch, common.tls_info, common.doh_query = spa_fetch, _canned_tls, _canned_doh
+            tls._probe_legacy = lambda host, *a, **k: {"tested": False, "note": "stubbed"}
+            caprend.find_browser = lambda: "C:/fake/chrome.exe"
+            caprend.capture_pages = fake_capture
+            common.evidence_dir = lambda: Path(td)
+            try:
+                out = run_review.pipeline(target)
+            finally:
+                (common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy,
+                 caprend.find_browser, caprend.capture_pages, common.evidence_dir) = orig
+
+        self.assertTrue(out["capture"]["rescanned"])
+        page = out["scan"]["page_scans"][0]
+        self.assertTrue(page["likely_client_rendered"])
+        self.assertTrue(page["rendered_snapshot_used"])
+        self.assertEqual(page["seo"]["evidence_source"], "rendered_dom")
+
+
+class TestCaptureRendered(unittest.TestCase):
+    """The automated capture tool (PLAN.md section 34). Offline: no browser
+    is ever launched; the WebSocket layer is driven with crafted bytes and
+    the capture run with a fake CDP session."""
+
+    def test_ws_accept_key_matches_the_rfc_6455_vector(self):
+        self.assertEqual(caprend.ws_accept_key("dGhlIHNhbXBsZSBub25jZQ=="),
+                         "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+
+    @staticmethod
+    def _reader(data):
+        bio = io.BytesIO(data)
+
+        def read_exact(n):
+            chunk = bio.read(n)
+            if len(chunk) != n:
+                raise AssertionError("short read in test fixture")
+            return chunk
+        return read_exact
+
+    def test_client_frame_roundtrip_across_length_encodings(self):
+        for size in (0, 1, 125, 126, 65535, 65536):
+            payload = b"a" * size
+            frame = caprend.ws_encode_frame(0x1, payload)
+            fin, opcode, decoded = caprend.ws_read_frame(self._reader(frame))
+            self.assertTrue(fin)
+            self.assertEqual(opcode, 0x1)
+            self.assertEqual(decoded, payload, f"size {size}")
+
+    def test_oversized_frame_is_rejected(self):
+        header = b"\x81\xff" + struct.pack(">Q", caprend.MAX_WS_MESSAGE + 1)
+        with self.assertRaises(caprend.CaptureError):
+            caprend.ws_read_frame(self._reader(header))
+
+    def test_read_message_assembles_fragments_and_answers_ping(self):
+        class FakeSocket:
+            def __init__(self, data):
+                self.data, self.pos, self.sent = data, 0, b""
+
+            def recv(self, n):
+                chunk = self.data[self.pos:self.pos + n]
+                self.pos += len(chunk)
+                return chunk
+
+            def sendall(self, b):
+                self.sent += b
+
+            def settimeout(self, t):
+                pass
+
+        # server frames are unmasked: a ping, then "hello" in two fragments
+        stream = b"\x89\x02hi" + b"\x01\x03hel" + b"\x80\x02lo"
+        sock = FakeSocket(stream)
+        conn = caprend.WsConn(sock)
+        self.assertEqual(conn.read_message(timeout=5), "hello")
+        fin, opcode, payload = caprend.ws_read_frame(self._reader(sock.sent))
+        self.assertTrue(fin)
+        self.assertEqual(opcode, 0xA)  # the ping was answered with a pong
+        self.assertEqual(payload, b"hi")
+
+    def test_snapshot_filenames_are_safe_and_unique(self):
+        taken = set()
+        self.assertEqual(caprend.snapshot_filename("https://x.example/", taken),
+                         "home.html")
+        self.assertEqual(caprend.snapshot_filename("https://x.example/products/a b", taken),
+                         "products-a-b.html")
+        self.assertEqual(caprend.snapshot_filename("https://x.example/products/a_b", taken),
+                         "products-a_b.html")
+        self.assertEqual(caprend.snapshot_filename("https://x.example/products/a%20b", taken),
+                         "products-a-20b.html")
+        # A colliding path gets a numeric suffix instead of overwriting.
+        self.assertEqual(caprend.snapshot_filename("https://x.example/products/a b/", taken),
+                         "products-a-b-2.html")
+
+    def test_plan_prioritizes_dom_pages_and_names_dropped(self):
+        pages = ["https://x.example/"] + [f"https://x.example/p{i}" for i in range(1, 21)]
+        scan = {"pages_scanned": pages,
+                "page_scans": [
+                    {"url": "https://x.example/p18", "likely_client_rendered": True},
+                    {"url": "https://x.example/p19", "likely_client_rendered": True,
+                     "rendered_snapshot_used": True}]}
+        plan = caprend.plan_from_scan(scan, cap=5)
+        self.assertEqual(plan["pages"][0], "https://x.example/")
+        # DOM pages jump the queue; an existing snapshot is refreshed, not kept stale.
+        self.assertEqual(plan["pages"][1:3],
+                         ["https://x.example/p18", "https://x.example/p19"])
+        self.assertEqual(plan["dom_pages"],
+                         ["https://x.example/p18", "https://x.example/p19"])
+        self.assertEqual(len(plan["pages"]), 5)
+        # 21 candidates, 5 captured, every dropped page is named.
+        self.assertEqual(len(plan["dropped"]), 16)
+        self.assertNotIn("https://x.example/p18", plan["dropped"])
+
+    def test_plan_dom_pages_survive_the_cap(self):
+        pages = [f"https://x.example/p{i}" for i in range(10)]
+        scan = {"pages_scanned": pages,
+                "page_scans": [{"url": u, "likely_client_rendered": True} for u in pages]}
+        plan = caprend.plan_from_scan(scan, cap=3)
+        self.assertEqual(len(plan["pages"]), 10)  # DOM capture is the point of the run
+        self.assertEqual(plan["dropped"], [])
+
+    class FakeSession:
+        def __init__(self, fail_goto=()):
+            self.fail_goto = set(fail_goto)
+            self.current = None
+
+        def goto(self, url):
+            if url in self.fail_goto:
+                raise caprend.CaptureError("connection refused (test)")
+            self.current = url
+            return True
+
+        def evaluate(self, expression, await_promise=False):
+            if "outerHTML" in expression:
+                return f"<html><body>rendered {self.current}</body></html>"
+            if "largest-contentful-paint" in expression:
+                return {"lcp_ms": 1200, "cls": 0.02, "tbt_ms": 30}
+            return {"checked": 10, "violations": []}
+
+        def close(self):
+            pass
+
+    def test_capture_writes_both_handoff_files_and_vitals_reads_them(self):
+        home = "https://x.example/"
+        app = "https://x.example/app"
+        plan = {"pages": [home, app], "dom_pages": [app], "dropped": []}
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "rendered" / "x-example"
+            summary = caprend.capture_pages(
+                "x-example", plan, session_factory=self.FakeSession,
+                out_dir=out_dir, delay_s=0)
+            self.assertTrue(summary["ok"])
+            self.assertEqual(summary["captured"], [home, app])
+            self.assertEqual(summary["failed"], {})
+
+            manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(list(manifest["pages"]), [app])
+            snap = (out_dir / manifest["pages"][app]["file"]).read_text(encoding="utf-8")
+            self.assertIn("rendered https://x.example/app", snap)
+
+            metrics = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(metrics["pages"]), {home, app})
+            self.assertEqual(metrics["pages"][home]["lcp_ms"], 1200)
+            self.assertEqual(metrics["pages"][home]["contrast"]["checked"], 10)
+
+            # scan_vitals consumes the file exactly as written (section 27 schema).
+            orig = common.evidence_dir
+            common.evidence_dir = lambda: Path(td)
+            try:
+                graded = vitals.scan(home)
+            finally:
+                common.evidence_dir = orig
+            self.assertTrue(graded["captured"])
+            self.assertEqual(graded["checks"]["lcp"]["verdict"], "pass")
+            self.assertEqual(graded["checks"]["contrast"]["verdict"], "pass")
+
+    def test_capture_merges_over_an_existing_manual_capture(self):
+        first = "https://x.example/a"
+        second = "https://x.example/b"
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            caprend.capture_pages("x-example",
+                                  {"pages": [first], "dom_pages": [first], "dropped": []},
+                                  session_factory=self.FakeSession,
+                                  out_dir=out_dir, delay_s=0)
+            caprend.capture_pages("x-example",
+                                  {"pages": [second], "dom_pages": [second], "dropped": []},
+                                  session_factory=self.FakeSession,
+                                  out_dir=out_dir, delay_s=0)
+            manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(manifest["pages"]), {first, second})
+            metrics = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(metrics["pages"]), {first, second})
+
+    def test_page_failure_is_named_and_the_run_continues(self):
+        bad = "https://x.example/bad"
+        good = "https://x.example/good"
+        plan = {"pages": [bad, good], "dom_pages": [], "dropped": []}
+        with tempfile.TemporaryDirectory() as td:
+            summary = caprend.capture_pages(
+                "x-example", plan,
+                session_factory=lambda: self.FakeSession(fail_goto={bad}),
+                out_dir=Path(td), delay_s=0)
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["captured"], [good])
+        self.assertIn(bad, summary["failed"])
+        self.assertIn("connection refused", summary["failed"][bad][0])
+
+    def test_no_browser_found_is_an_honest_note_not_a_crash(self):
+        orig = caprend.find_browser
+        caprend.find_browser = lambda: None
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = caprend.capture_pages(
+                    "x-example",
+                    {"pages": ["https://x.example/"], "dom_pages": [], "dropped": []},
+                    out_dir=Path(td))
+        finally:
+            caprend.find_browser = orig
+        self.assertFalse(summary["ok"])
+        self.assertIn("no Chrome or Edge found", summary["note"])
+        self.assertEqual(summary["captured"], [])
+
+    def test_find_browser_env_override(self):
+        orig = common.env_value
+        with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:
+            fake = f.name
+        try:
+            common.env_value = lambda name: fake if name == "REVIEW_BROWSER" else None
+            self.assertEqual(caprend.find_browser(), fake)
+            common.env_value = (lambda name: r"C:\does\not\exist.exe"
+                                if name == "REVIEW_BROWSER" else None)
+            self.assertIsNone(caprend.find_browser())
+        finally:
+            common.env_value = orig
+            Path(fake).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

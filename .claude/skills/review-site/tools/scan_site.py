@@ -195,9 +195,12 @@ def _run(target, host, slug, extra_pages, snapshots):
         # structural scans run against the rendered DOM (PLAN.md section 26).
         # Performance keeps the static context: its numbers are transfer facts.
         rendered_ctx = None
+        if isinstance(ctx, dict) and ctx.get("render", {}).get("likely_client_rendered"):
+            # Recorded on the entry so a capture plan (PLAN.md section 34) can
+            # be built from the scan JSON alone.
+            entry["likely_client_rendered"] = True
         snap_html = snapshots.get(url)
-        if (snap_html and isinstance(ctx, dict)
-                and ctx.get("render", {}).get("likely_client_rendered")):
+        if snap_html and entry.get("likely_client_rendered"):
             rendered_ctx = htmlmeta.page_from_snapshot(url, snap_html, ctx.get("res"))
             entry["rendered_snapshot_used"] = True
         for key, module, _ in PAGE_SCANNERS:

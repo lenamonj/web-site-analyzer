@@ -1102,3 +1102,67 @@ a professionally designed executive report with its own test suite, 149
 total offline tests (140 scanner + 9 builder), and docs in sync. Open: the
 user's visual verdict on
 the redesigned report docx files.
+
+---
+
+## 2026-07-02 - Published to GitHub + J1: automated rendered capture (user request)
+
+**Publishing:** hygiene commit (removed the five report_preview docx
+artifacts, untracked the generated example-com history ledger, reset
+TARGET.txt to example.com), branch renamed master -> main, public repo
+created and pushed: https://github.com/lenamonj/web-site-analyzer. Every
+commit is pushed from now on (the old "no remote" open question in PLAN.md
+section 33 is resolved).
+
+**Task:** J1 per PLAN.md section 34 (spec'd first). The rendered-evidence
+tier (G3/G4) was built but its capture side was manual: an agent had to
+drive a browser per CAPTURE.md and hand-write the handoff files. That made
+rendered evidence depend on who ran the review. This closes the gap.
+
+**What I did:**
+- New tools/capture_rendered.py (capture utility like crawler.py, not a
+  registered scanner; scanners still never launch anything). Pure stdlib:
+  a minimal RFC 6455 WebSocket client on raw sockets (masked client frames,
+  7/16/64-bit lengths, fragment assembly, ping/pong) carrying the Chrome
+  DevTools Protocol. Launches a locally installed Chrome or Edge
+  (--headless=new, legacy --headless retry) with --remote-debugging-port=0
+  and reads the real port from DevToolsActivePort (no port race), opens one
+  tab via /json/new (PUT with GET fallback), then serially per page:
+  Page.navigate, bounded wait for loadEventFired, hydration settle, then
+  Runtime.evaluate for outerHTML (client-rendered pages), the CAPTURE.md
+  vitals snippet (awaitPromise), and the CAPTURE.md contrast walk - the JS
+  is embedded verbatim so manual and automated paths measure identically.
+  Writes the exact section 26/27 handoff files, merged over any manual
+  capture. Overlays are NOT dismissed and captured_with records that.
+- Capture plan from the scan JSON: scan_site page entries now record
+  likely_client_rendered; DOM snapshots refresh every run (the page is
+  loaded for metrics anyway, so a fresh snapshot is free and never stale),
+  metrics for every scanned page, target first, capped at 15 (--pages N)
+  with every dropped page named. Browser discovery: REVIEW_BROWSER
+  override, Windows install paths, then PATH.
+- run_review integration: pipeline scans, captures when a browser exists,
+  and re-scans inside the same fetch cache so one command delivers
+  rendered-DOM verdicts and graded vitals. --no-browser opts out. No
+  browser -> an honest console note and the inconclusive verdicts stand.
+- Failure discipline: per-page failures are named in the summary and the
+  session restarts so one bad page cannot kill the run; three consecutive
+  failures abort with a note. The browser is always terminated and the
+  throwaway profile removed.
+
+**What I verified:** suite 208 -> 222 scanner tests plus 16 builder tests,
+all offline (fake CDP session, crafted WebSocket bytes, the RFC 6455
+accept-key vector, plan/cap/merge/failure paths, pipeline wiring with
+capture stubbed). Live proof both ways: (1) run_review on example.com
+launched real headless Chrome, measured LCP 64ms / CLS 0 / TBT 0 / 3
+contrast samples, wrote metrics.json, re-scanned, and scan_vitals graded
+all four checks pass in the same command; (2) a local client-rendered SPA
+fixture went from inconclusive static verdicts to measured rendered_dom
+verdicts - the planted alt-less image (invisible to any static scan) was
+caught as a fail, headings graded pass, LCP 36ms. Live testing surfaced a
+real defect the offline suite could not: the first plan skipped pages that
+already had a snapshot, freezing stale DOM forever; snapshots now refresh
+every run (regression test updated).
+
+**State:** the review pipeline is browser-complete end to end with zero
+manual steps on any machine with Chrome or Edge installed. The manual
+CAPTURE.md pass remains only for overlay dismissal and interaction cases.

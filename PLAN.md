@@ -954,4 +954,80 @@ builds.
   in `common.py` used by both tool and orchestrator.)
 - Git has no remote. The loop commits locally; pushing is deferred until a
   remote is configured. Recorded so no iteration silently assumes a push
-  succeeded.
+  succeeded. (Resolved 2026-07-02: public remote at
+  https://github.com/lenamonj/web-site-analyzer, branch main, push after
+  every commit.)
+
+## 34. Design: automated rendered capture (task J1)
+Problem: the rendered-evidence tier (sections 26 and 27) is built and proven
+but its capture side is manual: an agent must drive a browser per CAPTURE.md
+and hand-write manifest.json and metrics.json. That makes rendered evidence
+depend on who runs the review. Close the gap with a capture tool the
+pipeline runs itself.
+
+Constraints that shape the design:
+- The scanner suite stays pure stdlib. No Playwright, no websocket
+  dependency. Headless Chrome or Edge is driven over the Chrome DevTools
+  Protocol with a minimal RFC 6455 WebSocket client written on raw sockets
+  (client frames masked, 7/16/64-bit lengths, fragment assembly, ping/pong,
+  clean close).
+- The tool is a capture utility like crawler.py, NOT a registered scanner.
+  Scanners still never launch anything; they only consume the handoff files
+  from sections 26 and 27, unchanged.
+- No browser found -> the tool reports that honestly and the static
+  inconclusive verdicts stand exactly as before. Nothing is estimated.
+
+New `tools/capture_rendered.py`:
+- `find_browser()`: REVIEW_BROWSER env/.env override, then standard Windows
+  install paths for chrome.exe and msedge.exe, then PATH lookups
+  (google-chrome, chrome, chromium, chromium-browser, msedge). Returns a
+  path or None.
+- Launch: `--headless=new --remote-debugging-port=0` with a throwaway
+  profile dir; the port is read from the DevToolsActivePort file Chrome
+  writes there (no port race). One tab is opened via the /json/new DevTools
+  HTTP endpoint (PUT, GET fallback for older builds) and one WebSocket
+  session drives every page serially.
+- Per page: Page.navigate, wait for Page.loadEventFired (bounded; on
+  timeout capture proceeds best-effort and the page entry records
+  load_event false), a settle delay for SPA hydration, then three
+  Runtime.evaluate calls: outerHTML (only for pages needing a DOM
+  snapshot), the CAPTURE.md vitals snippet (awaitPromise), and the
+  CAPTURE.md contrast walk. The JS is embedded verbatim from CAPTURE.md so
+  the manual and automated paths measure identically.
+- Output: exactly the section 26/27 handoff files, merged over any existing
+  manifest/metrics so a manual capture is never clobbered. captured_with
+  records the tool and that overlays were NOT dismissed (the one thing the
+  manual pass can do better; documented, not hidden).
+- Page plan (`plan_from_scan`): DOM snapshots for pages the scan marked
+  likely_client_rendered that lack one; metrics for every scanned page,
+  target first. Total capped (default 15, --pages N); anything dropped is
+  named in the tool output, never silently.
+- Politeness: strictly serial, one browser load per page (what a single
+  human visit costs the site), fixed delay between pages, hard per-page
+  and per-call timeouts, the browser is always terminated and the profile
+  dir removed in a finally.
+
+scan_site change (small, additive): each page entry now records
+`likely_client_rendered` when the fetch context says so, so the capture
+plan can be derived from the scan JSON instead of re-deriving render
+heuristics.
+
+run_review integration: pipeline(capture="auto") - after the scan, if a
+browser is found and the plan is non-empty, capture runs and the site is
+re-scanned inside the same fetch cache (near-free network-wise) so the
+structural scanners consume the snapshots and scan_vitals consumes the
+metrics in the same run. --no-browser skips capture; no browser found is
+reported in the console output, not buried. The delta/history/digest/draft
+steps all operate on the final (post-capture) result.
+
+Tests (offline, no browser ever launched): the RFC 6455 accept-key vector,
+client-frame encode/decode roundtrip across length encodings, server-frame
+reading incl. fragmentation and ping reply, snapshot filename sanitization
+and uniqueness, plan_from_scan (prioritization, cap with named drops,
+rendered_snapshot_used exclusion), capture_pages against a fake CDP session
+(handoff files match the section 26/27 schemas and scan_vitals.load_metrics
+reads them back), find_browser override handling, and pipeline wiring with
+capture_rendered stubbed (no browser -> unchanged flow; capture reporting
+success -> re-scan consumes the snapshot). The existing offline pipeline
+test passes capture=False; the auto path is covered by the stubbed wiring
+tests.

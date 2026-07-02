@@ -5,6 +5,26 @@ highest-priority unblocked `todo`. Keep tasks small enough to finish and verify
 in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
+## Phase J - Automation of the rendered tier (user request 2026-07-02)
+- [x] **J1 (done, L)** Automated rendered capture. Spec: PLAN.md section 34.
+  New tools/capture_rendered.py drives headless Chrome/Edge over the
+  DevTools protocol with a stdlib-only RFC 6455 WebSocket client: rendered
+  DOM snapshots for every client-rendered page (refreshed each run) plus
+  the CAPTURE.md vitals and contrast measurements for every scanned page
+  (capped, dropped pages named), written to the existing section 26/27
+  handoff files (merged, never clobbering a manual capture). run_review
+  captures and re-scans automatically when a browser is present
+  (--no-browser opts out); honest console note when not. scan_site page
+  entries now record likely_client_rendered so the plan derives from scan
+  JSON. Suite 208 -> 222, all offline (fake CDP session, crafted WS bytes,
+  RFC accept-key vector). Live proof both ways: example.com pipeline
+  captured real vitals (LCP 64ms, CLS 0, TBT 0, 3 contrast samples) and
+  re-scanned in one command; a local SPA fixture went from inconclusive to
+  measured rendered_dom verdicts with the planted alt-less image caught as
+  a fail and LCP 36ms. Live testing also surfaced and fixed a stale-DOM
+  defect: snapshots are now refreshed every run instead of frozen at first
+  capture (the page is loaded for metrics anyway, so refresh is free).
+
 ## Phase A - Foundation (registry + contract enforcement)
 
 ## Phase B - Self-describing tools
