@@ -24,6 +24,40 @@ import common
 MAX_FINDINGS = 15
 # Transparent draft severity per verdict; a human reviews and adjusts these.
 DRAFT_SEVERITY = {"fail": "High", "warn": "Medium"}
+RATING = {"pass": "Good", "warn": "Needs work", "fail": "Poor"}
+
+
+def _vitals_metrics(checks, spec):
+    """One report metric per measured (non-info) vitals check, in order."""
+    out = []
+    for key, label, fmt in spec:
+        c = checks.get(key) or {}
+        if c.get("verdict") in RATING and c.get("value") is not None:
+            out.append({"label": label, "value": fmt(c["value"]),
+                        "rating": RATING[c["verdict"]]})
+    return out
+
+
+def _web_vitals(scan):
+    """Core Web Vitals for the report, preferring real-user field data (CrUX)
+    over a lab capture. Returns None when neither was measured."""
+    crux = (scan.get("host_scans") or {}).get("crux") or {}
+    field = _vitals_metrics(crux.get("checks", {}), [
+        ("field_lcp", "LCP", lambda v: f"{v / 1000:.1f}s"),
+        ("field_cls", "CLS", lambda v: f"{v:.2f}"),
+        ("field_inp", "INP", lambda v: f"{int(v)}ms")])
+    if field:
+        return {"source": "field", "metrics": field,
+                "captured_note": "Real Chrome users, 28-day p75 (CrUX)"}
+    for ps in scan.get("page_scans", []) or []:
+        lab = _vitals_metrics((ps.get("vitals") or {}).get("checks", {}), [
+            ("lcp", "LCP", lambda v: f"{v / 1000:.1f}s"),
+            ("cls", "CLS", lambda v: f"{v:.2f}"),
+            ("tbt", "TBT", lambda v: f"{int(v)}ms")])
+        if lab:
+            return {"source": "lab", "metrics": lab,
+                    "captured_note": "Lab capture, one load"}
+    return None
 
 
 def _scorecard(scan):
@@ -104,6 +138,7 @@ def draft(scan):
                         f"{totals.get('warn', 0)} warnings."),
         "scope": scope,
         "progress": progress,
+        "web_vitals": _web_vitals(scan),
         "scorecard": scorecard,
         "findings": findings,
         "recommendations": [],

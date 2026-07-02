@@ -882,7 +882,32 @@ Notes state "p75 of real Chrome users, 28-day collection" so the provenance
 is explicit. Tests: threshold matrix from a canned record, the no-key path,
 the 404 path, and the API-error path; registry census moves to 5 host tools.
 
-## 31. Open design questions
+## 31. Design: report web-vitals panel (task H2)
+The report now has scan_crux (real-user field data) and scan_vitals (lab
+capture) but no place to show the actual numbers; they collapse into the
+performance posture band. Core Web Vitals are the most executive-legible
+measurement the tool produces (and a Google ranking signal), so they earn a
+dedicated panel.
+
+Data (optional, backward compatible): `web_vitals` =
+{"source": "field" | "lab", "captured_note": "...", "metrics": [{"label",
+"value", "rating"}...]} where rating is Good | Needs work | Poor (mapped
+from the scan verdict pass/warn/fail). draft_report_data fills it,
+preferring CrUX field data (real users, the stronger evidence) over lab
+vitals, and only when a metric was actually measured - never a placeholder.
+
+Builder: `add_vitals_panel(document, web_vitals)` renders a compact metric
+strip under the scorecard: one bordered cell per metric showing the value
+big, the label small, and a Good/Needs work/Poor chip, plus a source line
+("Real Chrome users, 28-day p75 (CrUX)" or "Lab capture, one load"). Colors
+reuse BAND_FILL semantics (Good=Strong green, Needs work=Adequate amber,
+Poor=Poor red). Absent web_vitals -> no panel (unchanged reports).
+
+Tests: draft prefers field over lab, emits nothing when neither measured;
+builder renders the strip with value/label/chip and the source line, and a
+minimal dict still builds without it.
+
+## 32. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

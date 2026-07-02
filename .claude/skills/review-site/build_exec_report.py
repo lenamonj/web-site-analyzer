@@ -355,6 +355,53 @@ def add_glance_tiles(document, data):
     keep_rows_together(table)
 
 
+VITALS_FILL = {"Good": BAND_FILL["Strong"], "Needs work": BAND_FILL["Adequate"],
+               "Poor": BAND_FILL["Poor"]}
+
+
+def add_vitals_panel(document, web_vitals):
+    """A compact metric strip for Core Web Vitals: one bordered tile per
+    metric with the value large, the label small, and a rating chip."""
+    metrics = web_vitals.get("metrics") or []
+    if not metrics:
+        return
+    table = document.add_table(rows=1, cols=len(metrics))
+    set_table_borders(table, top=(4, HAIRLINE_HEX), bottom=(4, HAIRLINE_HEX),
+                      left=(4, HAIRLINE_HEX), right=(4, HAIRLINE_HEX),
+                      insideV=(4, HAIRLINE_HEX))
+    set_table_padding(table, top=110, bottom=110, left=130, right=130)
+    for cell, m in zip(table.rows[0].cells, metrics):
+        shade_cell(cell, TILE_FILL_HEX)
+        cell.text = ""
+        p1 = cell.paragraphs[0]
+        p1.paragraph_format.space_after = Pt(1)
+        add_run(p1, m.get("label", ""), size=8, bold=True, color=MUTED_RGB, letter_spacing=12)
+        p2 = cell.add_paragraph()
+        p2.paragraph_format.space_after = Pt(3)
+        add_run(p2, str(m.get("value", "")), size=17, bold=True, color=ACCENT_RGB)
+        p3 = cell.add_paragraph()
+        p3.paragraph_format.space_after = Pt(0)
+        rating = m.get("rating", "")
+        fill = VITALS_FILL.get(rating, BAND_FILL["Not measured"])
+        run = add_run(p3, f" {rating} ", size=7.5, bold=True, color=text_color_for_fill(fill))
+        _shade_run(run, fill)
+    set_col_widths(table, [Inches(7.0 / len(metrics))] * len(metrics))
+    keep_rows_together(table)
+    src = document.add_paragraph()
+    src.paragraph_format.space_before = Pt(3)
+    src.paragraph_format.space_after = Pt(0)
+    add_run(src, web_vitals.get("captured_note", ""), size=8, italic=True, color=MUTED_RGB)
+
+
+def _shade_run(run, hex_fill):
+    """Highlight one run with a solid fill (a chip inside a paragraph)."""
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_fill)
+    run._r.get_or_add_rPr().append(shd)
+
+
 def add_callout(document, text):
     table = document.add_table(rows=1, cols=1)
     set_table_borders(table)
@@ -537,6 +584,12 @@ def build(data, out_path):
         add_data_table(document, ["Area", "Posture", "Measured detail"],
                        [Inches(1.75), Inches(1.1), Inches(4.15)],
                        [scorecard_row(r) for r in scorecard["rows"]])
+
+    # Core Web Vitals (real-user or lab), when measured
+    web_vitals = data.get("web_vitals")
+    if web_vitals and web_vitals.get("metrics"):
+        section_heading(document, "Core Web Vitals")
+        add_vitals_panel(document, web_vitals)
 
     # Key findings, most severe first
     findings = sorted(

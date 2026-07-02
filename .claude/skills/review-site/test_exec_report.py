@@ -34,6 +34,10 @@ SAMPLE = {
     "date": "2026-07-02",
     "scope": {"pages_reviewed": 12, "method": "Passive external scan"},
     "progress": {"previous_date": "2026-06-01", "new_issues": 1, "resolved_issues": 4},
+    "web_vitals": {"source": "field", "captured_note": "Real Chrome users, 28-day p75 (CrUX)",
+                   "metrics": [{"label": "LCP", "value": "0.9s", "rating": "Good"},
+                               {"label": "CLS", "value": "0.31", "rating": "Poor"},
+                               {"label": "INP", "value": "350ms", "rating": "Needs work"}]},
     "bottom_line": "The site is sound overall; the one urgent item is consent.",
     "scorecard": {
         "overall": "Adequate",
@@ -68,6 +72,16 @@ def _cell_fill(cell):
     if shd is None:
         return None
     return shd.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fill")
+
+
+def _cell_fill_of_run(cell):
+    """The w:shd fill on any run inside a cell (the vitals rating chip), or None."""
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    for r in cell._tc.iter(f"{ns}r"):
+        shd = r.find(f"{ns}rPr/{ns}shd")
+        if shd is not None:
+            return shd.get(f"{ns}fill")
+    return None
 
 
 def _doc_text(document):
@@ -115,6 +129,18 @@ class TestExecReport(unittest.TestCase):
         self.assertIn("Since the previous review (2026-06-01):", self.text)
         self.assertIn("4 resolved", self.text)
         self.assertIn("1 new", self.text)
+
+    def test_web_vitals_panel_renders_values_and_source(self):
+        self.assertIn("CORE WEB VITALS", self.text)  # section headings render uppercase
+        self.assertIn("0.9s", self.text)
+        self.assertIn("350ms", self.text)
+        self.assertIn("Real Chrome users, 28-day p75 (CrUX)", self.text)
+        # The rating chips carry the vitals fill colors.
+        panel = next(t for t in self.doc.tables
+                     if any("0.9s" in c.text for c in t.rows[0].cells))
+        chip_fills = {_cell_fill_of_run(c) for c in panel.rows[0].cells}
+        self.assertIn(ber.VITALS_FILL["Good"], chip_fills)
+        self.assertIn(ber.VITALS_FILL["Poor"], chip_fills)
 
     def test_section_headings_keep_with_next(self):
         heading = next(p for p in self.doc.paragraphs if p.text == "BOTTOM LINE")

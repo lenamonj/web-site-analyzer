@@ -63,6 +63,16 @@ serves.
   designed until then.
 
 ## Phase H - Report communication upgrade (user request 2026-07-03)
+- [x] **H2 (done, M)** Report Core Web Vitals panel. Spec: PLAN.md section 31.
+  New optional web_vitals report field, auto-filled by draft_report_data
+  (prefers CrUX real-user field data over lab capture, only measured
+  metrics, none when neither exists). Builder add_vitals_panel renders a
+  bordered metric strip (value large, label, Good/Needs work/Poor chip) with
+  a source line under the scorecard. Surfaces the actual numbers the tool now
+  measures instead of burying them in the performance band. Builder suite
+  12 -> 13, scanner suite 196 -> 199. Verified end to end: a live python.org
+  run auto-filled the panel with real CrUX data (LCP 0.9s, CLS 0.04, INP
+  23ms, all Good).
 - [x] **H1 (done, M)** Executive report review pass. Spec: PLAN.md section 12
   amendment. Added: optional scope line (pages reviewed, method) under the
   masthead; optional progress strip (resolved vs new since the previous

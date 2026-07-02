@@ -2082,6 +2082,36 @@ class TestDraftReportData(unittest.TestCase):
         self.assertIsNone(d["progress"])
         self.assertEqual(d["scope"]["method"], "Passive external scan")
 
+    def test_web_vitals_prefers_field_over_lab(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["host_scans"] = {"crux": {"checks": {
+            "field_lcp": {"verdict": "pass", "value": 875},
+            "field_cls": {"verdict": "fail", "value": 0.31},
+            "field_inp": {"verdict": "warn", "value": 350}}}}
+        scan["page_scans"] = [{"url": "https://x/", "vitals": {"checks": {
+            "lcp": {"verdict": "pass", "value": 1200}}}}]
+        wv = drpt.draft(scan)["web_vitals"]
+        self.assertEqual(wv["source"], "field")
+        labels = {m["label"]: (m["value"], m["rating"]) for m in wv["metrics"]}
+        self.assertEqual(labels["LCP"], ("0.9s", "Good"))
+        self.assertEqual(labels["CLS"], ("0.31", "Poor"))
+        self.assertEqual(labels["INP"], ("350ms", "Needs work"))
+
+    def test_web_vitals_falls_back_to_lab_capture(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["page_scans"] = [{"url": "https://x/", "vitals": {"checks": {
+            "lcp": {"verdict": "pass", "value": 1800},
+            "cls": {"verdict": "pass", "value": 0.02},
+            "tbt": {"verdict": "warn", "value": 300},
+            "contrast": {"verdict": "info"}}}}]
+        wv = drpt.draft(scan)["web_vitals"]
+        self.assertEqual(wv["source"], "lab")
+        self.assertEqual([m["label"] for m in wv["metrics"]], ["LCP", "CLS", "TBT"])
+
+    def test_web_vitals_none_when_nothing_measured(self):
+        d = drpt.draft(self.SCAN)
+        self.assertIsNone(d["web_vitals"])
+
     def test_findings_are_capped(self):
         big = {**self.SCAN, "issues": {"fail": [{"scan": "x", "check": "c", "verdict": "fail",
                "note": "n"}] * 40, "warn": []}}

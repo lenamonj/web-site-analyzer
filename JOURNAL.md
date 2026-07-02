@@ -985,6 +985,28 @@ origin. http_post_json also now preserves the API error body so a 403
 reports its precise reason (this surfaced API_KEY_SERVICE_BLOCKED during
 setup).
 
+---
+
+## 2026-07-03 - H2: report Core Web Vitals panel
+
+**Task:** H2 (user: improve the report to reflect the new capabilities). The
+report measured vitals and CrUX field data but had nowhere to show the
+numbers; they collapsed into the performance posture band.
+
+**What I did:** optional `web_vitals` report field, auto-filled by
+draft_report_data - prefers CrUX real-user field data (the stronger
+evidence) over lab capture, includes only actually-measured metrics, and is
+None when neither exists (never a placeholder). Builder add_vitals_panel
+renders a compact bordered metric strip under the scorecard: value large,
+label small, a Good/Needs work/Poor chip colored with the band palette, and
+a source line ("Real Chrome users, 28-day p75 (CrUX)" or "Lab capture, one
+load").
+
+**What I verified:** builder suite 12 -> 13, scanner suite 196 -> 199, all
+green. End to end: a live python.org run drafted the panel straight from the
+CrUX query (LCP 0.9s, CLS 0.04, INP 23ms, all Good) and rendered it into the
+docx. Preview sent to the user.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,
