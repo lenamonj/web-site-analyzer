@@ -28,6 +28,12 @@ except ImportError:
 if HAVE_DOCX:
     import build_exec_report as ber
 
+try:
+    import report_charts
+    HAVE_MPL = report_charts.HAVE_MPL
+except ImportError:
+    HAVE_MPL = False
+
 SAMPLE = {
     "site": "example.com",
     "target_url": "https://example.com",
@@ -291,6 +297,87 @@ class TestExecReport(unittest.TestCase):
             if any(c.text.strip() == header_text for c in table.rows[0].cells):
                 return table
         self.fail(f"No table with a header cell equal to {header_text!r}")
+
+
+TREND_2Q = {
+    "quarters": ["2026-Q2", "2026-Q3"],
+    "series": {"overall_score": [0.72, 0.84]},
+    "latest_delta": {
+        "prev_quarter": "2026-Q2", "quarter": "2026-Q3",
+        "scorecard": [{"category": "security", "prev_band": "Adequate",
+                       "band": "Strong", "prev_score": 0.7, "score": 0.9,
+                       "direction": "improved"},
+                      {"category": "seo", "prev_band": "Strong",
+                       "band": "Strong", "prev_score": 0.9, "score": 0.9,
+                       "direction": "held"}],
+        "new_findings": 1, "resolved_findings": 2,
+        "resolved_examples": [
+            "[a11y] link_text: 2 link(s) have no discernible text.",
+            "[seo] headings: No H1 on the page."],
+        "pages_scanned": {"prev": 12, "current": 12},
+    },
+}
+
+TREND_3Q = {
+    "quarters": ["2026-Q1", "2026-Q2", "2026-Q3"],
+    "series": {"overall_score": [0.61, 0.72, 0.84],
+               "security_score": [0.5, 0.7, 0.9],
+               "median_lcp_ms": [3400, 2600, 2100],
+               "median_weight_kb": [3100.0, 2500.0, 2400.0],
+               "broken_links": [9, 4, 3]},
+    "latest_delta": TREND_2Q["latest_delta"],
+}
+
+
+@unittest.skipUnless(HAVE_DOCX, "python-docx not installed")
+class TestTrendSection(unittest.TestCase):
+    def _data(self, trend):
+        data = {k: v for k, v in SAMPLE.items() if k != "evidence"}
+        data["slug"] = "example-com"
+        data["progress"] = dict(SAMPLE["progress"], trend=trend)
+        return data
+
+    def _doc(self, data, tmp):
+        out = Path(tmp) / "r.docx"
+        ber.build(data, out, chart_dir=Path(tmp) / "charts")
+        return Document(str(out))
+
+    def test_trend_table_and_named_resolved_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._doc(self._data(TREND_2Q), tmp)
+        texts = [p.text for p in doc.paragraphs]
+        self.assertTrue(any("Progress this quarter" in t for t in texts))
+        headers = [t.rows[0].cells[0].text.strip() for t in doc.tables]
+        self.assertIn("AREA", headers)
+        self.assertTrue(any("No H1 on the page." in t for t in texts))
+        self.assertTrue(any(
+            "2 finding(s) resolved since 2026-Q2; 1 new." in t for t in texts))
+        self.assertTrue(any("Pages reviewed: 12 in 2026-Q2, 12 in 2026-Q3"
+                            in t for t in texts))
+
+    def test_progress_strip_suppressed_when_trend_renders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._doc(self._data(TREND_2Q), tmp)
+        texts = [p.text for p in doc.paragraphs]
+        self.assertFalse(any("Since the previous review" in t for t in texts))
+
+    def test_two_quarters_embed_no_charts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._doc(self._data(TREND_2Q), tmp)
+        self.assertEqual(len(doc.inline_shapes), 0)
+
+    @unittest.skipUnless(HAVE_MPL, "matplotlib not installed")
+    def test_three_quarters_embed_charts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._doc(self._data(TREND_3Q), tmp)
+        # overall + categories (one drawable category) + metrics figure
+        self.assertEqual(len(doc.inline_shapes), 3)
+
+    def test_cover_contents_list_includes_progress_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._doc(self._data(TREND_2Q), tmp)
+        texts = " ".join(p.text for p in doc.paragraphs)
+        self.assertIn("Progress this quarter", texts)
 
 
 if __name__ == "__main__":

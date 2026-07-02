@@ -31,6 +31,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+import report_charts
+
 BODY_FONT = "Calibri"
 DISPLAY_FONT = "Georgia"                     # cover title, section numbers, big values
 MONO_FONT = "Consolas"
@@ -380,6 +382,85 @@ def add_progress_strip(document, progress):
             color=RGBColor.from_string(SEVERITY_FILL["High"] if new else "5A6672"))
 
 
+DIRECTION_STYLE = {"improved": ("STRONGER", SEVERITY_FILL["Low"]),
+                   "held": ("HELD", "8A94A6"),
+                   "declined": ("WEAKER", SEVERITY_FILL["High"])}
+
+
+def _fmt_score(v):
+    return f"{v:.2f}" if isinstance(v, (int, float)) else "n/a"
+
+
+def add_trend_table(document, delta):
+    """Quarter-over-quarter posture: prior band, current band, score
+    movement, and a direction chip per category."""
+    def trend_row(row):
+        def write(cells):
+            set_cell_text(cells[0], row.get("category", ""), size=9, bold=True)
+            for cell, band in ((cells[1], row.get("prev_band")),
+                               (cells[2], row.get("band"))):
+                band = band or "Not measured"
+                _chip(cell, band, BAND_FILL.get(band, BAND_FILL["Not measured"]))
+            p, c = row.get("prev_score"), row.get("score")
+            change = (f"{c - p:+.2f}"
+                      if isinstance(p, (int, float)) and isinstance(c, (int, float))
+                      else "n/a")
+            set_cell_text(cells[3], f"{_fmt_score(p)} to {_fmt_score(c)} ({change})",
+                          size=8.5, color=MUTED_RGB)
+            label, fill = DIRECTION_STYLE.get(row.get("direction"),
+                                              DIRECTION_STYLE["held"])
+            _chip(cells[4], label, fill)
+        return write
+
+    headers = ["Area", delta.get("prev_quarter") or "Prior",
+               delta.get("quarter") or "Current", "Score", "Direction"]
+    add_data_table(document, headers,
+                   [Inches(1.35), Inches(1.1), Inches(1.1),
+                    Inches(2.15), Inches(1.3)],
+                   [trend_row(r) for r in delta.get("scorecard", [])])
+
+
+def add_trend_section(document, trend, chart_dir, prefix, number):
+    """Progress this quarter: the QoQ posture table, trend charts (three or
+    more quarterly points), and every resolved finding named in full. This
+    is the retainer's value story, so it leads the report."""
+    section_heading(document, "Progress this quarter", number)
+    delta = trend.get("latest_delta") or {}
+    if delta.get("scorecard"):
+        add_trend_table(document, delta)
+        ps = delta.get("pages_scanned") or {}
+        if ps.get("prev") is not None or ps.get("current") is not None:
+            note = document.add_paragraph()
+            note.paragraph_format.space_before = Pt(4)
+            add_run(note, f"Pages reviewed: {ps.get('prev')} in "
+                          f"{delta.get('prev_quarter')}, {ps.get('current')} "
+                          f"in {delta.get('quarter')}.",
+                    size=8, color=MUTED_RGB, italic=True)
+
+    # Charts start at three quarterly points; a two-point line implies a
+    # slope one interval cannot support, so the table carries the QoQ story.
+    if len(trend.get("quarters") or []) >= 3:
+        charts = report_charts.render_trend_charts(trend, chart_dir, prefix)
+        for chart in charts:
+            cap = document.add_paragraph()
+            cap.paragraph_format.space_before = Pt(10)
+            cap.paragraph_format.space_after = Pt(4)
+            cap.paragraph_format.keep_with_next = True
+            add_run(cap, chart["caption"], size=8.5, color=MUTED_RGB, italic=True)
+            add_framed_picture(document, chart["path"])
+
+    movement = document.add_paragraph()
+    movement.paragraph_format.space_before = Pt(10)
+    add_run(movement,
+            f"{delta.get('resolved_findings', 0)} finding(s) resolved since "
+            f"{delta.get('prev_quarter', 'the previous quarter')}; "
+            f"{delta.get('new_findings', 0)} new.", size=10, bold=True)
+    for item in delta.get("resolved_examples") or []:
+        p = document.add_paragraph(style="List Bullet")
+        p.paragraph_format.space_after = Pt(2)
+        add_run(p, item, size=9)
+
+
 def _severity_breakdown(findings):
     counts = {}
     for f in findings:
@@ -706,8 +787,9 @@ def add_footer(document, site):
 
 # ------------------------------------------------------------------ build --
 
-def build(data, out_path):
+def build(data, out_path, chart_dir=None):
     document = Document()
+    chart_dir = Path(chart_dir) if chart_dir else Path(out_path).parent
 
     normal = document.styles["Normal"]
     normal.font.name = BODY_FONT
@@ -732,6 +814,10 @@ def build(data, out_path):
     section_titles = []
     if bottom_line or assessment:
         section_titles.append("Executive summary")
+    progress = data.get("progress") or {}
+    trend = progress.get("trend")
+    if trend:
+        section_titles.append("Progress this quarter")
     if scorecard and scorecard.get("rows"):
         section_titles.append("Measured posture")
     if web_vitals and web_vitals.get("metrics"):
@@ -762,11 +848,15 @@ def build(data, out_path):
                         number_of.get("Executive summary"))
     if bottom_line:
         add_callout(document, bottom_line)
-    progress = data.get("progress")
-    if progress:
+    if progress and not trend:
         add_progress_strip(document, progress)
     if assessment:
         add_assessment(document, assessment)
+
+    if trend:
+        add_trend_section(document, trend, chart_dir,
+                          data.get("slug") or "site",
+                          number_of.get("Progress this quarter"))
 
     # Measured posture scorecard (optional; only when the scan supplied one)
     if scorecard and scorecard.get("rows"):
@@ -931,7 +1021,7 @@ def main():
         sys.exit(1)
     data = json.loads(in_path.read_text(encoding="utf-8"))
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    build(data, out_path)
+    build(data, out_path, chart_dir=in_path.parent / "rendered")
     print(f"Wrote {out_path}")
 
 
