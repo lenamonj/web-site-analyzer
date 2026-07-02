@@ -786,6 +786,29 @@ uncaptured page adds only info verdicts and leaves the performance grade
 unchanged. The live capture step needs the agent's browser pass and is
 pending the next full site review, per the honest-evidence rule.
 
+---
+
+## 2026-07-03 - G5: findings history ledger
+
+**Task:** G5 per PLAN.md section 28 (spec'd first). Phase G loop, iteration 5.
+
+**What I did:** append-only `<slug>_history.jsonl` in the evidence dir, one
+line per run (measured_at, target, page count, totals, scorecard bands, and
+the issues slimmed to identity plus a 160-char note). `attach_delta` now
+prefers the ledger's last entry over the soon-overwritten scan JSON (which
+remains the fallback so pre-ledger evidence dirs keep working), and the
+digest gains a Trend section over the last five runs that names any
+overall-band movement. Both writers (scan_site.main, run_review.pipeline)
+append after writing the scan JSON.
+
+**What I verified:** suite 178 -> 183 (entry fields and note truncation,
+append/read roundtrip skipping a malformed line, ledger-preferred delta,
+JSON fallback, trend rendering including the band-move line). Live: two
+consecutive example.com scans created the ledger and rendered the trend
+section with the ledger-sourced delta. One test fixture initially carried
+band-only scorecard dicts and broke the digest's scorecard table; fixed the
+fixture to carry full grade dicts as real runs do.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

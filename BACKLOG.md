@@ -57,12 +57,13 @@ per the standing rule.
   page leaves the performance grade untouched. Live capture remains the
   agent's browser-pass step at the next full site review (no browser in
   this loop), recorded as pending, not simulated.
-- [ ] **G5 (todo, M)** Findings history across runs. Replace the single
-  previous-run delta with an append-only findings ledger per slug
-  (planning/_evidence/<slug>_history.jsonl): one line per run with measured_at,
-  totals, scorecard bands, and grouped issue keys. Digest gains a trend line
-  (bands over the last N runs); delta logic reads the ledger instead of the
-  overwritten JSON.
+- [x] **G5 (done, M)** Findings history ledger. Spec: PLAN.md section 28.
+  Append-only planning/_evidence/<slug>_history.jsonl (one line per run:
+  measured_at, totals, scorecard bands, slimmed issues); attach_delta now
+  prefers the ledger's last entry (scan-JSON fallback for pre-ledger
+  evidence dirs); digest gains a Trend section over the last 5 runs naming
+  overall-band moves. Suite 178 -> 183; live double-run on example.com shows
+  the ledger, the trend section, and the ledger-sourced delta.
 - [ ] **G6 (todo, L)** Polite scale crawling. Raise the page budget from ~15
   sampled pages to a configurable crawl (default off) with per-host rate
   limiting, robots.txt compliance, a hard page cap, and resumability. The

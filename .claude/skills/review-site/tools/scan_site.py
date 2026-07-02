@@ -264,20 +264,74 @@ def issue_line(group):
     return line
 
 
-def attach_delta(result, json_path):
-    """Compare against the previous scan JSON of the same target, when one
-    exists, and attach the new/resolved diff before it is overwritten."""
-    path = Path(json_path)
+def history_entry(result):
+    """One ledger line for this run: identity and context for every issue
+    (note truncated to bound line size), totals, and the scorecard bands."""
+    def slim(issues):
+        return [{"scan": i["scan"], "check": i["check"], "verdict": i["verdict"],
+                 "note": (i.get("note") or "")[:160]} for i in issues]
+    sc = result.get("scorecard", {}) or {}
+    bands = {"overall": (sc.get("overall") or {}).get("band")}
+    for name, g in (sc.get("categories") or {}).items():
+        bands[name] = g.get("band")
+    issues = result.get("issues", {}) or {}
+    return {
+        "measured_at_utc": result.get("measured_at_utc"),
+        "target": result.get("target"),
+        "pages_scanned": len(result.get("pages_scanned", []) or []),
+        "totals": result.get("totals", {}),
+        "bands": bands,
+        "issues": {"fail": slim(issues.get("fail", [])),
+                   "warn": slim(issues.get("warn", []))},
+    }
+
+
+def append_history(result, path):
+    entry = history_entry(result)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
+
+
+def read_history(path):
+    """All ledger entries, oldest first; malformed lines are skipped."""
+    path = Path(path)
     if not path.exists():
-        return
-    try:
-        prev = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return
+        return []
+    entries = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def attach_delta(result, json_path, history_path=None):
+    """Attach the new/resolved diff against the previous run. The history
+    ledger is the preferred comparison source (it survives the scan-JSON
+    overwrite); the old scan JSON is the fallback for evidence dirs from
+    before the ledger existed."""
+    prev = None
+    if history_path:
+        entries = read_history(history_path)
+        if entries:
+            prev = entries[-1]
+    if prev is None:
+        path = Path(json_path)
+        if not path.exists():
+            return
+        try:
+            prev = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
     result["delta"] = diff_issues(prev, result)
 
 
-def write_digest_md(result, path):
+def write_digest_md(result, path, history=None):
     totals = result["totals"]
     lines = [f"# Passive scan digest: {result['host']}", "",
              f"- Target: {result['target']}",
@@ -322,6 +376,18 @@ def write_digest_md(result, path):
             lines.append(f"- NEW [{i['scan']}] {i['check']}: {i['note']}")
         for i in delta["resolved"][:20]:
             lines.append(f"- RESOLVED [{i['scan']}] {i['check']}")
+    if history and len(history) >= 2:
+        recent = history[-5:]
+        lines += ["", f"## Trend (last {len(recent)} runs)", ""]
+        for e in recent:
+            bands = e.get("bands", {}) or {}
+            totals = e.get("totals", {}) or {}
+            lines.append(f"- {e.get('measured_at_utc')}: overall {bands.get('overall')}, "
+                         f"fail {totals.get('fail')}, warn {totals.get('warn')}")
+        prev_band = (recent[-2].get("bands") or {}).get("overall")
+        curr_band = (recent[-1].get("bands") or {}).get("overall")
+        if prev_band and curr_band and prev_band != curr_band:
+            lines.append(f"- Overall band moved: {prev_band} -> {curr_band}.")
     lines.append("")
     Path(path).write_text("\n".join(lines), encoding="utf-8")
 
@@ -342,9 +408,11 @@ def main():
     out_dir = common.evidence_dir()
     json_path = out_dir / f"{result['slug']}_scan.json"
     md_path = out_dir / f"{result['slug']}_scan_summary.md"
-    attach_delta(result, json_path)
+    history_path = out_dir / f"{result['slug']}_history.jsonl"
+    attach_delta(result, json_path, history_path)
     common.write_json(json_path, result)
-    write_digest_md(result, md_path)
+    append_history(result, history_path)
+    write_digest_md(result, md_path, history=read_history(history_path))
 
     print(f"Target: {result['target']}")
     print(f"Pages scanned: {len(result['pages_scanned'])}")

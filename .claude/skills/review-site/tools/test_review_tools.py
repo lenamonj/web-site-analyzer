@@ -1064,6 +1064,91 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
 
 
+class TestFindingsHistory(unittest.TestCase):
+    RESULT = {
+        "measured_at_utc": "2026-07-03T10:00:00Z",
+        "target": "https://acme.example/",
+        "pages_scanned": ["https://acme.example/"],
+        "totals": {"fail": 1, "warn": 1, "grouped_fail": 1, "grouped_warn": 1},
+        "scorecard": {"overall": {"band": "Adequate", "pass": 3, "warn": 1, "fail": 1,
+                                  "info": 0, "graded": 5, "score": 0.7},
+                      "categories": {"seo": {"band": "Strong", "pass": 3, "warn": 1,
+                                             "fail": 0, "info": 0, "graded": 4, "score": 0.88},
+                                     "security": {"band": "Poor", "pass": 0, "warn": 0,
+                                                  "fail": 1, "info": 0, "graded": 1,
+                                                  "score": 0.0}}},
+        "issues": {
+            "fail": [{"scan": "http_security", "check": "hsts", "verdict": "fail",
+                      "note": "No HSTS header. " + "x" * 300}],
+            "warn": [{"scan": "seo:https://acme.example/", "check": "title",
+                      "verdict": "warn", "note": "Title is short."}],
+        },
+    }
+
+    def test_history_entry_fields_and_note_truncation(self):
+        e = site.history_entry(self.RESULT)
+        self.assertEqual(e["measured_at_utc"], "2026-07-03T10:00:00Z")
+        self.assertEqual(e["pages_scanned"], 1)
+        self.assertEqual(e["bands"], {"overall": "Adequate", "seo": "Strong",
+                                      "security": "Poor"})
+        self.assertLessEqual(len(e["issues"]["fail"][0]["note"]), 160)
+
+    def test_append_and_read_roundtrip_skips_malformed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "h.jsonl"
+            site.append_history(self.RESULT, path)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("{not json\n")
+            site.append_history(self.RESULT, path)
+            entries = site.read_history(path)
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["target"], "https://acme.example/")
+
+    def test_delta_prefers_ledger_over_stale_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = Path(tmp) / "x_scan.json"
+            history_path = Path(tmp) / "x_history.jsonl"
+            # Stale JSON says the hsts fail already existed; the ledger's last
+            # run does not have it, so the delta must report it as NEW.
+            json_path.write_text(json.dumps(self.RESULT), encoding="utf-8")
+            older = dict(self.RESULT)
+            older = json.loads(json.dumps(older))
+            older["measured_at_utc"] = "2026-07-02T10:00:00Z"
+            older["issues"] = {"fail": [], "warn": self.RESULT["issues"]["warn"]}
+            site.append_history(older, history_path)
+            current = json.loads(json.dumps(self.RESULT))
+            site.attach_delta(current, json_path, history_path)
+        self.assertEqual(current["delta"]["previous_measured_at"], "2026-07-02T10:00:00Z")
+        self.assertEqual([i["check"] for i in current["delta"]["new"]], ["hsts"])
+
+    def test_delta_falls_back_to_scan_json_without_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = Path(tmp) / "x_scan.json"
+            json_path.write_text(json.dumps(self.RESULT), encoding="utf-8")
+            current = json.loads(json.dumps(self.RESULT))
+            current["issues"] = {"fail": [], "warn": []}
+            site.attach_delta(current, json_path, Path(tmp) / "absent.jsonl")
+        self.assertEqual(len(current["delta"]["resolved"]), 2)
+
+    def test_digest_trend_section(self):
+        older = json.loads(json.dumps(self.RESULT))
+        older["measured_at_utc"] = "2026-07-02T10:00:00Z"
+        older["scorecard"]["overall"]["band"] = "Weak"
+        history = [site.history_entry(older), site.history_entry(self.RESULT)]
+        result = json.loads(json.dumps(self.RESULT))
+        result["host"] = "acme.example"
+        result["slug"] = "acme-example"
+        result["issues_grouped"] = {"fail": site.group_issues(result["issues"]["fail"]),
+                                    "warn": site.group_issues(result["issues"]["warn"])}
+        with tempfile.TemporaryDirectory() as tmp:
+            md = Path(tmp) / "digest.md"
+            site.write_digest_md(result, md, history=history)
+            text = md.read_text(encoding="utf-8")
+        self.assertIn("## Trend (last 2 runs)", text)
+        self.assertIn("overall Weak", text)
+        self.assertIn("Overall band moved: Weak -> Adequate.", text)
+
+
 class TestVitals(unittest.TestCase):
     URL = "https://acme.example/"
 

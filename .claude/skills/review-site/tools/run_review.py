@@ -53,9 +53,12 @@ def pipeline(target, out_dir=None):
     slug = result["slug"]
     json_path = out_dir / f"{slug}_scan.json"
     md_path = out_dir / f"{slug}_scan_summary.md"
-    scan_site.attach_delta(result, json_path)
+    history_path = out_dir / f"{slug}_history.jsonl"
+    scan_site.attach_delta(result, json_path, history_path)
     common.write_json(json_path, result)
-    scan_site.write_digest_md(result, md_path)
+    scan_site.append_history(result, history_path)
+    scan_site.write_digest_md(result, md_path,
+                              history=scan_site.read_history(history_path))
 
     draft_path = out_dir / f"{slug}_exec_report_data.draft.json"
     common.write_json(draft_path, draft_report_data.draft(result))

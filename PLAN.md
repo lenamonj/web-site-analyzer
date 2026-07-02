@@ -771,7 +771,38 @@ measured. Nothing is estimated; the tool only reports what the browser
 measured. Tests: threshold matrix per metric, contrast pass/fail, the
 not-captured path, slug/url lookup, and the registry census (9 page tools).
 
-## 28. Open design questions
+## 28. Design: findings history ledger (task G5)
+Problem: the delta (section 21) compares only against the one previous run,
+because the scan JSON is overwritten. Fix-and-rescan work over days loses
+its history.
+
+Design: an append-only ledger per target,
+`planning/_evidence/<slug>_history.jsonl`, one JSON line per run:
+{"measured_at_utc", "target", "pages_scanned": n,
+ "totals": {fail, warn, grouped_fail, grouped_warn},
+ "bands": {"overall": band, "<category>": band, ...},
+ "issues": {"fail": [...], "warn": [...]}}
+with each stored issue carrying scan, check, verdict, and its note truncated
+to 160 characters (identity plus enough context to render a resolved line;
+bounded line size). Helpers in scan_site: `history_entry(result)` (pure),
+`append_history(result, path)`, `read_history(path)` (malformed lines
+skipped). The writers (`scan_site.main`, `run_review.pipeline`) append after
+writing the scan JSON.
+
+Delta now reads the ledger: `attach_delta(result, json_path, history_path)`
+prefers the ledger's last entry and falls back to the existing scan JSON
+when no ledger exists yet (first run after upgrade), so the comparison
+window survives the JSON overwrite and older evidence dirs keep working.
+
+Digest trend: with two or more ledger entries, the digest gains a
+"Trend" section listing the last five runs (timestamp, overall band,
+fail/warn counts) and names the overall band change when it moved.
+
+Tests: history_entry fields, append/read roundtrip with a malformed line
+skipped, ledger-preferred delta, JSON fallback, and the trend section
+rendering.
+
+## 29. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)
