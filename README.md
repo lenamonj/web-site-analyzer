@@ -64,6 +64,7 @@ python .claude\skills\review-site\tools\scan_site.py https://example.com https:/
 | `scan_privacy.py` | Third-party resource origins, known tracker/analytics hosts, likely tracking pixels, cookie-consent detection (static HTML only) |
 | `scan_page_security.py` | Subresource Integrity coverage on cross-origin scripts/styles, forms posting to plain HTTP from HTTPS pages, inline event handlers, target=_blank rel hygiene |
 | `scan_design.py` | Favicon and theme-color, deprecated presentational tags, inline-style density, distinct font families from inline and linked CSS, images without dimensions (layout shift) |
+| `scan_vitals.py` | Browser-captured LCP, CLS, TBT, and WCAG contrast, graded against the published Core Web Vitals and Lighthouse thresholds; reports "not captured" honestly when no browser pass ran (see `tools\CAPTURE.md`) |
 | `scan_site.py` | Orchestrates all of the above across the target and extra pages, rolls the results into a per-category scorecard, writes the evidence JSON and digest |
 | `draft_report_data.py` | Drafts the executive-report data file from the scan JSON: measured scorecard and findings filled in, judgement fields left empty |
 | `run_review.py` | One command for the whole evidence pass: discovery, full scan of the proposed page set, digest, and draft report data |

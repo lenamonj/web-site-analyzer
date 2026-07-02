@@ -757,6 +757,35 @@ live capture step is the agent's browser pass and was not exercised in this
 iteration; it is recorded as pending for the next full site review rather
 than simulated.
 
+---
+
+## 2026-07-03 - G4: rendered-evidence pipeline, part 2 (web vitals + contrast)
+
+**Task:** G4 per PLAN.md section 27 (spec'd first). Phase G loop, iteration 4.
+
+**What I did:**
+- Handoff: `planning/_evidence/rendered/<slug>/metrics.json` carries
+  browser-measured lcp_ms, cls, tbt_ms, and a contrast sample per page.
+  `tools/CAPTURE.md` (new) holds the exact JS snippets: buffered
+  PerformanceObserver for largest-contentful-paint, layout-shift excluding
+  hadRecentInput, longtask with the 50 ms TBT subtraction, and a
+  computed-style WCAG 1.4.3 contrast walk (the axe-core approach; chosen
+  over screenshot pixel sampling because gradients and antialiasing make
+  pixel methods unreliable and PIL is not stdlib).
+- Tool: `scan_vitals.py`, 13th registered tool, category performance so its
+  verdicts merge into the performance bucket. Grades against the published
+  thresholds (web.dev CWV: LCP 2.5s/4s, CLS 0.1/0.25; Lighthouse TBT
+  200/600 ms); contrast violations are WCAG failures with capped examples.
+  Notes state "lab measurement, one load". No capture -> every check info,
+  grade Not measured; the tool never estimates.
+
+**What I verified:** suite 174 -> 178 (threshold matrix, contrast pass/fail,
+not-captured path, registry census now 9 page tools; TestToolContract sweeps
+the 13th tool automatically). Live scan of example.com confirms an
+uncaptured page adds only info verdicts and leaves the performance grade
+unchanged. The live capture step needs the agent's browser pass and is
+pending the next full site review, per the honest-evidence rule.
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

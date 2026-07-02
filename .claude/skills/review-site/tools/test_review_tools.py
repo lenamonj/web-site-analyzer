@@ -37,6 +37,7 @@ import scan_readability as rd
 import scan_seo as seo
 import scan_site as site
 import scan_tls as tls
+import scan_vitals as vitals
 
 # A well-formed static page: language, title, one H1, ordered headings, images
 # with alt, a labeled input, landmarks, descriptive links, Open Graph, JSON-LD.
@@ -522,10 +523,10 @@ class TestRegistry(unittest.TestCase):
             "scan_http_security", "scan_tls", "scan_dns_email", "scan_crawl",
             "scan_seo", "scan_accessibility", "scan_links",
             "scan_performance", "scan_readability", "scan_privacy",
-            "scan_page_security", "scan_design",
+            "scan_page_security", "scan_design", "scan_vitals",
         })
         self.assertEqual(len(reg.host_tools()), 4)
-        self.assertEqual(len(reg.page_tools()), 8)
+        self.assertEqual(len(reg.page_tools()), 9)
 
     def test_every_entry_exposes_a_callable_scan(self):
         for e in reg.REGISTRY:
@@ -1061,6 +1062,77 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertIn("3 page(s)", landmarks["evidence"])
         # One grouped finding, not three per-page duplicates.
         self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
+
+
+class TestVitals(unittest.TestCase):
+    URL = "https://acme.example/"
+
+    def _with_metrics(self, entry):
+        tmp = tempfile.TemporaryDirectory()
+        base = Path(tmp.name) / "rendered" / "acme-example"
+        base.mkdir(parents=True)
+        (base / "metrics.json").write_text(json.dumps(
+            {"captured_with": "test", "viewport": "1440px",
+             "pages": {self.URL: entry}}), encoding="utf-8")
+        orig = common.evidence_dir
+        common.evidence_dir = lambda: Path(tmp.name)
+
+        def restore():
+            common.evidence_dir = orig
+            tmp.cleanup()
+        return restore
+
+    def test_threshold_matrix(self):
+        cases = [
+            ({"lcp_ms": 1800, "cls": 0.05, "tbt_ms": 150}, ("pass", "pass", "pass")),
+            ({"lcp_ms": 3200, "cls": 0.2, "tbt_ms": 400}, ("warn", "warn", "warn")),
+            ({"lcp_ms": 5200, "cls": 0.4, "tbt_ms": 900}, ("fail", "fail", "fail")),
+        ]
+        for entry, expected in cases:
+            restore = self._with_metrics({**entry, "captured_at_utc": "2026-07-03T00:00:00Z"})
+            try:
+                r = vitals.scan(self.URL)
+            finally:
+                restore()
+            got = (r["checks"]["lcp"]["verdict"], r["checks"]["cls"]["verdict"],
+                   r["checks"]["tbt"]["verdict"])
+            self.assertEqual(got, expected, entry)
+            self.assertTrue(r["captured"])
+
+    def test_contrast_violations_fail(self):
+        restore = self._with_metrics({
+            "lcp_ms": 1000, "cls": 0.0, "tbt_ms": 0,
+            "contrast": {"checked": 50, "violations": [
+                {"sample": "gray footer text", "ratio": 2.9, "required": 4.5}]}})
+        try:
+            r = vitals.scan(self.URL)
+        finally:
+            restore()
+        c = r["checks"]["contrast"]
+        self.assertEqual(c["verdict"], "fail")
+        self.assertIn("2.9:1", c["note"])
+
+    def test_clean_contrast_passes(self):
+        restore = self._with_metrics({"contrast": {"checked": 80, "violations": []}})
+        try:
+            r = vitals.scan(self.URL)
+        finally:
+            restore()
+        self.assertEqual(r["checks"]["contrast"]["verdict"], "pass")
+        # Metrics missing from the entry are info, never guessed.
+        self.assertEqual(r["checks"]["lcp"]["verdict"], "info")
+
+    def test_no_capture_is_not_measured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = common.evidence_dir
+            common.evidence_dir = lambda: Path(tmp)
+            try:
+                r = vitals.scan(self.URL)
+            finally:
+                common.evidence_dir = orig
+        self.assertFalse(r["captured"])
+        self.assertEqual({c["verdict"] for c in r["checks"].values()}, {"info"})
+        self.assertEqual(r["grade"]["band"], "Not measured")
 
 
 class TestRenderedSnapshots(unittest.TestCase):

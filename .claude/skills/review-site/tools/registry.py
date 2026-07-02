@@ -34,6 +34,7 @@ import scan_privacy
 import scan_readability
 import scan_seo
 import scan_tls
+import scan_vitals
 
 ToolEntry = namedtuple("ToolEntry", ["tool_id", "key", "module", "scope", "category", "label"])
 
@@ -56,6 +57,7 @@ REGISTRY = [
     _entry("scan_privacy", "privacy", scan_privacy, "privacy"),
     _entry("scan_page_security", "page_security", scan_page_security, "pagesec"),
     _entry("scan_design", "design", scan_design, "design"),
+    _entry("scan_vitals", "vitals", scan_vitals, "vitals"),
 ]
 
 

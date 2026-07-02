@@ -45,12 +45,18 @@ per the standing rule.
   live capture was not performed this iteration (no browser step in the
   loop), so live verification of the capture step remains with the next
   full site review. Suite 170 -> 174.
-- [ ] **G4 (todo, L)** Rendered-evidence pipeline, part 2: real performance
-  and visual metrics. From the same browser session capture LCP, CLS, and
-  TBT (Lighthouse-class metrics the static floor cannot see) plus
-  screenshots feeding a measured contrast check (WCAG 1.4.3) against the
-  rendered pixels. Every metric recorded with its measurement conditions;
-  nothing estimated.
+- [x] **G4 (done, L)** Rendered-evidence pipeline, part 2. Spec: PLAN.md
+  section 27. New 13th tool scan_vitals (category performance, merges into
+  the performance bucket) consumes browser-captured metrics from
+  rendered/<slug>/metrics.json and grades LCP/CLS/TBT against the published
+  Core Web Vitals and Lighthouse thresholds plus WCAG 1.4.3 contrast from a
+  computed-style walk (the axe-core approach, chosen over pixel sampling for
+  accuracy). tools/CAPTURE.md carries the exact capture snippets and both
+  handoff schemas. No capture -> all checks info, grade Not measured,
+  nothing estimated. Suite 174 -> 178; live scan confirms an uncaptured
+  page leaves the performance grade untouched. Live capture remains the
+  agent's browser-pass step at the next full site review (no browser in
+  this loop), recorded as pending, not simulated.
 - [ ] **G5 (todo, M)** Findings history across runs. Replace the single
   previous-run delta with an append-only findings ledger per slug
   (planning/_evidence/<slug>_history.jsonl): one line per run with measured_at,

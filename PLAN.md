@@ -736,7 +736,42 @@ malformed), and an orchestrated run where a canned SPA shell plus a snapshot
 yields measured seo verdicts stamped rendered_dom while performance stays
 static. Live capture is the agent's step and is not simulated in tests.
 
-## 27. Open design questions
+## 27. Design: rendered-evidence pipeline, part 2 - web vitals and contrast (task G4)
+Purpose: the static floor cannot see LCP, CLS, TBT, or color contrast. The
+agent's browser pass can measure all four in the loaded page (the same
+computed-style approach axe-core uses for contrast, and the standard
+PerformanceObserver APIs for the vitals) and hand the numbers to a scanner.
+
+Handoff (capture side, agent per SKILL.md and tools/CAPTURE.md):
+`planning/_evidence/rendered/<slug>/metrics.json`:
+{"captured_with": "<tool>", "viewport": "1440px", "pages": {"<url>": {
+  "lcp_ms": int|null, "cls": float|null, "tbt_ms": int|null,
+  "contrast": {"checked": int, "violations": [{"sample": "<text or
+  selector>", "ratio": float, "required": float}]} | null,
+  "captured_at_utc": "..."}}}
+CAPTURE.md carries the exact JS snippets (buffered PerformanceObserver for
+largest-contentful-paint, layout-shift excluding hadRecentInput, longtask
+with the 50ms TBT subtraction; computed-style WCAG contrast walk). Metrics
+are lab measurements of one load and are labeled as such.
+
+Tool side: new registered page tool `scan_vitals.py` (13th tool,
+CATEGORY = "performance" so it merges into the performance bucket, label
+"vitals"). scan(url, page=None) derives the slug from the url host and reads
+the metrics file; the page context is unused because the numbers come from
+the capture. Checks, graded against the published Core Web Vitals and
+Lighthouse thresholds (web.dev: LCP 2.5s/4.0s, CLS 0.1/0.25, TBT
+200ms/600ms):
+- lcp: pass <= 2500 ms, warn <= 4000, fail above; info when not captured.
+- cls: pass <= 0.1, warn <= 0.25, fail above; info when not captured.
+- tbt: pass <= 200 ms, warn <= 600, fail above; info when not captured.
+- contrast (WCAG 1.4.3): violations present -> fail with count and capped
+  examples; checked with zero violations -> pass; not captured -> info.
+No capture file -> every check info ("run the browser pass"), grade Not
+measured. Nothing is estimated; the tool only reports what the browser
+measured. Tests: threshold matrix per metric, contrast pass/fail, the
+not-captured path, slug/url lookup, and the registry census (9 page tools).
+
+## 28. Open design questions
 - Should `scan` signatures be unified to a single `scan(url, *, page=None,
   scope=...)` form, or is the host vs page split kept? (Leaning: keep the split,
   let the registry carry scope, avoid churn.)

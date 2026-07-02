@@ -48,6 +48,8 @@ Rendered DOM snapshots (browser pass, feeds the scanners): when a browser tool i
 - `planning/_evidence/rendered/<slug>/manifest.json` - `{"captured_with": "<tool>", "viewport": "1440px", "pages": {"<exact page url as scanned>": {"file": "<name>.html", "captured_at_utc": "<iso timestamp>"}}}`.
 Then re-run `scan_site.py` (or `run_review.py`). The orchestrator picks the snapshots up automatically: every structural scanner runs against the rendered DOM (results carry `evidence_source: rendered_dom`), while performance keeps the static transfer numbers. The page url key must match the scanned url exactly. If no browser is available, say so in the gameplan; the static inconclusive verdicts stand and are never guessed.
 
+Web vitals and contrast (browser pass, feeds scan_vitals): in the same browser session, run the measurement snippets in `tools/CAPTURE.md` (buffered PerformanceObserver for LCP/CLS/TBT; the computed-style WCAG contrast walk) and write `planning/_evidence/rendered/<slug>/metrics.json` per the schema there. The next scan grades them against the published Core Web Vitals and Lighthouse thresholds. Metrics are lab measurements of one load; scan_vitals labels them as such and reports "not captured" when absent.
+
 ## Scoping the review (optional helper)
 To choose which pages to review, run the passive discovery tool. It reads the sitemap and homepage navigation and proposes a representative in-scope set (homepage, section landings, a couple of deep pages per section, and footer or legal pages). It fetches only the homepage and sitemaps, not the whole site.
 
