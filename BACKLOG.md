@@ -13,6 +13,47 @@ serves.
 
 ## Phase D - Reporting automation
 
+## Phase G - Path from 680 to 900 (queued 2026-07-02, start 2026-07-03)
+Derived one-for-one from the honest capability assessment recorded in
+JOURNAL.md. Order: two quick wins first, then the rendering tier (target
+~800), then scale and history (target ~900). Spec in PLAN.md before building,
+per the standing rule.
+
+- [ ] **G1 (todo, S)** DKIM date-based selectors. The probe list misses
+  modern date-style selectors (Google rotates keys on selectors like
+  20230601). Add a generated set of recent date-pattern selectors (and
+  s1024/s2048 style) to DKIM_SELECTORS, keep the probe parallel and bounded,
+  and state in the note which selector families were probed.
+- [ ] **G2 (todo, S)** Tracker list depth. The curated KNOWN_TRACKERS list is
+  a few dozen entries versus tens of thousands in EasyList-class datasets.
+  Expand the embedded list to the top ~150 tracker domains by prevalence
+  (still explicit constants, no downloads, sources cited in the spec), and
+  add the matching CMP hosts. Keep matches reported as observations.
+- [ ] **G3 (todo, L)** Rendered-evidence pipeline, part 1: structural re-runs.
+  When a browser (Playwright/Chrome MCP) is available, capture the rendered
+  DOM for client-rendered pages and re-run the structural scanners (seo,
+  accessibility, privacy, page_security, design) against it, replacing their
+  "inconclusive" verdicts with measured ones. The scan JSON must label which
+  evidence is static versus rendered. Spec the handoff format first: the
+  agent captures, the tools consume a saved DOM snapshot file.
+- [ ] **G4 (todo, L)** Rendered-evidence pipeline, part 2: real performance
+  and visual metrics. From the same browser session capture LCP, CLS, and
+  TBT (Lighthouse-class metrics the static floor cannot see) plus
+  screenshots feeding a measured contrast check (WCAG 1.4.3) against the
+  rendered pixels. Every metric recorded with its measurement conditions;
+  nothing estimated.
+- [ ] **G5 (todo, M)** Findings history across runs. Replace the single
+  previous-run delta with an append-only findings ledger per slug
+  (planning/_evidence/<slug>_history.jsonl): one line per run with measured_at,
+  totals, scorecard bands, and grouped issue keys. Digest gains a trend line
+  (bands over the last N runs); delta logic reads the ledger instead of the
+  overwritten JSON.
+- [ ] **G6 (todo, L)** Polite scale crawling. Raise the page budget from ~15
+  sampled pages to a configurable crawl (default off) with per-host rate
+  limiting, robots.txt compliance, a hard page cap, and resumability. The
+  existing fetch cache and aggregation are prerequisites already in place.
+  Authorization language in CLAUDE.md applies unchanged.
+
 ## Phase F - World-class pass (2026-07-02 loop)
 - [x] **F11 (done)** HTTP/2 detection via ALPN. Spec: PLAN.md section 22.
   common.tls_info offers h2/http1.1 via ALPN on the existing handshake;
