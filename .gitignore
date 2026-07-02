@@ -26,6 +26,7 @@ planning/_evidence/*_exec_report_data.draft.json
 planning/_evidence/*_visual_notes.md
 planning/_evidence/*_history.jsonl
 planning/_evidence/*_crawl_state.json
+planning/_evidence/archive/
 planning/_evidence/rendered/
 planning/_evidence/*.png
 planning/_evidence/*.jpg

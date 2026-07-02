@@ -90,6 +90,18 @@ The docx is the only deliverable. Everything else the run writes (scan JSON,
 digest, draft data, history ledger, screenshots) is internal working material
 under `planning/_evidence/`.
 
+Quarterly trends: every run appends numeric metrics (category scores and
+site-level page-metric rollups) to the history ledger and archives the full
+scan JSON under planning/_evidence/archive/ for future backfill. tools/trends.py
+reduces the ledger to one point per calendar quarter (the latest run in each
+quarter, so ad-hoc runs never pollute the series) and the draft step folds the
+result into the report data. With two or more quarterly points the executive
+report renders a "Progress this quarter" section: a quarter-over-quarter
+posture table, trend charts (from three quarters), and every resolved finding
+named. Inspect a site's series any time with: python trends.py <slug>
+The third_party_origins metric is the count on the most exposed reviewed
+page, not a site-wide union.
+
 1. Seed the data file mechanically, then apply judgement. Run
    `python .claude/skills/review-site/tools/draft_report_data.py planning/_evidence/<slug>_scan.json`
    (already done if you used run_review.py). It writes `<slug>_exec_report_data.draft.json` with the measured scorecard, executive summary (strengths and weaknesses), web vitals, findings, and a prioritized action plan filled in from measured data. Review the draft severities, sharpen the bottom line for a CEO, replace the auto action plan with authored recommendations where judgement improves on it, attach evidence exhibits for the findings that most need proof, and save the result as `planning/_evidence/exec_report_data.json` using this schema:

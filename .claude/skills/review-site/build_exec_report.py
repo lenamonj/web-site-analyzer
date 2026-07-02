@@ -16,7 +16,9 @@ Usage:
     python build_exec_report.py <input_json> <output_docx>
 
 Dependency:
-    pip install python-docx
+    pip install python-docx matplotlib
+    (matplotlib is only exercised when the report data carries a quarterly
+    trend with three or more quarters of history)
 """
 
 import json
