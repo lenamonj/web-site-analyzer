@@ -1031,3 +1031,48 @@ capture_rendered stubbed (no browser -> unchanged flow; capture reporting
 success -> re-scan consumes the snapshot). The existing offline pipeline
 test passes capture=False; the auto path is covered by the stubbed wiring
 tests.
+
+## 35. Design: CEO-grade report refresh (task J2)
+The user's verdict on the F1/H1 design: still not the look and feel of a
+CEO document. Diagnosis: the report opens straight into a data dashboard
+(banner, tiles, tables) with everything at the same visual pitch. Board
+documents open with a cover, state the conclusion in large type, and use
+typographic contrast to signal hierarchy. The data contract is unchanged;
+this is presentation only.
+
+Design system changes (build_exec_report.py):
+- Cover page (new): generous whitespace, letterspaced kicker, the site name
+  in a display face (Georgia) at cover scale, a short gold rule, the overall
+  posture as a band chip, target/date/scope meta lines, a static "In this
+  report" contents list derived from the sections that will actually render
+  (no Word TOC fields: they render empty until refreshed and look broken),
+  and a confidentiality/method line. Page break to content.
+- Typography: two-face system. Georgia for display (cover title, section
+  numbers, tile and vitals values, the bottom-line statement), Calibri for
+  body. Size contrast carries hierarchy instead of fills.
+- Running header/footer with different-first-page: the cover carries
+  nothing; content pages get a small right-aligned "site - Website Review"
+  header over a hairline and keep the existing footer (title left, Page N
+  right).
+- Numbered section headings: a two-digit gold Georgia number with a
+  letterspaced small-caps title, hairline rule below, keep-with-next.
+- The bottom line as a statement: 13pt Georgia on white with a heavy navy
+  left border and a small-caps "THE BOTTOM LINE" kicker, replacing the
+  filled callout box.
+- Scorecard: adds a measured score bar per row (12 monospace block glyphs,
+  filled in the band color, remainder hairline gray) drawn only when the
+  data row carries the numeric `score` that draft_report_data now emits
+  (never derived from the band; no number, no bar).
+- Tiles and vitals: white cards with hairline borders and a navy top rule,
+  values in Georgia; the solid gray fills go.
+- Assessment columns: solid green/red header fills replaced with colored
+  small-caps titles over hairline rules.
+- Everything else (chip tables, code exhibits, framed images, footer page
+  field) keeps its structure with spacing polish.
+
+Verification: builder suite updated for the new structure (cover content,
+different-first-page header, score bars, section numbering) plus the
+existing invariants (chip fills, ordering, appendix). Visual verdict on a
+rendered PDF of the machine-draft example.com report (converted via the
+Adobe document service when no local converter exists), then the docx goes
+to the user for the final call, per the F1 precedent.

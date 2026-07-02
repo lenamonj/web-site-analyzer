@@ -257,7 +257,12 @@ def _scorecard(scan):
         detail = f"pass/warn/fail = {g.get('pass', 0)}/{g.get('warn', 0)}/{g.get('fail', 0)}"
         if score is not None:
             detail += f" (score {score})"
-        rows.append({"category": name, "band": g.get("band", "Not measured"), "detail": detail})
+        row = {"category": name, "band": g.get("band", "Not measured"), "detail": detail}
+        if score is not None:
+            # Numeric copy of the measured score so the report can draw a
+            # truthful score bar without parsing the display string.
+            row["score"] = score
+        rows.append(row)
     return {"overall": overall, "rows": rows}
 
 

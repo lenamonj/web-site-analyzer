@@ -3,12 +3,14 @@
 Executive report builder for the website review scaffold.
 
 Reads a JSON file of findings and recommendations and writes a CEO-level Word
-report with consistent, professional formatting: a masthead banner, an
-at-a-glance tile strip, a bottom-line callout, hairline-ruled tables with
-color-chip posture and severity cells, an evidence appendix, and a numbered
-footer. Formatting lives here so the report looks identical on every run
-regardless of who or what invokes it, and regardless of which site was
-analyzed.
+report with consistent, board-document formatting (PLAN.md sections 12 and
+35): a cover page with a static contents list, a running header with a
+different first page, numbered sections, an at-a-glance card strip, the
+bottom line as a display-type statement, a scorecard with measured score
+bars, hairline-ruled tables with color-chip posture and severity cells, an
+evidence appendix, and a numbered footer. Formatting lives here so the
+report looks identical on every run regardless of who or what invokes it,
+and regardless of which site was analyzed.
 
 Usage:
     python build_exec_report.py <input_json> <output_docx>
@@ -18,6 +20,7 @@ Dependency:
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +32,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 BODY_FONT = "Calibri"
+DISPLAY_FONT = "Georgia"                     # cover title, section numbers, big values
 MONO_FONT = "Consolas"
 
 # Single accent color. Swap this hex to rebrand the whole report.
@@ -39,12 +43,13 @@ BODY_RGB = RGBColor(0x26, 0x2B, 0x33)
 MUTED_RGB = RGBColor(0x5A, 0x66, 0x72)      # secondary text
 BANNER_SUB_RGB = RGBColor(0xB9, 0xC6, 0xDA)  # light blue-gray on navy
 MARK_RGB = RGBColor(0xB3, 0x26, 0x1E)       # red, for the marked (problem) text
-GOLD_HEX = "C9A227"                          # thin rule under the masthead
+GOLD_HEX = "C9A227"                          # short cover rule, section numbers
+GOLD_RGB = RGBColor(0xC9, 0xA2, 0x27)
 HAIRLINE_HEX = "D8DEE9"
-TILE_FILL_HEX = "F4F6F9"
-CALLOUT_FILL_HEX = "EEF2F8"
 CODE_FILL_HEX = "F7F8FA"
 CHIP_FILL_HEX = "E6EAF1"                     # neutral chip (effort column)
+BAR_EMPTY_HEX = "E1E6EE"                     # unfilled segments of a score bar
+SCORE_BAR_SEGMENTS = 12
 
 # Background fill per severity for the severity cell. Muted, print-safe tones.
 SEVERITY_FILL = {
@@ -65,7 +70,7 @@ BAND_FILL = {
 }
 
 # Fills light enough to need dark text for contrast; the rest use white.
-LIGHT_FILLS = {"E2A800", TILE_FILL_HEX, CALLOUT_FILL_HEX, CHIP_FILL_HEX}
+LIGHT_FILLS = {"E2A800", CHIP_FILL_HEX}
 
 PAGE_WIDTH = Inches(7.0)  # usable width inside 0.75in margins on US Letter
 
@@ -209,10 +214,10 @@ def add_page_number_field(paragraph, size=8, color=MUTED_RGB):
 
 # ------------------------------------------------------------- components --
 
-def section_heading(document, text):
+def section_heading(document, text, number=None):
     para = document.add_paragraph()
-    para.paragraph_format.space_before = Pt(16)
-    para.paragraph_format.space_after = Pt(7)
+    para.paragraph_format.space_before = Pt(22)
+    para.paragraph_format.space_after = Pt(8)
     para.paragraph_format.keep_with_next = True  # never strand a title at a page bottom
     # Thin rule under the heading, drawn as a paragraph bottom border.
     p_pr = para._p.get_or_add_pPr()
@@ -223,62 +228,137 @@ def section_heading(document, text):
     bottom.set(qn("w:color"), HAIRLINE_HEX)
     borders.append(bottom)
     p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
-    add_run(para, text.upper(), size=12, bold=True, color=ACCENT_RGB, letter_spacing=16)
+    if number is not None:
+        add_run(para, f"{number:02d}", size=13, bold=True, color=GOLD_RGB,
+                font=DISPLAY_FONT)
+        add_run(para, "   ", size=12)
+    add_run(para, text.upper(), size=11.5, bold=True, color=ACCENT_RGB, letter_spacing=20)
     return para
 
 
-def add_masthead(document, site, target_url, date):
-    table = document.add_table(rows=1, cols=1)
-    set_table_borders(table)
-    set_table_padding(table, top=180, bottom=180, left=220, right=220)
-    cell = table.rows[0].cells[0]
-    shade_cell(cell, ACCENT_HEX)
-    cell.text = ""
-
-    kicker = cell.paragraphs[0]
-    kicker.paragraph_format.space_after = Pt(4)
-    add_run(kicker, "WEBSITE REVIEW  /  EXECUTIVE REPORT", size=8.5,
-            bold=True, color=BANNER_SUB_RGB, letter_spacing=30)
-
-    name = cell.add_paragraph()
-    name.paragraph_format.space_after = Pt(4)
-    add_run(name, site, size=25, bold=True, color=WHITE_RGB)
-
-    meta_bits = [b for b in [target_url, date] if b]
-    if meta_bits:
-        meta = cell.add_paragraph()
-        meta.paragraph_format.space_after = Pt(0)
-        add_run(meta, "   |   ".join(meta_bits), size=9, color=BANNER_SUB_RGB)
-    set_col_widths(table, [PAGE_WIDTH])
-
-    # Thin gold rule directly under the banner.
+def _rule_paragraph(document, size, color, right_indent=None,
+                    space_before=0, space_after=10):
+    """A horizontal rule drawn as a paragraph bottom border. A right indent
+    shortens the rule (a short accent rule reads as designed; a full-width
+    one reads as a divider)."""
     rule = document.add_paragraph()
-    rule.paragraph_format.space_before = Pt(0)
-    rule.paragraph_format.space_after = Pt(10)
+    rule.paragraph_format.space_before = Pt(space_before)
+    rule.paragraph_format.space_after = Pt(space_after)
+    if right_indent is not None:
+        rule.paragraph_format.right_indent = right_indent
     p_pr = rule._p.get_or_add_pPr()
     borders = OxmlElement("w:pBdr")
     bottom = OxmlElement("w:bottom")
     bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), "18")
-    bottom.set(qn("w:color"), GOLD_HEX)
+    bottom.set(qn("w:sz"), str(size))
+    bottom.set(qn("w:color"), color)
     borders.append(bottom)
     p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
+    return rule
 
 
-def add_scope_line(document, scope):
-    """One small line stating what was reviewed and how."""
+def _scope_text(scope):
     bits = []
-    pages = scope.get("pages_reviewed")
+    pages = (scope or {}).get("pages_reviewed")
     if pages:
         bits.append(f"{pages} page(s) reviewed")
-    if scope.get("method"):
+    if (scope or {}).get("method"):
         bits.append(scope["method"])
-    if not bits:
-        return
-    para = document.add_paragraph()
-    para.paragraph_format.space_before = Pt(0)
-    para.paragraph_format.space_after = Pt(2)
-    add_run(para, "  |  ".join(bits), size=8.5, color=MUTED_RGB, italic=True)
+    return "  |  ".join(bits)
+
+
+def add_cover(document, data, section_titles):
+    """A full cover page: whitespace, kicker, the site name at display scale,
+    a short gold rule, the measured overall posture, meta lines, and a static
+    contents list of the sections that actually render. No Word TOC fields:
+    they show empty until manually refreshed and read as broken."""
+    site = data.get("site", "Website")
+
+    breather = document.add_paragraph()
+    breather.paragraph_format.space_before = Pt(96)
+    breather.paragraph_format.space_after = Pt(0)
+
+    kicker = document.add_paragraph()
+    kicker.paragraph_format.space_after = Pt(10)
+    add_run(kicker, "WEBSITE REVIEW  /  EXECUTIVE REPORT", size=9,
+            bold=True, color=MUTED_RGB, letter_spacing=44)
+
+    title = document.add_paragraph()
+    title.paragraph_format.space_after = Pt(6)
+    add_run(title, site, size=38, bold=True, color=ACCENT_RGB, font=DISPLAY_FONT)
+
+    _rule_paragraph(document, size=28, color=GOLD_HEX,
+                    right_indent=PAGE_WIDTH - Inches(2.3), space_after=18)
+
+    overall = (data.get("scorecard") or {}).get("overall")
+    if overall:
+        posture = document.add_paragraph()
+        posture.paragraph_format.space_after = Pt(16)
+        add_run(posture, "OVERALL POSTURE   ", size=9, bold=True,
+                color=MUTED_RGB, letter_spacing=24)
+        fill = BAND_FILL.get(overall, BAND_FILL["Not measured"])
+        chip = add_run(posture, f"  {overall.upper()}  ", size=9, bold=True,
+                       color=text_color_for_fill(fill), letter_spacing=24)
+        _shade_run(chip, fill)
+
+    meta_lines = [data.get("target_url", ""), data.get("date", ""),
+                  _scope_text(data.get("scope"))]
+    for line in meta_lines:
+        if not line:
+            continue
+        meta = document.add_paragraph()
+        meta.paragraph_format.space_after = Pt(2)
+        add_run(meta, line, size=10, color=MUTED_RGB)
+
+    if section_titles:
+        gap = document.add_paragraph()
+        gap.paragraph_format.space_before = Pt(52)
+        gap.paragraph_format.space_after = Pt(0)
+        label = document.add_paragraph()
+        label.paragraph_format.space_after = Pt(8)
+        add_run(label, "IN THIS REPORT", size=8.5, bold=True,
+                color=MUTED_RGB, letter_spacing=30)
+        for n, name in enumerate(section_titles, start=1):
+            item = document.add_paragraph()
+            item.paragraph_format.space_after = Pt(4)
+            add_run(item, f"{n:02d}", size=10, bold=True, color=GOLD_RGB,
+                    font=DISPLAY_FONT)
+            add_run(item, f"   {name}", size=10.5, color=BODY_RGB)
+
+    closing = document.add_paragraph()
+    closing.paragraph_format.space_before = Pt(40)
+    closing.paragraph_format.space_after = Pt(0)
+    add_run(closing, "Prepared for executive review. Every finding in this "
+                     "document cites a measured check; nothing is estimated.",
+            size=8.5, italic=True, color=MUTED_RGB)
+
+    document.add_page_break()
+
+
+def add_running_header(document, site, date):
+    """A small right-aligned running header over a hairline on content pages.
+    The cover page (different first page) carries nothing."""
+    section = document.sections[0]
+    section.different_first_page_header_footer = True
+    header = section.header
+    header.is_linked_to_previous = False
+    para = header.paragraphs[0]
+    para.text = ""
+    para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_pr = para._p.get_or_add_pPr()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "4")
+    bottom.set(qn("w:color"), HAIRLINE_HEX)
+    borders.append(bottom)
+    p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
+    bits = [site, "Website Review"] + ([date] if date else [])
+    add_run(para, "   |   ".join(bits), size=8, color=MUTED_RGB)
+    # Content page numbering starts at 1 (the cover is page 0, unnumbered).
+    pg = OxmlElement("w:pgNumType")
+    pg.set(qn("w:start"), "0")
+    section._sectPr.insert_element_before(pg, "w:cols", "w:docGrid")
 
 
 def add_progress_strip(document, progress):
@@ -336,18 +416,18 @@ def add_glance_tiles(document, data):
     ]
 
     table = document.add_table(rows=1, cols=len(tiles))
-    set_table_borders(table)
+    set_table_borders(table, bottom=(4, HAIRLINE_HEX), left=(4, HAIRLINE_HEX),
+                      right=(4, HAIRLINE_HEX), insideV=(4, HAIRLINE_HEX))
     set_table_padding(table, top=110, bottom=110, left=130, right=100)
     for cell, (label, value, sub, value_color) in zip(table.rows[0].cells, tiles):
-        shade_cell(cell, TILE_FILL_HEX)
         set_cell_border(cell, "top", 20, ACCENT_HEX)
         cell.text = ""
         p1 = cell.paragraphs[0]
-        p1.paragraph_format.space_after = Pt(2)
+        p1.paragraph_format.space_after = Pt(3)
         add_run(p1, label, size=7.5, bold=True, color=MUTED_RGB, letter_spacing=16)
         p2 = cell.add_paragraph()
-        p2.paragraph_format.space_after = Pt(1)
-        add_run(p2, value, size=15, bold=True, color=value_color)
+        p2.paragraph_format.space_after = Pt(2)
+        add_run(p2, value, size=15, bold=True, color=value_color, font=DISPLAY_FONT)
         p3 = cell.add_paragraph()
         p3.paragraph_format.space_after = Pt(0)
         add_run(p3, sub, size=7.5, color=MUTED_RGB)
@@ -371,14 +451,14 @@ def add_vitals_panel(document, web_vitals):
                       insideV=(4, HAIRLINE_HEX))
     set_table_padding(table, top=110, bottom=110, left=130, right=130)
     for cell, m in zip(table.rows[0].cells, metrics):
-        shade_cell(cell, TILE_FILL_HEX)
         cell.text = ""
         p1 = cell.paragraphs[0]
-        p1.paragraph_format.space_after = Pt(1)
+        p1.paragraph_format.space_after = Pt(2)
         add_run(p1, m.get("label", ""), size=8, bold=True, color=MUTED_RGB, letter_spacing=12)
         p2 = cell.add_paragraph()
-        p2.paragraph_format.space_after = Pt(3)
-        add_run(p2, str(m.get("value", "")), size=17, bold=True, color=ACCENT_RGB)
+        p2.paragraph_format.space_after = Pt(4)
+        add_run(p2, str(m.get("value", "")), size=17, bold=True, color=ACCENT_RGB,
+                font=DISPLAY_FONT)
         p3 = cell.add_paragraph()
         p3.paragraph_format.space_after = Pt(0)
         rating = m.get("rating", "")
@@ -403,14 +483,23 @@ def _shade_run(run, hex_fill):
 
 
 def add_callout(document, text):
+    """The bottom line as a statement: display type on white behind a heavy
+    navy left border, not a filled box. The conclusion should read like a
+    sentence the CEO can quote, not a UI component."""
     table = document.add_table(rows=1, cols=1)
     set_table_borders(table)
-    set_table_padding(table, top=130, bottom=130, left=170, right=170)
+    set_table_padding(table, top=60, bottom=60, left=220, right=120)
     cell = table.rows[0].cells[0]
-    shade_cell(cell, CALLOUT_FILL_HEX)
-    set_cell_border(cell, "left", 28, ACCENT_HEX)
-    para = set_cell_text(cell, text, size=10.5)
-    para.paragraph_format.line_spacing = 1.15
+    set_cell_border(cell, "left", 30, ACCENT_HEX)
+    cell.text = ""
+    kicker = cell.paragraphs[0]
+    kicker.paragraph_format.space_after = Pt(5)
+    add_run(kicker, "THE BOTTOM LINE", size=8, bold=True, color=MUTED_RGB,
+            letter_spacing=30)
+    stmt = cell.add_paragraph()
+    stmt.paragraph_format.space_after = Pt(0)
+    stmt.paragraph_format.line_spacing = 1.3
+    add_run(stmt, text, size=13, color=BODY_RGB, font=DISPLAY_FONT)
     set_col_widths(table, [PAGE_WIDTH])
 
 
@@ -424,10 +513,12 @@ def add_assessment(document, assessment):
     table = document.add_table(rows=2, cols=2)
     set_table_borders(table, insideV=(4, HAIRLINE_HEX))
     set_table_padding(table, top=60, bottom=90, left=130, right=130)
-    for cell, title, fill in ((table.rows[0].cells[0], "STRENGTHS", BAND_FILL["Strong"]),
-                              (table.rows[0].cells[1], "PRIORITIES TO FIX", BAND_FILL["Poor"])):
-        shade_cell(cell, fill)
-        set_cell_text(cell, title, size=8, bold=True, color=WHITE_RGB)
+    for cell, title, hex_color in ((table.rows[0].cells[0], "STRENGTHS", BAND_FILL["Strong"]),
+                                   (table.rows[0].cells[1], "PRIORITIES TO FIX", BAND_FILL["Poor"])):
+        para = set_cell_text(cell, title, size=8.5, bold=True,
+                             color=RGBColor.from_string(hex_color))
+        para.runs[0].font.name = BODY_FONT
+        set_cell_border(cell, "bottom", 10, hex_color)
     for cell, items in ((table.rows[1].cells[0], strengths),
                         (table.rows[1].cells[1], weaknesses)):
         cell.text = ""
@@ -465,6 +556,27 @@ def _chip(cell, text, fill):
     shade_cell(cell, fill)
     set_cell_text(cell, text, size=8.5, bold=True, color=text_color_for_fill(fill),
                   align=WD_ALIGN_PARAGRAPH.CENTER)
+
+
+SCORE_BAR_BLOCK = chr(0x2588)  # FULL BLOCK; solid segments print cleanly
+
+
+def set_score_bar_cell(cell, score, band):
+    """A measured score as a segmented bar in the band's color. Drawn only
+    from the numeric score the scan produced; never derived from the band."""
+    cell.text = ""
+    para = cell.paragraphs[0]
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(0)
+    filled = max(0, min(SCORE_BAR_SEGMENTS, round(score * SCORE_BAR_SEGMENTS)))
+    band_hex = BAND_FILL.get(band, BAND_FILL["Not measured"])
+    if filled:
+        add_run(para, SCORE_BAR_BLOCK * filled, size=8,
+                color=RGBColor.from_string(band_hex), font=MONO_FONT)
+    if filled < SCORE_BAR_SEGMENTS:
+        add_run(para, SCORE_BAR_BLOCK * (SCORE_BAR_SEGMENTS - filled), size=8,
+                color=RGBColor.from_string(BAR_EMPTY_HEX), font=MONO_FONT)
+    add_run(para, f"  {score:.2f}", size=8, color=MUTED_RGB)
 
 
 def _add_marked_runs(paragraph, text, highlights, size=8):
@@ -574,18 +686,40 @@ def build(data, out_path):
     site = data.get("site", "Website")
     document.core_properties.title = f"{site} Website Review"
 
-    add_masthead(document, site, data.get("target_url", ""), data.get("date", ""))
-    scope = data.get("scope")
-    if scope:
-        add_scope_line(document, scope)
-    add_glance_tiles(document, data)
-    add_footer(document, site)
-
-    # Executive summary: bottom line, progress, then strengths vs priorities
+    # The section list drives both the cover contents and the heading numbers,
+    # so the cover never promises a section that does not render.
     bottom_line = data.get("bottom_line", "")
     assessment = data.get("assessment")
+    scorecard = data.get("scorecard")
+    web_vitals = data.get("web_vitals")
+    section_titles = []
     if bottom_line or assessment:
-        section_heading(document, "Executive summary")
+        section_titles.append("Executive summary")
+    if scorecard and scorecard.get("rows"):
+        section_titles.append("Measured posture")
+    if web_vitals and web_vitals.get("metrics"):
+        section_titles.append("Core Web Vitals")
+    if data.get("findings"):
+        section_titles.append("Key findings hurting the site")
+    if data.get("recommendations"):
+        section_titles.append("Preferred recommendations")
+    elif data.get("action_plan"):
+        section_titles.append("Recommended plan of action")
+    if data.get("quick_wins"):
+        section_titles.append("Quick wins")
+    if data.get("evidence"):
+        section_titles.append("Evidence appendix")
+    number_of = {title: n for n, title in enumerate(section_titles, start=1)}
+
+    add_cover(document, data, section_titles)
+    add_running_header(document, site, data.get("date", ""))
+    add_footer(document, site)
+    add_glance_tiles(document, data)
+
+    # Executive summary: bottom line, progress, then strengths vs priorities
+    if bottom_line or assessment:
+        section_heading(document, "Executive summary",
+                        number_of.get("Executive summary"))
     if bottom_line:
         add_callout(document, bottom_line)
     progress = data.get("progress")
@@ -595,30 +729,46 @@ def build(data, out_path):
         add_assessment(document, assessment)
 
     # Measured posture scorecard (optional; only when the scan supplied one)
-    scorecard = data.get("scorecard")
     if scorecard and scorecard.get("rows"):
         heading = "Measured posture"
         overall = scorecard.get("overall")
         if overall:
             heading += f"  (overall: {overall})"
-        section_heading(document, heading)
+        section_heading(document, heading, number_of.get("Measured posture"))
+
+        rows = scorecard["rows"]
+        has_scores = any(isinstance(r.get("score"), (int, float)) for r in rows)
 
         def scorecard_row(row):
             def write(cells):
                 set_cell_text(cells[0], row.get("category", ""), size=9, bold=True)
                 band = row.get("band", "Not measured")
                 _chip(cells[1], band, BAND_FILL.get(band, BAND_FILL["Not measured"]))
-                set_cell_text(cells[2], row.get("detail", ""), size=8.5, color=MUTED_RGB)
+                detail = row.get("detail", "")
+                if has_scores:
+                    score = row.get("score")
+                    if isinstance(score, (int, float)):
+                        set_score_bar_cell(cells[2], score, band)
+                        # The bar already shows the score; drop the redundant
+                        # "(score N)" suffix from the detail string.
+                        detail = re.sub(r"\s*\(score [^)]*\)\s*$", "", detail)
+                    else:
+                        set_cell_text(cells[2], "not measured", size=8, color=MUTED_RGB)
+                set_cell_text(cells[-1], detail, size=8.5, color=MUTED_RGB)
             return write
 
-        add_data_table(document, ["Area", "Posture", "Measured detail"],
-                       [Inches(1.75), Inches(1.1), Inches(4.15)],
-                       [scorecard_row(r) for r in scorecard["rows"]])
+        if has_scores:
+            headers = ["Area", "Posture", "Measured score", "Detail"]
+            widths = [Inches(1.4), Inches(1.0), Inches(1.7), Inches(2.9)]
+        else:
+            headers = ["Area", "Posture", "Measured detail"]
+            widths = [Inches(1.75), Inches(1.1), Inches(4.15)]
+        add_data_table(document, headers, widths,
+                       [scorecard_row(r) for r in rows])
 
     # Core Web Vitals (real-user or lab), when measured
-    web_vitals = data.get("web_vitals")
     if web_vitals and web_vitals.get("metrics"):
-        section_heading(document, "Core Web Vitals")
+        section_heading(document, "Core Web Vitals", number_of.get("Core Web Vitals"))
         add_vitals_panel(document, web_vitals)
 
     # Key findings, most severe first
@@ -627,7 +777,8 @@ def build(data, out_path):
         key=lambda f: SEVERITY_ORDER.get(f.get("severity", "Low"), 9),
     )
     if findings:
-        section_heading(document, "Key findings hurting the site")
+        section_heading(document, "Key findings hurting the site",
+                        number_of.get("Key findings hurting the site"))
 
         def finding_row(row):
             def write(cells):
@@ -645,7 +796,8 @@ def build(data, out_path):
     # Preferred recommendations, by rank
     recs = sorted(data.get("recommendations", []), key=lambda r: r.get("rank", 999))
     if recs:
-        section_heading(document, "Preferred recommendations")
+        section_heading(document, "Preferred recommendations",
+                        number_of.get("Preferred recommendations"))
 
         def rec_row(row):
             def write(cells):
@@ -664,7 +816,8 @@ def build(data, out_path):
     # recommendations exist so a raw run still ships a prioritized plan.
     action_plan = data.get("action_plan")
     if action_plan and not recs:
-        section_heading(document, "Recommended plan of action")
+        section_heading(document, "Recommended plan of action",
+                        number_of.get("Recommended plan of action"))
 
         def action_row(n, row):
             def write(cells):
@@ -683,7 +836,7 @@ def build(data, out_path):
     # Quick wins
     quick = data.get("quick_wins", [])
     if quick:
-        section_heading(document, "Quick wins")
+        section_heading(document, "Quick wins", number_of.get("Quick wins"))
         for item in quick:
             p = document.add_paragraph(style="List Bullet")
             p.paragraph_format.space_after = Pt(3)
@@ -696,7 +849,8 @@ def build(data, out_path):
     evidence = data.get("evidence", [])
     if evidence:
         document.add_page_break()
-        section_heading(document, "Evidence appendix")
+        section_heading(document, "Evidence appendix",
+                        number_of.get("Evidence appendix"))
         for number, item in enumerate(evidence, start=1):
             cap = document.add_paragraph()
             cap.paragraph_format.space_before = Pt(12)

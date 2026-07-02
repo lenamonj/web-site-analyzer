@@ -2053,6 +2053,13 @@ class TestDraftReportData(unittest.TestCase):
         self.assertEqual(d["scorecard"]["overall"], "Weak")
         self.assertEqual({r["category"] for r in d["scorecard"]["rows"]}, {"security", "seo"})
 
+    def test_scorecard_rows_carry_the_numeric_score(self):
+        # The builder draws its score bar from this number (PLAN.md section
+        # 35); it must be the measured score, copied, never re-derived.
+        rows = {r["category"]: r for r in drpt.draft(self.SCAN)["scorecard"]["rows"]}
+        self.assertEqual(rows["security"]["score"], 0.07)
+        self.assertEqual(rows["seo"]["score"], 0.79)
+
     def test_findings_map_severity_ordering_and_evidence(self):
         d = drpt.draft(self.SCAN)
         self.assertEqual([f["severity"] for f in d["findings"]], ["High", "High", "Medium"])

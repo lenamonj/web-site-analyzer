@@ -50,8 +50,8 @@ SAMPLE = {
     "scorecard": {
         "overall": "Adequate",
         "rows": [
-            {"category": "security", "band": "Poor", "detail": "1/1/6"},
-            {"category": "seo", "band": "Strong", "detail": "9/1/0"},
+            {"category": "security", "band": "Poor", "detail": "1/1/6", "score": 0.28},
+            {"category": "seo", "band": "Strong", "detail": "9/1/0", "score": 1.0},
         ],
     },
     "findings": [
@@ -115,14 +115,35 @@ class TestExecReport(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def test_masthead_carries_site_and_kicker(self):
+    def test_cover_carries_site_kicker_and_posture(self):
         self.assertIn("example.com", self.text)
         self.assertIn("WEBSITE REVIEW  /  EXECUTIVE REPORT", self.text)
-        banner = self.doc.tables[0]
-        self.assertEqual(_cell_fill(banner.rows[0].cells[0]), ber.ACCENT_HEX)
+        # The measured overall posture appears on the cover as an uppercase chip.
+        self.assertIn("OVERALL POSTURE", self.text)
+        self.assertIn("ADEQUATE", self.text)
+        # The cover ends with a page break so content starts on its own page.
+        body_xml = self.doc.element.body.xml
+        self.assertIn('w:br w:type="page"', body_xml)
+
+    def test_cover_contents_list_names_rendered_sections_in_order(self):
+        self.assertIn("IN THIS REPORT", self.text)
+        idx = self.text.index("IN THIS REPORT")
+        listing = self.text[idx:idx + 600]
+        for name in ("Executive summary", "Measured posture", "Core Web Vitals",
+                     "Key findings hurting the site", "Preferred recommendations",
+                     "Quick wins", "Evidence appendix"):
+            self.assertIn(name, listing)
+
+    def test_running_header_skips_the_cover(self):
+        section = self.doc.sections[0]
+        self.assertTrue(section.different_first_page_header_footer)
+        self.assertIn("example.com   |   Website Review   |   2026-07-02",
+                      section.header.paragraphs[0].text)
+        # The cover's own header stays empty.
+        self.assertEqual(section.first_page_header.paragraphs[0].text.strip(), "")
 
     def test_glance_tiles_report_counts_from_data(self):
-        tiles = self.doc.tables[1]
+        tiles = self.doc.tables[0]
         self.assertEqual(len(tiles.columns), 4)
         tile_text = "\n".join(p.text for c in tiles.rows[0].cells for p in c.paragraphs)
         self.assertIn("Adequate", tile_text)          # overall band
@@ -150,9 +171,25 @@ class TestExecReport(unittest.TestCase):
         self.assertIn(ber.VITALS_FILL["Good"], chip_fills)
         self.assertIn(ber.VITALS_FILL["Poor"], chip_fills)
 
-    def test_section_headings_keep_with_next(self):
-        heading = next(p for p in self.doc.paragraphs if p.text == "EXECUTIVE SUMMARY")
+    def test_section_headings_are_numbered_and_keep_with_next(self):
+        heading = next(p for p in self.doc.paragraphs
+                       if p.text.endswith("EXECUTIVE SUMMARY"))
         self.assertTrue(heading.paragraph_format.keep_with_next)
+        self.assertTrue(heading.text.startswith("01"))
+
+    def test_scorecard_draws_measured_score_bars(self):
+        table = self._table_with_header("MEASURED SCORE")
+        bar = table.rows[1].cells[2]  # security, score 0.28
+        self.assertEqual(bar.text.count(ber.SCORE_BAR_BLOCK), ber.SCORE_BAR_SEGMENTS)
+        self.assertTrue(bar.text.endswith("0.28"))
+        # The filled segments carry the band color (Poor), in the first
+        # non-empty run (cell.text = "" leaves an empty placeholder run).
+        first_run = next(r for r in bar.paragraphs[0].runs if r.text)
+        self.assertEqual(str(first_run.font.color.rgb), ber.BAND_FILL["Poor"])
+        self.assertEqual(len(first_run.text), round(0.28 * ber.SCORE_BAR_SEGMENTS))
+
+    def test_bottom_line_kicker_renders(self):
+        self.assertIn("THE BOTTOM LINE", self.text)
 
     def test_image_exhibit_renders_in_a_framed_cell(self):
         png_1x1 = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
@@ -225,10 +262,10 @@ class TestExecReport(unittest.TestCase):
         doc = Document(str(out))
         text = _doc_text(doc)
         self.assertIn("bare.example", text)
-        # Only the masthead and glance tiles remain; every data-driven table
-        # (scorecard, findings, recommendations) is skipped.
-        self.assertEqual(len(doc.tables), 2)
-        self.assertNotIn("BOTTOM LINE", text)
+        # Only the glance tiles remain (the cover holds no tables); every
+        # data-driven table (scorecard, findings, recommendations) is skipped.
+        self.assertEqual(len(doc.tables), 1)
+        self.assertNotIn("THE BOTTOM LINE", text)
 
     def _table_with_header(self, header_text):
         """The table whose first-row cells include an exact header label.

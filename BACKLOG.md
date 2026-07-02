@@ -6,6 +6,22 @@ in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
 ## Phase J - Automation of the rendered tier (user request 2026-07-02)
+- [x] **J2 (done, L)** CEO-grade report refresh. Spec: PLAN.md section 35.
+  Cover page (kicker, Georgia display title, short gold rule, posture chip,
+  meta, static contents list, method line), Georgia/Calibri two-face
+  typography, numbered gold section headings, bottom line as a display-type
+  statement behind a navy bar, measured score bars in the scorecard
+  (draft_report_data now emits the numeric score per row; the redundant
+  score suffix is stripped from the detail column when a bar renders),
+  white cards for tiles and vitals, colored-underline assessment columns,
+  different-first-page running header with content numbering from page 1.
+  Data contract unchanged. Builder suite 16 -> 20, scanner 222 -> 223, all
+  green. Verified on a rendered PDF: the Word COM export that hung during
+  F1 works again under a guarded PowerShell call, so the design was
+  inspected page by page before delivery (cover, cards, bars, chips all
+  render as specified). Preview docx and PDF sent to the user for the
+  visual verdict.
+
 - [x] **J1 (done, L)** Automated rendered capture. Spec: PLAN.md section 34.
   New tools/capture_rendered.py drives headless Chrome/Edge over the
   DevTools protocol with a stdlib-only RFC 6455 WebSocket client: rendered

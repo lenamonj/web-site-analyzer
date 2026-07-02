@@ -1166,3 +1166,51 @@ every run (regression test updated).
 **State:** the review pipeline is browser-complete end to end with zero
 manual steps on any machine with Chrome or Edge installed. The manual
 CAPTURE.md pass remains only for overlay dismissal and interaction cases.
+
+---
+
+## 2026-07-02 - Client-reference scrub + J2: CEO-grade report refresh (user requests)
+
+**Scrub:** the user asked for the remaining client-site references to go.
+Reworded JOURNAL.md, BACKLOG.md, and two test fixtures at HEAD to neutral
+placeholders (client-a.example, client-b/contoso.com, GA tag redacted),
+then rewrote all history with git-filter-repo --replace-text and
+--replace-message. Verified by grepping every blob of every commit and all
+commit messages: zero occurrences repo-wide. Force-pushed; CI green on the
+rewritten history.
+
+**Task:** J2 per PLAN.md section 35 (spec'd first). The user's verdict on
+the previous design: still not the look and feel of a CEO document. The
+diagnosis was structural: the report opened straight into a dashboard with
+everything at one visual pitch. This pass rebuilt the presentation without
+touching the data contract:
+- Cover page: letterspaced kicker, the site in Georgia at 38pt, a short
+  gold rule, the measured overall posture as a chip, target/date/scope
+  lines, a static "In this report" list derived from the sections that
+  actually render, and a method line. No Word TOC fields (they render
+  empty until refreshed and look broken).
+- Two-face typography: Georgia for display (title, section numbers, tile
+  and vitals values, the bottom-line statement), Calibri for body.
+- Numbered section headings (gold Georgia numerals), hairline rules.
+- The bottom line as a quotable statement behind a heavy navy bar with a
+  small-caps kicker, replacing the filled callout box.
+- Scorecard score bars: 12 solid segments in the band color plus the
+  numeric score, drawn only from the measured score draft_report_data now
+  copies into each row (never derived from the band; no number, no bar).
+  The redundant "(score N)" suffix is stripped from the detail column when
+  a bar renders.
+- White cards with hairline borders and a navy top rule for the glance
+  tiles and vitals panel; colored-underline titles for the assessment
+  columns; different-first-page running header; content pages number from
+  Page 1 with the cover unnumbered.
+
+**What I verified:** builder suite 16 -> 20 (cover content and order,
+different-first-page header, numbered headings, score-bar geometry and
+band color, bottom-line kicker, minimal-data path), scanner suite 222 ->
+223 (draft rows carry the numeric score), all green. Visual verification
+on a rendered PDF, page by page: the Word COM export that hung during F1
+now completes under a guarded PowerShell call with a hard timeout, so the
+check the design bar requires (rendered PDF, not just a reopened docx) ran
+locally. Caught and fixed one visual redundancy in review (the score
+suffix duplicated by the bar). Preview docx and PDF went to the user for
+the final visual verdict on the machine-draft example.com report.
