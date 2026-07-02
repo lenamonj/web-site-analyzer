@@ -2128,6 +2128,35 @@ class TestDraftReportData(unittest.TestCase):
         self.assertTrue(any(s.startswith("SEO and on-page: strong")
                             for s in d["assessment"]["strengths"]))
 
+    def test_strengths_are_ordered_by_score_so_strongest_is_true(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["scorecard"]["categories"] = {
+            "security": {"band": "Strong", "pass": 20, "warn": 0, "fail": 0, "score": 0.97},
+            "tls": {"band": "Strong", "pass": 4, "warn": 0, "fail": 0, "score": 1.0},
+        }
+        d = drpt.draft(scan)
+        # TLS (1.0) must lead security (0.97), and the bottom line names it.
+        self.assertTrue(d["assessment"]["strengths"][0].startswith("TLS and certificates"))
+        self.assertIn("strongest area is tls and certificates", d["bottom_line"])
+
+    def test_action_plan_orders_by_measured_breadth_within_a_verdict(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["issues_grouped"] = {
+            "fail": [],
+            "warn": [
+                {"scan": "seo", "check": "title", "verdict": "warn",
+                 "note": "Title short.", "pages": ["https://x/a"]},
+                {"scan": "privacy", "check": "known_trackers", "verdict": "warn",
+                 "note": "Trackers.", "pages": [f"https://x/{i}" for i in range(12)]},
+                {"scan": "http_security", "check": "content_security_policy",
+                 "verdict": "warn", "note": "No CSP.", "pages": []},
+            ],
+        }
+        plan = drpt.draft(scan)["action_plan"]
+        # Site-wide (host) first, then 12 pages, then 1 page.
+        self.assertEqual([a["affects"] for a in plan[:3]],
+                         ["site-wide", "12 page(s)", "1 page"])
+
     def test_action_plan_maps_checks_to_imperatives_fail_first(self):
         d = drpt.draft(self.SCAN)
         plan = d["action_plan"]

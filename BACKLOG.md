@@ -63,6 +63,19 @@ serves.
   designed until then.
 
 ## Phase H - Report communication upgrade (user request 2026-07-03)
+- [x] **H4 (done, S)** World-class review pass on the day's work, driven by
+  the live client-a.example output. Fixed four accuracy defects in the
+  self-writing summary: strengths/weaknesses now sorted by score so
+  "strongest area" is true (was registry order - the bottom line claimed
+  security posture at 0.97 while three areas measured 1.00); "Worst:"
+  softened to the honest "Example:"; the action plan orders by measured
+  breadth with an explicit compliance/security tie-break so the site-wide
+  consent exposure no longer falls off the capped list behind heading
+  cosmetics; cross-page findings map to a clean imperative instead of a raw
+  note; 17 more checks in the ACTION map. Suite 203 -> 205. Shipped the full
+  client-a.example executive report with today's measurements, authored
+  recommendations, and evidence re-verified live (GA4 G-XXXXXXXXXX still
+  firing, no consent).
 - [x] **H3 (done, M)** Self-writing executive summary and action plan. Spec:
   PLAN.md section 32. draft_report_data now auto-derives, from measured data
   alone: an assessment (strengths = Strong bands + all-Good vitals;

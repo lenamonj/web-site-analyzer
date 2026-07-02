@@ -1039,6 +1039,34 @@ naming its worst finding, and a 10-step prioritized plan (X-Content-Type-
 Options, Referrer-Policy, broken links, missing H1s...) - all from the scan,
 no hand-editing. Preview sent to the user.
 
+---
+
+## 2026-07-03 - H4: world-class review pass; client-a.example report shipped
+
+**Task:** user asked for a review of everything done today with fixes to
+world-class standard, using the live client-a.example run as the vehicle.
+
+**Defects found in the day's own output and fixed (suite 203 -> 205):**
+1. "The strongest area is security posture" was false: strengths listed in
+   registry order while TLS, email auth, and links all measured 1.00 vs
+   security's 0.97. Strengths/weaknesses now sort by score, so superlatives
+   in the bottom line are true.
+2. The auto plan dropped the GA4-without-consent exposure - the prior human
+   review's top issue - because same-verdict items ordered by registry
+   position under the 10-item cap. Plan now orders by measured breadth
+   (site-wide first, then affected pages) with an explicit stated tie-break
+   putting compliance/security labels ahead of cosmetics at equal breadth.
+3. "Worst:" overclaimed (it is the first failing finding); now "Example:".
+4. Cross-page findings fell back to raw notes in the plan; mapped to a clean
+   imperative. ACTION map extended by 17 checks.
+
+**Deliverable:** full client-a.example executive report from today's scan
+(overall Strong; accessibility rose Adequate -> Strong because the logo-link
+false positive fix removed 12 phantom fails), with authored recommendations
+and quick wins grounded in measurements, progress since the previous review
+(13 resolved), and evidence exhibits re-verified live before shipping
+(G-XXXXXXXXXX still fires with no consent mechanism, checked 2026-07-03).
+
 **State at loop end:** 12 registered scanners across 10 scorecard categories
 (security host+page, tls, dns_email, seo+crawl, accessibility, links,
 performance+delivery, readability, privacy, design), a per-run fetch cache,

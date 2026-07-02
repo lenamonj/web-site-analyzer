@@ -76,6 +76,22 @@ ACTION = {
     "known_trackers": "Gate third-party trackers behind consent",
     "cookie_consent": "Add a consent mechanism before loading trackers",
     "inline_style_density": "Move inline styles into the stylesheet",
+    "document_language": "Declare the document language on the html element",
+    "document_title": "Give every page a title",
+    "viewport_zoom": "Allow pinch zoom (remove maximum-scale and user-scalable restrictions)",
+    "positive_tabindex": "Remove positive tabindex values",
+    "empty_buttons": "Give every button an accessible name",
+    "spf": "Publish an SPF record",
+    "dmarc": "Publish a DMARC policy",
+    "protocol": "Raise the minimum TLS version to 1.2",
+    "expiry": "Renew the TLS certificate",
+    "hostname_coverage": "Reissue the certificate to cover the hostname",
+    "compression": "Serve the HTML compressed (gzip or brotli)",
+    "redirect_chain": "Collapse the redirect chain to a single hop",
+    "tracking_pixels": "Gate tracking pixels behind consent",
+    "deprecated_presentational_tags": "Replace deprecated presentational tags with CSS",
+    "font_families": "Consolidate the typography to fewer font families",
+    "favicon": "Add a favicon",
     "field_lcp": "Improve Largest Contentful Paint for real users",
     "field_cls": "Reduce Cumulative Layout Shift for real users",
     "field_inp": "Improve Interaction to Next Paint for real users",
@@ -112,39 +128,70 @@ def _worst_by_category(scan):
 
 
 def _assessment(scan):
-    """Strengths and weaknesses read straight from the measured scorecard."""
+    """Strengths and weaknesses read straight from the measured scorecard.
+    Ordered by score so 'strongest' and 'weakest' claims are true: strengths
+    best-first, weaknesses worst-first."""
     cats = (scan.get("scorecard", {}) or {}).get("categories", {}) or {}
     worst = _worst_by_category(scan)
-    strengths, weaknesses = [], []
-    for name, g in cats.items():
-        label = CATEGORY_LABEL.get(name, name)
-        band = g.get("band")
-        if band == "Strong":
-            strengths.append(f"{label}: strong ({g.get('pass', 0)} checks pass)")
-        elif band in ("Weak", "Poor"):
-            note = worst.get(name)
-            detail = f"{g.get('fail', 0)} failing, {g.get('warn', 0)} warnings"
-            weaknesses.append(f"{label}: {band.lower()} ({detail})"
-                              + (f". Worst: {note}" if note else ""))
+    strong = sorted((g.get("score") or 0, name, g) for name, g in cats.items()
+                    if g.get("band") == "Strong")
+    weak = sorted((g.get("score") or 0, name, g) for name, g in cats.items()
+                  if g.get("band") in ("Weak", "Poor"))
+    strengths = [f"{CATEGORY_LABEL.get(name, name)}: strong ({g.get('pass', 0)} checks pass)"
+                 for _, name, g in reversed(strong)]
+    weaknesses = []
+    for _, name, g in weak:
+        note = worst.get(name)
+        detail = f"{g.get('fail', 0)} failing, {g.get('warn', 0)} warnings"
+        weaknesses.append(f"{CATEGORY_LABEL.get(name, name)}: {g['band'].lower()} ({detail})"
+                          + (f". Example: {note}" if note else ""))
     wv = _web_vitals(scan)
     if wv and all(m["rating"] == "Good" for m in wv["metrics"]):
         strengths.insert(0, "Core Web Vitals all in the Good range")
     return {"strengths": strengths, "weaknesses": weaknesses}
 
 
+# Tie-break tier at equal breadth: compliance and security exposure outranks
+# structural and cosmetic findings. An explicit, stated rule, not a score.
+PRIORITY_LABELS = {"privacy", "http_security", "pagesec", "tls", "dns_email"}
+
+
+def _plan_order(issue):
+    """Sort key: broadest measured impact first (host-level = whole site),
+    then compliance/security labels before the rest at equal breadth."""
+    pages = issue.get("pages")
+    breadth = float("inf") if not pages else len(pages)
+    label = (issue.get("scan") or "").split(":", 1)[0]
+    tier = 0 if label in PRIORITY_LABELS else 1
+    return (-breadth, tier)
+
+
+def _action_for(issue):
+    check = issue.get("check", "")
+    if check:
+        return ACTION.get(check) or (issue.get("note") or check)
+    if issue.get("scan") == "cross_page":
+        return "De-duplicate titles and meta descriptions across pages"
+    return issue.get("note") or "See the scan digest"
+
+
 def _action_plan(scan):
-    """A prioritized plan from the grouped findings, fails first."""
+    """A prioritized plan from the grouped findings: fails before warns; within
+    each verdict the broadest measured impact first, with compliance/security
+    ahead of cosmetics at equal breadth, so a site-wide consent exposure never
+    falls off the capped list behind a heading-order warning."""
     grouped = scan.get("issues_grouped") or scan.get("issues", {}) or {}
-    ordered = list(grouped.get("fail", [])) + list(grouped.get("warn", []))
+    ordered = (sorted(grouped.get("fail", []), key=_plan_order)
+               + sorted(grouped.get("warn", []), key=_plan_order))
     plan, seen = [], set()
     for i in ordered:
-        check = i.get("check", "")
-        if check in seen:
+        key = (i.get("scan", "").split(":", 1)[0], i.get("check", ""))
+        if key in seen:
             continue
-        seen.add(check)
+        seen.add(key)
         plan.append({
             "priority": "High" if i.get("verdict") == "fail" else "Medium",
-            "action": ACTION.get(check) or (i.get("note") or check),
+            "action": _action_for(i),
             "affects": _affects(i),
         })
         if len(plan) >= MAX_ACTIONS:
