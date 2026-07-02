@@ -42,3 +42,6 @@ sales/
 
 # Prospect lists live only on your machine, never in the repo.
 PROSPECTS.txt
+
+# Internal planning backlog: kept locally, not published.
+BACKLOG.md
