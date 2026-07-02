@@ -43,11 +43,8 @@ sales/
 # Prospect lists live only on your machine, never in the repo.
 PROSPECTS.txt
 
-# Internal planning backlog: kept locally, not published.
-BACKLOG.md
-
-# Internal work journal: kept locally, not published.
-JOURNAL.md
-
-# Internal design spec: kept locally, not published.
-PLAN.md
+# NOTE: PLAN.md, BACKLOG.md, and JOURNAL.md are tracked on the (currently
+# private) repo for backup and provenance during active development. They are
+# internal planning docs with no reason to be public. BEFORE MAKING THE REPO
+# PUBLIC, remove them from tracking and scrub them from history (see the
+# go-public checklist). Prospect lists and sales/ stay ignored regardless.
