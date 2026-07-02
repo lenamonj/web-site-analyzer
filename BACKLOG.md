@@ -13,7 +13,31 @@ serves.
 
 ## Phase D - Reporting automation
 
-_No unblocked todo items remain. See the LOOP COMPLETE entry in JOURNAL.md._
+## Phase F - World-class pass (2026-07-02 loop)
+- [x] **F1 (done)** Executive report redesign. User directive: the report is
+  visually weak; make it look professional and board-ready. Redesigned
+  `build_exec_report.py` (masthead banner, at-a-glance tiles, callout bottom
+  line, hairline chip tables, footer page numbers, numbered exhibits) with the
+  data contract unchanged; fixed an OOXML child-order defect Word is strict
+  about; added `test_exec_report.py` (9 tests). Both real datasets render and
+  reopen cleanly. Automated PDF verification is blocked by the environment
+  (Word COM export hangs even on a plain hello-world control), so the docx
+  files went to the user for the visual verdict. Spec: PLAN.md section 12.
+- [x] **F2 (done)** Security depth. Spec: PLAN.md section 13. Added
+  `scan_page_security.py` (page scope, CATEGORY security: SRI coverage on
+  cross-origin script/style, http form actions on https pages, inline event
+  handlers, target=_blank rel hygiene), `security_txt` check in
+  scan_http_security (RFC 9116 well-known URI), and `caa` check in scan_tls
+  (DoH CAA lookup). Registered as the 11th tool; suite 90 -> 106 tests, all
+  pass; live smoke on example.com and wikipedia.org (security.txt correctly
+  detected as published there).
+- [ ] **F3 (todo)** Architecture/caching depth: grade Cache-Control on sampled
+  static assets (currently info-only on the HTML doc), flag multi-hop redirect
+  chains, and check www vs apex host consistency. Spec in PLAN.md first.
+- [ ] **F4 (todo)** Static design-signal scanner (new "design" category):
+  favicon/touch-icon/theme-color presence, deprecated presentational tags,
+  inline-style density, declared font families from linked CSS (passive GET of
+  declared stylesheets only). Spec in PLAN.md first.
 
 ## Done
 - [x] **E1 (done)** Architecture review pass. New host-scoped `scan_crawl.py`

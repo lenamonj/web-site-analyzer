@@ -402,3 +402,74 @@ found and closing the biggest capability gaps. Specs added to PLAN.md sections
 (no privacy, registry, or draft generator mentions); updated in the same
 commit. Remaining candidate: per-run resource cache so shared assets are not
 re-measured on every page.
+
+---
+
+## 2026-07-02 - F1: Executive report redesign (user directive)
+
+**Task:** F1. Mid-loop the user directed: the executive report "is weak and
+should look a lot better and more professional". Redesigned the document
+system in `build_exec_report.py` with the JSON data contract unchanged. Spec
+recorded as PLAN.md section 12.
+
+**What I did:**
+- Rebuilt the document design: navy masthead banner with kicker and meta line,
+  thin gold rule, an at-a-glance tile strip (overall posture, findings count
+  with severity breakdown, recommendations count, areas measured - every value
+  counted from the data), bottom line as a shaded callout with a navy left
+  bar, hairline-ruled tables (navy header row, no full grid, roomy tblCellMar
+  padding, vertical centering, header repeat, rows kept whole), posture and
+  severity color chips in a muted print-safe palette, footer with a real PAGE
+  field, and an evidence appendix with numbered exhibits.
+- Fixed a real OOXML defect the redesign introduced and the tests could not
+  see: manually built elements (tcBorders, tblCellMar, pBdr, rPr spacing) were
+  appended at the end of their parent property elements, but ECMA-376 requires
+  a strict child order. python-docx tolerates any order, Word does not. All
+  manual inserts now go through insert_element_before with the correct
+  successor lists.
+- Added `test_exec_report.py` (9 tests, skips when python-docx is absent):
+  masthead, tile counts, callout, chip fills, severity and rank ordering,
+  footer PAGE field, exhibit numbering, minimal-data build.
+
+**What I verified:**
+- 9/9 builder tests pass; the 90-test scanner suite is unaffected.
+- Both real datasets (client-a hand-authored with images and code
+  exhibits; client-b machine draft) render without error and reopen cleanly.
+- Visual PDF verification was attempted via Word COM and is blocked by the
+  environment, not the documents: a plain hello-world docx built with pure
+  python-docx defaults also hangs Word's ExportAsFixedFormat here (bisected
+  across 11 feature-knockout variants plus the control; switching
+  ActivePrinter to Microsoft Print to PDF did not unstick it). The docx files
+  were handed to the user for the visual check instead.
+
+**Notes:** feedback recorded in auto-memory (exec-report-design-bar) so the
+bar persists across sessions.
+
+---
+
+## 2026-07-02 - F2: Security depth (security.txt, SRI, CAA, page hygiene)
+
+**Task:** F2 per PLAN.md section 13, written and built this iteration while
+the F1 render check ran in the background.
+
+**What I did:**
+- New `scan_page_security.py` (page scope, CATEGORY security - merges with the
+  host header checks in the scorecard): subresource_integrity (cross-origin
+  script/style without integrity -> warn), insecure_form_action (http action
+  on an https page -> fail), inline_event_handlers (info; they block a strict
+  CSP), target_blank_rel (info; modern browsers imply noopener). Client-
+  rendered pages mark markup checks info. Registered as the 11th tool.
+- `scan_http_security.check_security_txt`: RFC 9116 well-known URI; pass only
+  on 200 with a Contact line (a SPA catch-all 200 is not counted); absence is
+  info, never graded down.
+- `scan_tls.check_caa`: one DoH CAA lookup on the registrable domain; present
+  -> pass listing issuers, absent or failed -> info.
+
+**What I verified:**
+- Suite 90 -> 106 tests, all pass, still offline and fast.
+- Live smoke: example.com (clean page: SRI info, handlers pass, CAA info) and
+  wikipedia.org (security.txt correctly detected as published; 1 of 3
+  target=_blank links flagged; form action pass).
+
+**Next step:** F3 (architecture/caching depth) and F4 (static design-signal
+scanner) per BACKLOG; get the user's visual verdict on the redesigned report.

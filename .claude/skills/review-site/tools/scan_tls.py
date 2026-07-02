@@ -20,6 +20,7 @@ import time
 import warnings
 
 import common
+import scan_dns_email as dns
 
 EXPIRY_WARN_DAYS = 21
 
@@ -72,6 +73,21 @@ def _probe_legacy(host, port=443, timeout=10):
     except Exception:
         return {"tested": True, "legacy_negotiated": False,
                 "note": "Server refused legacy TLS 1.0/1.1 (or the local client blocked it)."}
+
+
+def check_caa(domain):
+    """CAA record: which certificate authorities may issue for the domain.
+    One passive DoH lookup; absence is common and reported as an observation."""
+    res = common.doh_query(domain, "CAA")
+    if not res["ok"]:
+        return {"verdict": "info", "records": [],
+                "note": f"CAA lookup failed ({res['error']}); issuance policy unknown."}
+    records = [a for a in res["answers"] if a]
+    if records:
+        return {"verdict": "pass", "records": records,
+                "note": f"CAA restricts certificate issuance: {', '.join(records[:6])}."}
+    return {"verdict": "info", "records": [],
+            "note": "No CAA record; any public CA may issue certificates for this domain."}
 
 
 def _scan(target):
@@ -130,6 +146,7 @@ def _scan(target):
             "protocol": {"verdict": proto_verdict, "note": proto_note},
             "expiry": {"verdict": expiry_verdict, "note": expiry_note},
             "hostname_coverage": {"verdict": coverage_verdict, "note": coverage_note},
+            "caa": check_caa(dns.registrable_domain(host)),
         },
     }
 

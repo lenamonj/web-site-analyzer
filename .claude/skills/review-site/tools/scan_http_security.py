@@ -11,7 +11,7 @@ Usage:
 """
 
 import sys
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import common
 
@@ -149,6 +149,23 @@ def check_cookies(headers):
             **_verdict("pass", "All cookies on this response carry Secure and HttpOnly.")}
 
 
+def check_security_txt(base):
+    """RFC 9116 vulnerability-disclosure file at a standardized well-known URI
+    (like robots.txt, not path guessing). Absence is common, so it is reported
+    as an observation, never graded down."""
+    res = common.http_fetch(urljoin(base, "/.well-known/security.txt"), want_body=True)
+    if res.get("final_status") is None:
+        return {"present": None, "status": None,
+                **_verdict("info", f"security.txt could not be fetched ({res.get('error')}); presence unknown.")}
+    body = res.get("body") or ""
+    if res["final_status"] == 200 and "contact:" in body.lower():
+        return {"present": True, "status": 200,
+                **_verdict("pass", "security.txt published at /.well-known/security.txt (RFC 9116).")}
+    return {"present": False, "status": res["final_status"],
+            **_verdict("info", "No security.txt (RFC 9116); publishing one gives researchers "
+                               "a vulnerability-disclosure channel.")}
+
+
 def check_disclosure(headers):
     findings = {}
     for name in ("server", "x-powered-by", "x-aspnet-version", "x-generator"):
@@ -184,6 +201,7 @@ def _scan(url):
             headers, "Permissions-Policy", None, "No Permissions-Policy set."),
         "cookies": check_cookies(headers),
         "information_disclosure": check_disclosure(headers),
+        "security_txt": check_security_txt(res.get("final_url") or url),
     }
 
     tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}

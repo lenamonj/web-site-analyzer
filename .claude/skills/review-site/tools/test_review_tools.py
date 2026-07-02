@@ -28,6 +28,7 @@ import scan_crawl as crawl
 import scan_dns_email as dns
 import scan_http_security as sec
 import scan_links as links
+import scan_page_security as psec
 import scan_performance as perf
 import scan_privacy as privacy
 import scan_readability as rd
@@ -492,9 +493,10 @@ class TestRegistry(unittest.TestCase):
             "scan_http_security", "scan_tls", "scan_dns_email", "scan_crawl",
             "scan_seo", "scan_accessibility", "scan_links",
             "scan_performance", "scan_readability", "scan_privacy",
+            "scan_page_security",
         })
         self.assertEqual(len(reg.host_tools()), 4)
-        self.assertEqual(len(reg.page_tools()), 6)
+        self.assertEqual(len(reg.page_tools()), 7)
 
     def test_every_entry_exposes_a_callable_scan(self):
         for e in reg.REGISTRY:
@@ -711,6 +713,160 @@ class TestPrivacy(unittest.TestCase):
         r = privacy.scan("https://acme.example/", page=self._ctx(SPA_SHELL))
         self.assertEqual(r["checks"]["known_trackers"]["verdict"], "info")
         self.assertEqual(r["checks"]["third_party_origins"]["verdict"], "info")
+
+
+class TestPageSecurity(unittest.TestCase):
+    def _ctx(self, html, final_url="https://acme.example/"):
+        parsed = htmlmeta.parse_html(html)
+        render = htmlmeta.render_assessment(parsed, html)
+        return {"url": final_url, "parsed": parsed, "render": render,
+                "res": {"ok": True, "body": html, "final_url": final_url,
+                        "error": None}}
+
+    BASE = ('<!doctype html><html lang="en"><head><title>Home page</title></head>'
+            '<body><h1>Hi</h1><p>Some real body text for the page content here.</p>{}</body></html>')
+
+    def test_sri_missing_on_cross_origin_script_warns(self):
+        html = self.BASE.format('<script src="https://cdn.vendor.example/lib.js"></script>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        c = r["checks"]["subresource_integrity"]
+        self.assertEqual(c["verdict"], "warn")
+        self.assertEqual(c["without_integrity"], 1)
+
+    def test_sri_present_passes(self):
+        html = self.BASE.format(
+            '<script src="https://cdn.vendor.example/lib.js" integrity="sha384-abc" '
+            'crossorigin="anonymous"></script>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        self.assertEqual(r["checks"]["subresource_integrity"]["verdict"], "pass")
+
+    def test_sri_same_origin_only_is_info(self):
+        html = self.BASE.format('<script src="/app.js"></script>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        self.assertEqual(r["checks"]["subresource_integrity"]["verdict"], "info")
+
+    def test_cross_origin_stylesheet_without_sri_counts(self):
+        html = self.BASE.format(
+            '<link rel="stylesheet" href="https://fonts.vendor.example/f.css">')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        self.assertEqual(r["checks"]["subresource_integrity"]["verdict"], "warn")
+
+    def test_http_form_action_on_https_page_fails(self):
+        html = self.BASE.format('<form action="http://acme.example/login"><input name="u"></form>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        c = r["checks"]["insecure_form_action"]
+        self.assertEqual(c["verdict"], "fail")
+        self.assertIn("http://acme.example/login", c["insecure_actions"])
+
+    def test_relative_form_action_passes(self):
+        html = self.BASE.format('<form action="/login"><input name="u"></form>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        self.assertEqual(r["checks"]["insecure_form_action"]["verdict"], "pass")
+
+    def test_inline_handlers_reported_as_info(self):
+        html = self.BASE.format('<button onclick="go()">Go</button><div onmouseover="x()">y</div>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        c = r["checks"]["inline_event_handlers"]
+        self.assertEqual(c["verdict"], "info")
+        self.assertEqual(c["count"], 2)
+
+    def test_target_blank_without_rel_is_info(self):
+        html = self.BASE.format('<a href="https://x.example" target="_blank">out</a>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        c = r["checks"]["target_blank_rel"]
+        self.assertEqual(c["verdict"], "info")
+        self.assertEqual(c["without_rel"], 1)
+
+    def test_target_blank_with_noopener_passes(self):
+        html = self.BASE.format(
+            '<a href="https://x.example" target="_blank" rel="noopener">out</a>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        self.assertEqual(r["checks"]["target_blank_rel"]["verdict"], "pass")
+
+    def test_client_rendered_is_inconclusive(self):
+        r = psec.scan("https://acme.example/", page=self._ctx(SPA_SHELL))
+        self.assertEqual(r["checks"]["subresource_integrity"]["verdict"], "info")
+        self.assertEqual(r["checks"]["insecure_form_action"]["verdict"], "info")
+        self.assertEqual(r["category"], "security")
+
+
+class TestSecurityTxtAndCaa(unittest.TestCase):
+    def test_security_txt_published(self):
+        orig = common.http_fetch
+        common.http_fetch = lambda url, *a, **k: {
+            "ok": True, "error": None, "hops": [{"url": url, "status": 200, "headers": {}}],
+            "final_url": url, "final_status": 200, "final_headers": {},
+            "content_type": "text/plain", "content_encoding": "",
+            "body": "Contact: mailto:security@acme.example\nExpires: 2027-01-01T00:00:00Z",
+            "body_bytes": 60, "uncompressed_bytes": 60, "elapsed_ms": 1}
+        try:
+            c = sec.check_security_txt("https://acme.example/")
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(c["verdict"], "pass")
+        self.assertTrue(c["present"])
+
+    def test_security_txt_absent_is_info(self):
+        orig = common.http_fetch
+        common.http_fetch = lambda url, *a, **k: {
+            "ok": True, "error": None, "hops": [{"url": url, "status": 404, "headers": {}}],
+            "final_url": url, "final_status": 404, "final_headers": {},
+            "content_type": "text/html", "content_encoding": "", "body": "not found",
+            "body_bytes": 9, "uncompressed_bytes": 9, "elapsed_ms": 1}
+        try:
+            c = sec.check_security_txt("https://acme.example/")
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(c["verdict"], "info")
+        self.assertFalse(c["present"])
+
+    def test_spa_catchall_200_without_contact_is_not_published(self):
+        orig = common.http_fetch
+        common.http_fetch = lambda url, *a, **k: {
+            "ok": True, "error": None, "hops": [{"url": url, "status": 200, "headers": {}}],
+            "final_url": url, "final_status": 200, "final_headers": {},
+            "content_type": "text/html", "content_encoding": "",
+            "body": "<html><body>app shell</body></html>",
+            "body_bytes": 30, "uncompressed_bytes": 30, "elapsed_ms": 1}
+        try:
+            c = sec.check_security_txt("https://acme.example/")
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(c["verdict"], "info")
+        self.assertFalse(c["present"])
+
+    def test_caa_present_passes(self):
+        orig = common.doh_query
+        common.doh_query = lambda name, rtype, *a, **k: {
+            "ok": True, "error": None, "status": 0, "ad": False,
+            "answers": ['0 issue "letsencrypt.org"'], "raw": []}
+        try:
+            c = tls.check_caa("acme.example")
+        finally:
+            common.doh_query = orig
+        self.assertEqual(c["verdict"], "pass")
+        self.assertIn('0 issue "letsencrypt.org"', c["records"])
+
+    def test_caa_absent_is_info(self):
+        orig = common.doh_query
+        common.doh_query = lambda name, rtype, *a, **k: {
+            "ok": True, "error": None, "status": 0, "ad": False, "answers": [], "raw": []}
+        try:
+            c = tls.check_caa("acme.example")
+        finally:
+            common.doh_query = orig
+        self.assertEqual(c["verdict"], "info")
+
+    def test_caa_lookup_failure_is_info(self):
+        orig = common.doh_query
+        common.doh_query = lambda name, rtype, *a, **k: {
+            "ok": False, "error": "stubbed offline", "status": None,
+            "ad": False, "answers": [], "raw": []}
+        try:
+            c = tls.check_caa("acme.example")
+        finally:
+            common.doh_query = orig
+        self.assertEqual(c["verdict"], "info")
 
 
 class TestDraftReportData(unittest.TestCase):
