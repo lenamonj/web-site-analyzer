@@ -213,6 +213,7 @@ This discovers pages, scans, captures rendered evidence when a browser is presen
 | Command | Flags |
 | --- | --- |
 | `run_review.py [url]` | `--crawl N` use the polite crawler for discovery with an N-page budget, `--fresh` restart a resumable crawl, `--no-browser` skip the rendered capture |
+| `triage.py [domains...]` | `--file list.txt` read domains from a file (default `sales/prospects.txt`), `--delay S` seconds between sites |
 | `capture_rendered.py [url]` | `--pages N` raise or lower the capture cap (default 15), `--browser PATH` explicit browser binary |
 | `scan_site.py [url] [extra pages...]` | scan an explicit page set |
 | `discover_pages.py [url]` | propose the in-scope review set |
@@ -254,6 +255,7 @@ The scanner suite drives the HTML parser, every grading function, the tool contr
 ```
 CLAUDE.md                                  Project context and output contract
 TARGET.txt                                 The URL to analyze (edit this to retarget)
+PROSPECTS.example.txt                      Template for the triage domain list (copy to sales/prospects.txt)
 LICENSE                                    MIT
 .github/workflows/ci.yml                   Both test suites, ubuntu + windows, py3.10 + 3.13
 .claude/
@@ -268,6 +270,7 @@ LICENSE                                    MIT
       registry.py                          Central tool registry (single source of discovery)
       discover_pages.py                    Sitemap/nav page-discovery scoping helper
       crawler.py                           Opt-in polite crawler (robots-compliant, resumable)
+      triage.py                            Bulk prospect pre-screen (ranks a domain list worst-first)
       capture_rendered.py                  Automated headless-browser capture (DevTools protocol)
       scan_http_security.py ... scan_vitals.py   The 14 registered scanners (see table above)
       scan_site.py                         Orchestrator + scorecard, writes the evidence JSON
@@ -277,6 +280,7 @@ LICENSE                                    MIT
       CAPTURE.md                           Manual browser-capture reference (fallback path)
 planning/
   _evidence/                               Scan JSON, digests, ledgers, rendered snapshots (internal)
+sales/                                     Prospect lists and triage output (git-ignored, never committed)
 ```
 
 ---
