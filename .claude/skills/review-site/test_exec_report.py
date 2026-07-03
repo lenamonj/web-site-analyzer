@@ -399,5 +399,33 @@ class TestTrendSection(unittest.TestCase):
         self.assertIn("Progress this quarter", texts)
 
 
+@unittest.skipUnless(HAVE_DOCX, "python-docx not installed")
+class TestReportLabel(unittest.TestCase):
+    def _doc(self, data):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "r.docx"
+            ber.build(data, out)
+            return Document(str(out))
+
+    def test_sample_label_renders_on_cover_and_header(self):
+        data = dict(SAMPLE, report_label="SAMPLE REPORT",
+                    cover_note="Sample copy: prior-quarter history is illustrative.")
+        doc = self._doc(data)
+        texts = [p.text for p in doc.paragraphs]
+        self.assertTrue(any("WEBSITE REVIEW  /  SAMPLE REPORT" in t for t in texts))
+        self.assertTrue(any(t.strip() == "SAMPLE REPORT" for t in texts))
+        self.assertTrue(any("prior-quarter history is illustrative" in t for t in texts))
+        self.assertFalse(any("nothing is estimated" in t for t in texts))
+        header = doc.sections[0].header
+        self.assertIn("SAMPLE REPORT", header.paragraphs[0].text)
+
+    def test_default_build_keeps_executive_kicker_and_pledge(self):
+        doc = self._doc(dict(SAMPLE))
+        texts = [p.text for p in doc.paragraphs]
+        self.assertTrue(any("WEBSITE REVIEW  /  EXECUTIVE REPORT" in t for t in texts))
+        self.assertTrue(any("nothing is estimated" in t for t in texts))
+        self.assertFalse(any(t.strip() == "SAMPLE REPORT" for t in texts))
+
+
 if __name__ == "__main__":
     unittest.main()

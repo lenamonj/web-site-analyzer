@@ -282,10 +282,20 @@ def add_cover(document, data, section_titles):
     breather.paragraph_format.space_before = Pt(96)
     breather.paragraph_format.space_after = Pt(0)
 
+    # An optional report_label ("SAMPLE REPORT") replaces the kicker's second
+    # half and gets an unmissable gold badge, so a demonstration copy can
+    # never be mistaken for a client deliverable.
+    label = (data.get("report_label") or "EXECUTIVE REPORT").upper()
     kicker = document.add_paragraph()
     kicker.paragraph_format.space_after = Pt(10)
-    add_run(kicker, "WEBSITE REVIEW  /  EXECUTIVE REPORT", size=9,
+    add_run(kicker, f"WEBSITE REVIEW  /  {label}", size=9,
             bold=True, color=MUTED_RGB, letter_spacing=44)
+    if data.get("report_label"):
+        badge = document.add_paragraph()
+        badge.paragraph_format.space_after = Pt(12)
+        chip = add_run(badge, f"  {label}  ", size=11, bold=True,
+                       color=ACCENT_RGB, letter_spacing=30)
+        _shade_run(chip, GOLD_HEX)
 
     title = document.add_paragraph()
     title.paragraph_format.space_after = Pt(6)
@@ -332,16 +342,20 @@ def add_cover(document, data, section_titles):
     closing = document.add_paragraph()
     closing.paragraph_format.space_before = Pt(40)
     closing.paragraph_format.space_after = Pt(0)
-    add_run(closing, "Prepared for executive review. Every finding in this "
-                     "document cites a measured check; nothing is estimated.",
-            size=8.5, italic=True, color=MUTED_RGB)
+    # A sample with illustrative history must not carry the measured-only
+    # pledge; cover_note lets the data state what is true for this copy.
+    note = data.get("cover_note") or (
+        "Prepared for executive review. Every finding in this "
+        "document cites a measured check; nothing is estimated.")
+    add_run(closing, note, size=8.5, italic=True, color=MUTED_RGB)
 
     document.add_page_break()
 
 
-def add_running_header(document, site, date):
+def add_running_header(document, site, date, label=None):
     """A small right-aligned running header over a hairline on content pages.
-    The cover page (different first page) carries nothing."""
+    The cover page (different first page) carries nothing. A report_label
+    replaces the default "Website Review" so every page names the copy."""
     section = document.sections[0]
     section.different_first_page_header_footer = True
     header = section.header
@@ -357,7 +371,7 @@ def add_running_header(document, site, date):
     bottom.set(qn("w:color"), HAIRLINE_HEX)
     borders.append(bottom)
     p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
-    bits = [site, "Website Review"] + ([date] if date else [])
+    bits = [site, label or "Website Review"] + ([date] if date else [])
     add_run(para, "   |   ".join(bits), size=8, color=MUTED_RGB)
     # Content page numbering starts at 1 (the cover is page 0, unnumbered).
     pg = OxmlElement("w:pgNumType")
@@ -844,7 +858,8 @@ def build(data, out_path, chart_dir=None):
     number_of = {title: n for n, title in enumerate(section_titles, start=1)}
 
     add_cover(document, data, section_titles)
-    add_running_header(document, site, data.get("date", ""))
+    add_running_header(document, site, data.get("date", ""),
+                       label=data.get("report_label"))
     add_footer(document, site)
     add_glance_tiles(document, data)
 
