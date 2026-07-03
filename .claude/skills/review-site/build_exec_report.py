@@ -187,6 +187,17 @@ def keep_rows_together(table, header=False):
             tr_pr.append(OxmlElement("w:tblHeader"))
 
 
+def keep_table_together(table):
+    """Move the whole table (and the heading welded to it by keep-with-next)
+    to the next page rather than splitting it mid-table. Word satisfies this
+    only when the table fits one page, so an oversized table still splits
+    instead of overflowing."""
+    for row in list(table.rows)[:-1]:
+        for cell in row.cells:
+            for para in cell.paragraphs:
+                para.paragraph_format.keep_with_next = True
+
+
 def set_col_widths(table, widths):
     # python-docx needs the width set on every cell to be reliable.
     table.autofit = False
@@ -963,9 +974,12 @@ def build(data, out_path, chart_dir=None):
                 _chip(cells[3], str(row.get("effort", "")), CHIP_FILL_HEX)
             return write
 
-        add_data_table(document, ["#", "Recommendation", "Expected impact", "Effort"],
-                       [Inches(0.4), Inches(3.35), Inches(2.5), Inches(0.75)],
-                       [rec_row(r) for r in recs])
+        table = add_data_table(document, ["#", "Recommendation", "Expected impact", "Effort"],
+                               [Inches(0.4), Inches(3.35), Inches(2.5), Inches(0.75)],
+                               [rec_row(r) for r in recs])
+        # The ranked plan reads as one unit; start it on a fresh page rather
+        # than splitting it when it does not fit the space left.
+        keep_table_together(table)
 
     # Plan of action: the measured-derived plan, shown when no hand-authored
     # recommendations exist so a raw run still ships a prioritized plan.
@@ -984,9 +998,10 @@ def build(data, out_path, chart_dir=None):
                 set_cell_text(cells[3], row.get("affects", ""), size=8.5, color=MUTED_RGB)
             return write
 
-        add_data_table(document, ["#", "Priority", "Action", "Affects"],
-                       [Inches(0.4), Inches(0.9), Inches(4.15), Inches(1.05)],
-                       [action_row(n, r) for n, r in enumerate(action_plan, start=1)])
+        table = add_data_table(document, ["#", "Priority", "Action", "Affects"],
+                               [Inches(0.4), Inches(0.9), Inches(4.15), Inches(1.05)],
+                               [action_row(n, r) for n, r in enumerate(action_plan, start=1)])
+        keep_table_together(table)
 
     # Quick wins
     quick = data.get("quick_wins", [])

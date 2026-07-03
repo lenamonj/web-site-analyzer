@@ -427,5 +427,16 @@ class TestReportLabel(unittest.TestCase):
         self.assertFalse(any(t.strip() == "SAMPLE REPORT" for t in texts))
 
 
+    def test_recommendations_table_keeps_together(self):
+        doc = self._doc(dict(SAMPLE))
+        table = next(t for t in doc.tables
+                     if len(t.rows[0].cells) > 1
+                     and t.rows[0].cells[1].text.strip() == "RECOMMENDATION")
+        for row in list(table.rows)[:-1]:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    self.assertTrue(para.paragraph_format.keep_with_next)
+
+
 if __name__ == "__main__":
     unittest.main()
