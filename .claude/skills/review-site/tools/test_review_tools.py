@@ -245,6 +245,17 @@ class TestSecurityChecks(unittest.TestCase):
         self.assertEqual(sec.check_clickjacking({"content-security-policy": "frame-ancestors 'self'"})["verdict"], "pass")
         self.assertEqual(sec.check_clickjacking({})["verdict"], "fail")
 
+    def test_clickjacking_combines_repeated_csp_headers(self):
+        # N1: repeated CSP headers (origin plus a CDN) are combined, not
+        # last-wins. frame-ancestors in a non-last part must still count as
+        # protection - taking header_value's last value fabricated a fail here.
+        folded = {"content-security-policy": ["frame-ancestors 'self'; default-src 'self'",
+                                              "upgrade-insecure-requests"]}
+        self.assertEqual(sec.check_clickjacking(folded)["verdict"], "pass")
+        # and a folded CSP with frame-ancestors in neither part is still a fail
+        none = {"content-security-policy": ["default-src 'self'", "upgrade-insecure-requests"]}
+        self.assertEqual(sec.check_clickjacking(none)["verdict"], "fail")
+
     def test_cookies(self):
         one = sec._parse_cookies({"set-cookie": "sid=1; Secure; HttpOnly; SameSite=Lax"})
         self.assertEqual(one[0], {"name": "sid", "secure": True, "http_only": True, "same_site": "lax"})
@@ -252,6 +263,24 @@ class TestSecurityChecks(unittest.TestCase):
         self.assertEqual(len(multi), 2)
         self.assertEqual(sec.check_cookies({"set-cookie": "b=2"})["verdict"], "warn")
         self.assertEqual(sec.check_cookies({})["verdict"], "info")
+
+    def test_cookie_flags_match_tokens_not_substrings(self):
+        # O1: Secure/HttpOnly are matched as ;-delimited attribute tokens, not
+        # substrings, so a cookie named __Secure-* (RFC 6265bis) or a value
+        # containing the flag word is not credited a flag it lacks.
+        c = sec._parse_cookies({"set-cookie":
+                                "__Secure-sid=abc; HttpOnly; SameSite=Lax"})[0]
+        self.assertFalse(c["secure"])   # the name contains "secure", the cookie does not set it
+        self.assertTrue(c["http_only"])
+        self.assertEqual(sec.check_cookies(
+            {"set-cookie": "__Secure-sid=abc; HttpOnly; SameSite=Lax"})["verdict"], "warn")
+        # a value containing both flag words sets neither
+        v = sec._parse_cookies({"set-cookie": "pref=httponly-secure-theme; Path=/"})[0]
+        self.assertFalse(v["secure"])
+        self.assertFalse(v["http_only"])
+        # a genuinely flagged cookie still passes
+        self.assertEqual(sec.check_cookies(
+            {"set-cookie": "sid=1; Secure; HttpOnly; SameSite=Strict"})["verdict"], "pass")
 
     def test_disclosure(self):
         self.assertEqual(sec.check_disclosure({"server": "nginx/1.25.3"})["verdict"], "warn")
@@ -313,6 +342,28 @@ class TestSecurityChecks(unittest.TestCase):
         self.assertIn("checks", result)
         for name, check in result["checks"].items():
             self.assertIn(check.get("verdict"), ("pass", "warn", "fail", "info"), name)
+
+    def test_unreachable_target_is_not_measured_not_fabricated(self):
+        # M1: a target that never responds (ok=False, no hops, no headers) must
+        # not fabricate missing-header FAILs or a false "clean" information_
+        # disclosure pass. Absent headers are "not measured", so every check is
+        # info and the band is Not measured, never Poor.
+        noresp = {
+            "ok": False, "error": "ConnectionResetError: reset", "hops": [],
+            "final_url": "https://down.example/", "final_status": None,
+            "final_headers": {}, "body": None,
+        }
+        orig = common.http_fetch
+        common.http_fetch = lambda *a, **k: noresp
+        try:
+            result = sec.scan("https://down.example")
+        finally:
+            common.http_fetch = orig
+        verdicts = {n: c["verdict"] for n, c in result["checks"].items()}
+        self.assertNotIn("fail", verdicts.values())
+        self.assertEqual(verdicts["information_disclosure"], "info")
+        self.assertEqual(verdicts["hsts"], "info")
+        self.assertEqual(result["grade"]["band"], "Not measured")
 
 
 class TestSeoChecks(unittest.TestCase):
@@ -429,6 +480,18 @@ class TestPerformanceChecks(unittest.TestCase):
         self.assertEqual(by_url["https://s.example/c.js"], False)
         self.assertEqual(len(out), 3)  # the inline script has no src and is skipped
 
+    def test_script_blocking_ignores_async_defer_in_src_path(self):
+        # O5: async/defer in the src path (not the attribute) must not flip a
+        # render-blocking script to non-blocking.
+        html = ('<script src="/js/async-bundle.js"></script>'
+                '<script src="/vendor/asyncstore.js"></script>'
+                '<script async src="/real.js"></script>')
+        by_url = {r["url"]: r["blocking"]
+                  for r in perf._script_resources(html, "https://s.example/")}
+        self.assertTrue(by_url["https://s.example/js/async-bundle.js"])    # path only
+        self.assertTrue(by_url["https://s.example/vendor/asyncstore.js"])   # path only
+        self.assertFalse(by_url["https://s.example/real.js"])              # real async attr
+
     def test_collect_resources_dedupes_and_types(self):
         parsed = {"links": [{"rel": "stylesheet", "href": "/s.css"}, {"rel": "icon", "href": "/f.ico"}],
                   "images": [{"src": "/i.png"}, {"src": "/i.png"}]}
@@ -446,9 +509,9 @@ class TestTlsAndDns(unittest.TestCase):
         self.assertFalse(tls._host_matches("example.com", "other.com"))
 
     def test_registrable_domain(self):
-        self.assertEqual(dns.registrable_domain("www.contoso.com"), "contoso.com")
-        self.assertEqual(dns.registrable_domain("mail.example.co.uk"), "example.co.uk")
-        self.assertEqual(dns.registrable_domain("example.com"), "example.com")
+        self.assertEqual(common.registrable_domain("www.contoso.com"), "contoso.com")
+        self.assertEqual(common.registrable_domain("mail.example.co.uk"), "example.co.uk")
+        self.assertEqual(common.registrable_domain("example.com"), "example.com")
 
     def test_spf_all_mechanism_is_a_token_not_a_substring(self):
         # The 'all' mechanism is a standalone term; a domain that merely
@@ -456,15 +519,16 @@ class TestTlsAndDns(unittest.TestCase):
         # (L5).
         orig = dns._txt_records
         try:
-            dns._txt_records = lambda name: (["v=spf1 include:my-all.com ~all"], {})
+            ok = {"ok": True}
+            dns._txt_records = lambda name: (["v=spf1 include:my-all.com ~all"], ok)
             soft = dns.check_spf("example.com")
             self.assertIn("~all", soft["note"])
             self.assertNotIn("-all", soft["note"])
-            dns._txt_records = lambda name: (["v=spf1 include:_spf.google.com -all"], {})
+            dns._txt_records = lambda name: (["v=spf1 include:_spf.google.com -all"], ok)
             self.assertIn("-all (hard fail)", dns.check_spf("example.com")["note"])
-            dns._txt_records = lambda name: (["v=spf1 a mx ?all"], {})
+            dns._txt_records = lambda name: (["v=spf1 a mx ?all"], ok)
             self.assertEqual(dns.check_spf("example.com")["verdict"], "warn")
-            dns._txt_records = lambda name: (["v=spf1 include:my-all.com"], {})
+            dns._txt_records = lambda name: (["v=spf1 include:my-all.com"], ok)
             self.assertIn("no explicit 'all'", dns.check_spf("example.com")["note"])
         finally:
             dns._txt_records = orig
@@ -505,6 +569,20 @@ class TestScorecard(unittest.TestCase):
         not_measured = common.grade(["info", "info"])
         self.assertEqual(not_measured["band"], "Not measured")
         self.assertIsNone(not_measured["score"])
+
+    def test_grade_band_boundaries(self):
+        # N4: pin the band at each exact threshold (score >= 0.85 / 0.65 / 0.4) so
+        # a >= -> > regression is caught; test_grade_bands uses only interior
+        # scores. Each boundary value plus the value just below it (next band).
+        strong = common.grade(["pass"] * 7 + ["warn"] * 3)
+        self.assertEqual((strong["score"], strong["band"]), (0.85, "Strong"))
+        adequate = common.grade(["pass"] * 3 + ["warn"] * 7)
+        self.assertEqual((adequate["score"], adequate["band"]), (0.65, "Adequate"))
+        weak = common.grade(["pass"] * 2 + ["fail"] * 3)
+        self.assertEqual((weak["score"], weak["band"]), (0.4, "Weak"))
+        self.assertEqual(common.grade(["pass"] * 4 + ["fail"] * 1)["band"], "Adequate")  # 0.80
+        self.assertEqual(common.grade(["pass"] * 3 + ["fail"] * 2)["band"], "Weak")       # 0.60
+        self.assertEqual(common.grade(["pass"] * 3 + ["fail"] * 7)["band"], "Poor")       # 0.30
 
     def test_verdicts_of_prefers_checks_then_top_level(self):
         self.assertEqual(common.verdicts_of({"checks": {"a": {"verdict": "pass"},
@@ -573,6 +651,33 @@ class TestReadmeCountGuard(unittest.TestCase):
         import check_readme_counts as crc
         problems = crc.readme_mismatches(self.GOOD, 272, 31, 99, 10)
         self.assertTrue(any("99 registered scanners" in p for p in problems))
+
+    def test_fix_rewrites_every_drifted_count_site(self):
+        # L22: --fix's pure core rewrites all seven count sites to the measured
+        # values over an in-memory README, so a contributor who adds a test runs
+        # one command instead of hand-editing. Fixture is self-consistent for
+        # scanner 90, builder 10 (total 100), 9 scanners, 8 categories.
+        import check_readme_counts as crc
+        fixture = (
+            "![Tests](https://img.shields.io/badge/tests-100%20passing-2ea44f)\n"
+            "Two offline suites, 100 tests total, no network.\n"
+            "It combines a suite (9 registered scanners, 8 scorecard categories, "
+            "zero third-party dependencies).\n"
+            "python -m unittest test_review_tools        # 90 tests: parsers\n"
+            "python -m unittest test_exec_report         # 10 tests: builder\n"
+            "      test_review_tools.py                 Offline scanner suite (90 tests)\n"
+        )
+        drifted = (fixture.replace("tests-100%20", "tests-1%20")
+                          .replace("100 tests total", "1 tests total")
+                          .replace("# 90 tests", "# 1 tests")
+                          .replace("# 10 tests", "# 2 tests")
+                          .replace("(90 tests)", "(1 tests)")
+                          .replace("9 registered scanners", "1 registered scanners")
+                          .replace("8 scorecard categories", "1 scorecard categories"))
+        self.assertTrue(crc.readme_mismatches(drifted, 90, 10, 9, 8))  # drift seen
+        fixed = crc.fixed_readme(drifted, 90, 10, 9, 8)
+        self.assertEqual(crc.readme_mismatches(fixed, 90, 10, 9, 8), [])  # all fixed
+        self.assertEqual(crc.fixed_readme(fixed, 90, 10, 9, 8), fixed)    # idempotent
 
 
 class TestScannerCharter(unittest.TestCase):
@@ -691,6 +796,21 @@ class TestDecompression(unittest.TestCase):
     def test_plain_passes_through(self):
         self.assertEqual(common._decompress(b"plain text", ""), b"plain text")
 
+    def test_truncated_gzip_yields_decoded_prefix(self):
+        # M7: a body truncated at the MAX_BODY_BYTES read cap (here simulated by
+        # halving a gzip stream) must yield its decompressed prefix, not raise
+        # EOFError and not fall back to the raw compressed bytes.
+        text = b"".join(f"line {i} with filler to lengthen the stream\n".encode()
+                        for i in range(400))
+        full = gzip.compress(text)
+        truncated = full[:len(full) // 2]
+        out = common._decompress(truncated, "gzip")
+        self.assertIsInstance(out, bytes)
+        self.assertTrue(out.startswith(b"line 0"))   # got the decompressed prefix
+        self.assertGreater(len(out), 500)            # a meaningful prefix, not empty
+        self.assertNotEqual(out, truncated)          # not the raw compressed bytes
+        self.assertEqual(common._decompress(full, "gzip"), text)  # complete body preserved
+
 
 class TestDiscovery(unittest.TestCase):
     def test_section_of_skips_locale(self):
@@ -703,6 +823,20 @@ class TestDiscovery(unittest.TestCase):
         self.assertTrue(disco._is_legal("https://x.com/privacy-policy"))
         self.assertTrue(disco._is_legal("https://x.com/legal/terms"))
         self.assertFalse(disco._is_legal("https://x.com/products/widget"))
+
+    def test_extract_locs_no_redos_and_trims(self):
+        # N6: LOC_RE must not backtrack catastrophically. The old
+        # <loc>\s*(.*?)\s*</loc> hung (O(N^3)) on an unclosed <loc> plus
+        # whitespace; the fixed <loc>(.*?)</loc> plus a Python strip is linear.
+        import time
+        pathological = "<loc>" + " " * 100000  # opened loc, whitespace, no close
+        start = time.perf_counter()
+        result = disco._extract_locs(pathological)
+        self.assertLess(time.perf_counter() - start, 1.0)  # linear, not catastrophic
+        self.assertEqual(result, [])                        # no closing tag, no match
+        # whitespace and newline trimming is preserved
+        self.assertEqual(disco._extract_locs("<loc>  https://x/a  </loc>"), ["https://x/a"])
+        self.assertEqual(disco._extract_locs("<loc>\n https://x/b \n</loc>"), ["https://x/b"])
 
     def test_propose_starts_with_homepage_and_samples_sections(self):
         home = "https://x.com/"
@@ -923,6 +1057,49 @@ class TestToolContract(unittest.TestCase):
                           f"{type(e).__name__}: {e}")
             self._assert_conformant(entry, result)
 
+    def test_no_repr_leak_in_notes_on_duplicated_headers(self):
+        # The L18/L20 class: a scanner that embeds a folded (list-valued) header
+        # straight into an f-string note renders a raw Python container repr
+        # ("... ['a', 'b'].") - no crash, but ugly output that reaches the digest
+        # and report. Under the same folded-header stimulus as L19, no check may
+        # leak a list/dict repr into its human-facing note, and every stored
+        # value must stay scalar (str/number/bool) so a later str()/fmt() render
+        # cannot repr a container either. Reverting the L18 header_value fix makes
+        # scan_performance.cache_control fail here, so the guard is not vacuous.
+        def folded_fetch(url, *a, **k):
+            res = _canned_fetch(url, *a, **k)
+            res["final_headers"] = {
+                "content-type": ["text/html; charset=utf-8", "text/html"],
+                "cache-control": ["max-age=3600", "no-cache"],
+                "strict-transport-security": ["max-age=63072000", "max-age=63072000"],
+                "content-security-policy": ["default-src 'self'", "default-src 'self'"],
+                "x-content-type-options": ["nosniff", "nosniff"],
+                "referrer-policy": ["no-referrer", "no-referrer"],
+                "x-frame-options": ["DENY", "DENY"],
+                "set-cookie": ["a=1; Secure; HttpOnly", "b=2; Secure; HttpOnly"],
+                "server": ["nginx/1.25.3", "nginx/1.25.3"],
+            }
+            return res
+        self._patch(folded_fetch, _canned_tls, _canned_doh)
+        repr_marks = ("['", "{'")  # opening of a list/dict-of-strings repr
+        for entry in reg.REGISTRY:
+            result = entry.module.scan(self.TARGET)
+            for name, c in (result.get("checks") or {}).items():
+                note = c.get("note", "")
+                self.assertFalse(any(m in note for m in repr_marks),
+                                 f"{entry.tool_id}.{name} note leaks a container "
+                                 f"repr: {note!r}")
+                if c.get("value") is not None:
+                    self.assertIsInstance(
+                        c["value"], (str, int, float, bool),
+                        f"{entry.tool_id}.{name} stored a non-scalar value "
+                        f"{c['value']!r}")
+                    if isinstance(c["value"], str):
+                        self.assertFalse(
+                            any(m in c["value"] for m in repr_marks),
+                            f"{entry.tool_id}.{name} value leaks a container "
+                            f"repr: {c['value']!r}")
+
 
 class TestPrivacy(unittest.TestCase):
     def _ctx(self, html):
@@ -1108,6 +1285,26 @@ class TestFetchCache(unittest.TestCase):
             common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy = orig
         self.assertIsNone(common._FETCH_CACHE)
 
+    def test_fetch_cache_is_reference_counted_for_the_rescan(self):
+        # O4: nested enablers compose so a pipeline's cache and its warmup survive
+        # scan_site.run's disable, letting the post-capture re-scan reuse it; the
+        # cache clears only when the outermost enabler disables. Before the fix,
+        # scan_site.run's disable nulled the shared cache and the re-scan
+        # re-fetched the whole page set.
+        common._FETCH_CACHE = None
+        common._FETCH_CACHE_DEPTH = 0
+        try:
+            common.enable_fetch_cache()               # pipeline (depth 1)
+            common._FETCH_CACHE["u"] = "warm"         # a fetch from the first scan
+            common.enable_fetch_cache()               # scan_site.run (depth 2)
+            common.disable_fetch_cache()              # scan_site.run finally (depth 1)
+            self.assertEqual(common._FETCH_CACHE, {"u": "warm"})  # survives for the re-scan
+            common.disable_fetch_cache()              # pipeline finally (depth 0)
+            self.assertIsNone(common._FETCH_CACHE)
+        finally:
+            common._FETCH_CACHE = None
+            common._FETCH_CACHE_DEPTH = 0
+
 
 class TestRunLevelDedup(unittest.TestCase):
     """Orchestrator-level integration for the per-run cache: across a
@@ -1165,6 +1362,22 @@ class TestAssetCachingAndRedirects(unittest.TestCase):
         self.assertIsNone(perf._cache_max_age("no-store"))
         self.assertIsNone(perf._cache_max_age(None))
         self.assertEqual(perf._cache_max_age(["public", "max-age=60"]), 60)
+
+    def test_measure_reads_folded_content_length(self):
+        # N3: a duplicated Content-Length folds to a list; _measure must still
+        # record the byte size (header_value's last value) rather than dropping
+        # the asset from the weight floor.
+        orig = common.http_fetch
+        common.http_fetch = lambda url, **k: {
+            "final_headers": {"content-length": ["4096", "4096"],
+                              "cache-control": "max-age=60"},
+            "final_status": 200}
+        try:
+            m = perf._measure({"url": "https://a/app.js"})
+        finally:
+            common.http_fetch = orig
+        self.assertEqual(m["bytes"], 4096)
+        self.assertEqual(m["status"], 200)
 
     def test_mostly_uncached_assets_warn(self):
         measured = [
@@ -1488,6 +1701,18 @@ class TestCrawler(unittest.TestCase):
                           delay=0, sleep=self.sleeps.append)
         self.assertEqual(len(r["pages"]), 2)
 
+    def test_non_dict_state_file_is_ignored_not_a_crash(self):
+        # N7: a valid-JSON non-dict state file (external corruption) must be
+        # treated as no state, not crash crawl()'s loaded.get(...) - the M8 class.
+        import crawler
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "state.json"
+            path.write_text("42", encoding="utf-8")  # valid JSON, not a dict
+            self.assertIsNone(crawler._load_state(path))
+            r = crawler.crawl("https://acme.example/", max_pages=2, delay=0,
+                              state_path=path, sleep=self.sleeps.append)
+        self.assertEqual(len(r["pages"]), 2)  # started fresh, no crash
+
     def test_resume_does_not_refetch_visited_pages(self):
         import crawler
         with tempfile.TemporaryDirectory() as tmp:
@@ -1545,6 +1770,22 @@ class TestFindingsHistory(unittest.TestCase):
             entries = site.read_history(path)
         self.assertEqual(len(entries), 2)
         self.assertEqual(entries[0]["target"], "https://acme.example/")
+
+    def test_read_history_skips_valid_json_non_dict_lines(self):
+        # M8: a valid-JSON but non-dict line (external ledger corruption) is
+        # skipped too - consumers do entry.get(...) and would crash on a bare
+        # int, string, or list.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "h.jsonl"
+            site.append_history(self.RESULT, path)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("42\n")
+                f.write('"a string"\n')
+                f.write("[1, 2, 3]\n")
+            site.append_history(self.RESULT, path)
+            entries = site.read_history(path)
+        self.assertEqual(len(entries), 2)  # only the two dict entries survive
+        self.assertTrue(all(isinstance(e, dict) for e in entries))
 
     def test_delta_prefers_ledger_over_stale_json(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1775,6 +2016,29 @@ class TestRenderedSnapshots(unittest.TestCase):
         self.assertEqual(snaps, {"https://acme.example/": GOOD_PAGE})
         self.assertEqual(empty, {})
 
+    def test_corrupt_non_dict_json_files_degrade_not_crash(self):
+        # N8: a valid-JSON non-dict internal file (external evidence-dir
+        # corruption) must degrade, not crash the run with AttributeError -
+        # closing the M8/N7 class across the three internal readers.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base = tmp / "rendered" / "acme-example"
+            base.mkdir(parents=True)
+            (base / "manifest.json").write_text("42", encoding="utf-8")
+            (base / "metrics.json").write_text("[1, 2, 3]", encoding="utf-8")
+            orig = common.evidence_dir
+            common.evidence_dir = lambda: tmp
+            try:
+                self.assertEqual(site.load_rendered_snapshots("acme-example"), {})
+                self.assertIsNone(vitals.load_metrics("https://acme.example/"))
+            finally:
+                common.evidence_dir = orig
+            jp = tmp / "acme-example_scan.json"
+            jp.write_text('"corrupt"', encoding="utf-8")  # valid JSON, not a dict
+            result = {"issues": {"fail": [], "warn": []}}
+            site.attach_delta(result, jp, history_path=None)
+            self.assertNotIn("delta", result)  # no delta, no crash
+
     def test_spa_page_with_snapshot_gets_measured_verdicts(self):
         def spa_fetch(url, *args, **kwargs):
             res = dict(_canned_fetch(url))
@@ -1876,10 +2140,10 @@ class TestDkimSelectorFamilies(unittest.TestCase):
         orig = dns._txt_records
         try:
             dns._txt_records = lambda name: (
-                ["v=DMARC1; p=reject; ruf=mailto:x@rua=example.com"], {})
+                ["v=DMARC1; p=reject; ruf=mailto:x@rua=example.com"], {"ok": True})
             self.assertFalse(dns.check_dmarc("example.com")["aggregate_reports"])
             dns._txt_records = lambda name: (
-                ["v=DMARC1; p=reject; rua=mailto:agg@example.com"], {})
+                ["v=DMARC1; p=reject; rua=mailto:agg@example.com"], {"ok": True})
             self.assertTrue(dns.check_dmarc("example.com")["aggregate_reports"])
         finally:
             dns._txt_records = orig
@@ -1971,6 +2235,50 @@ class TestEmailTransportPosture(unittest.TestCase):
             c = self._run(check, {}, has_mx=False)
             self.assertEqual(c["verdict"], "info")
             self.assertIn("no MX", c["note"])
+
+    def test_doh_failure_is_unknown_not_fabricated(self):
+        # M2: a DoH lookup failure must not read as "no SPF/DMARC record" (a
+        # fabricated fail) or "does not receive mail" / "not signed" (false
+        # claims). Every affected check degrades to info; the MX-dependent gate
+        # reports applicability unknown, never "no MX".
+        failed = {"ok": False, "error": "timeout", "status": None, "ad": False,
+                  "answers": [], "raw": []}
+        orig = common.doh_query
+        common.doh_query = lambda *a, **k: failed
+        try:
+            spf = dns.check_spf("acme.example")
+            dmarc = dns.check_dmarc("acme.example")
+            mx = dns.check_mx("acme.example")
+            dnssec = dns.check_dnssec("acme.example")
+        finally:
+            common.doh_query = orig
+        self.assertEqual(spf["verdict"], "info")
+        self.assertEqual(dmarc["verdict"], "info")
+        self.assertEqual(mx["verdict"], "info")
+        self.assertEqual(dnssec["verdict"], "info")
+        self.assertIn("lookup failed", spf["note"].lower())
+        self.assertIn("lookup failed", dmarc["note"].lower())
+        self.assertNotIn("no spf record", spf["note"].lower())
+        gate = dns._mx_gate(None, "MTA-STS")
+        self.assertEqual(gate["verdict"], "info")
+        self.assertIn("unknown", gate["note"].lower())
+        self.assertNotIn("no MX", gate["note"])
+
+    def test_full_scan_with_dns_down_is_not_fabricated_poor(self):
+        # M2 end to end: with every DoH lookup failing, the email-auth band must
+        # not be a fabricated Poor from missing SPF/DMARC (rdap_domain is stubbed
+        # suite-wide, so this stays offline).
+        failed = {"ok": False, "error": "timeout", "status": None, "ad": False,
+                  "answers": [], "raw": []}
+        orig = common.doh_query
+        common.doh_query = lambda *a, **k: failed
+        try:
+            result = dns.scan("https://acme.example")
+        finally:
+            common.doh_query = orig
+        verdicts = [c["verdict"] for c in result["checks"].values()]
+        self.assertNotIn("fail", verdicts)
+        self.assertNotEqual(result["grade"]["band"], "Poor")
 
     def test_tls_rpt_and_bimi_present_pass(self):
         rpt = self._run(dns.check_tls_rpt,
@@ -2881,6 +3189,61 @@ class TestRunReview(unittest.TestCase):
         self.assertEqual(page["seo"]["evidence_source"], "rendered_dom")
 
 
+class TestCdpSession(unittest.TestCase):
+    """O3: the CDP dispatch layer (id-correlation, JSON-RPC errors, event
+    buffering, load-event waiting, Runtime.evaluate exception handling) driven
+    offline with a stub connection that yields canned JSON messages. Nothing here
+    touches a socket or a browser."""
+
+    class FakeConn:
+        def __init__(self, messages):
+            self.sent = []
+            self._messages = list(messages)
+
+        def send_text(self, text):
+            self.sent.append(text)
+
+        def read_message(self, remaining):
+            if not self._messages:
+                raise caprend.CaptureError("connection closed (test)")
+            return self._messages.pop(0)
+
+    def test_cmd_matches_id_and_buffers_intervening_events(self):
+        conn = self.FakeConn([
+            '{"method": "Page.frameStartedLoading", "params": {}}',  # event -> buffered
+            '{"id": 1, "result": {"frameId": "abc"}}'])              # matching response
+        s = caprend.CdpSession(conn)
+        self.assertEqual(s.cmd("Page.navigate", {"url": "https://x/"}), {"frameId": "abc"})
+        sent = json.loads(conn.sent[0])
+        self.assertEqual((sent["id"], sent["method"]), (1, "Page.navigate"))
+        # the interleaved event was buffered and is retrievable
+        self.assertIsNotNone(s.wait_event("Page.frameStartedLoading", timeout=0))
+
+    def test_cmd_raises_captureerror_on_jsonrpc_error(self):
+        conn = self.FakeConn(['{"id": 1, "error": {"message": "no such method"}}'])
+        with self.assertRaises(caprend.CaptureError) as cm:
+            caprend.CdpSession(conn).cmd("Bogus.method")
+        self.assertIn("no such method", str(cm.exception))
+
+    def test_wait_event_returns_none_when_the_read_fails(self):
+        # A closed/timed-out connection is not an error for wait_event: capture
+        # proceeds best-effort when a page never fires the awaited event.
+        self.assertIsNone(caprend.CdpSession(self.FakeConn([])).wait_event(
+            "Page.loadEventFired", timeout=5))
+
+    def test_evaluate_returns_the_value(self):
+        conn = self.FakeConn(['{"id": 1, "result": {"result": {"value": 42}}}'])
+        self.assertEqual(caprend.CdpSession(conn).evaluate("40 + 2"), 42)
+
+    def test_evaluate_raises_on_a_page_exception(self):
+        conn = self.FakeConn([
+            '{"id": 1, "result": {"exceptionDetails": {"exception": '
+            '{"description": "ReferenceError: x is not defined"}}}}'])
+        with self.assertRaises(caprend.CaptureError) as cm:
+            caprend.CdpSession(conn).evaluate("x")
+        self.assertIn("ReferenceError", str(cm.exception))
+
+
 class TestCaptureRendered(unittest.TestCase):
     """The automated capture tool (PLAN.md section 34). Offline: no browser
     is ever launched; the WebSocket layer is driven with crafted bytes and
@@ -3068,6 +3431,43 @@ class TestCaptureRendered(unittest.TestCase):
         self.assertEqual(summary["captured"], [good])
         self.assertIn(bad, summary["failed"])
         self.assertIn("connection refused", summary["failed"][bad][0])
+
+    def test_three_consecutive_failures_abort_the_run(self):
+        # M4: a dead browser must not churn the whole page set; three consecutive
+        # page failures abort with an honest note, and later pages are skipped.
+        pages = [f"https://x.example/p{i}" for i in range(4)]
+        plan = {"pages": pages, "dom_pages": [], "dropped": []}
+        with tempfile.TemporaryDirectory() as td:
+            summary = caprend.capture_pages(
+                "x-example", plan,
+                session_factory=lambda: self.FakeSession(fail_goto=set(pages)),
+                out_dir=Path(td), delay_s=0)
+        self.assertFalse(summary["ok"])
+        self.assertIn("aborting the capture run", summary["note"])
+        self.assertEqual(len(summary["failed"]), 3)   # aborts at the third
+        self.assertNotIn(pages[3], summary["failed"])  # fourth page never tried
+        self.assertEqual(summary["captured"], [])
+
+    def test_browser_restart_failure_aborts_the_run(self):
+        # M4: if the post-failure session relaunch itself fails, abort with a
+        # "browser restart failed" note rather than looping on a dead browser.
+        bad = "https://x.example/bad"
+        good = "https://x.example/good"
+        plan = {"pages": [bad, good], "dom_pages": [], "dropped": []}
+        calls = {"n": 0}
+
+        def factory():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return self.FakeSession(fail_goto={bad})  # initial session ok
+            raise caprend.CaptureError("relaunch refused (test)")  # restart fails
+        with tempfile.TemporaryDirectory() as td:
+            summary = caprend.capture_pages(
+                "x-example", plan, session_factory=factory,
+                out_dir=Path(td), delay_s=0)
+        self.assertFalse(summary["ok"])
+        self.assertIn("browser restart failed", summary["note"])
+        self.assertEqual(calls["n"], 2)  # initial + one failed restart
 
     def test_no_browser_found_is_an_honest_note_not_a_crash(self):
         orig = caprend.find_browser

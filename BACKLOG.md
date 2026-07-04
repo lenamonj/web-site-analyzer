@@ -5,6 +5,558 @@ highest-priority unblocked `todo`. Keep tasks small enough to finish and verify
 in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
+## Phase O - Third convergence-audit findings (2026-07-04)
+The third full-audit pass (after N1-N8 closed; four independent auditors, all
+suites green at 298 + 32 + 8 beforehand) confirmed every prior fix holds but
+found more: the substring-on-structured-data class thought closed (L1/L4/L5) has
+two more instances, plus a doc inaccuracy, a test gap, and a cache double-fetch.
+One High, three Medium, so convergence is still not met. Each cites file:line and
+a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase O audit) for scores.
+
+### Now (High)
+- [x] **O1 (done, S)** check_cookies fabricates a "pass" for a cookie missing
+  Secure/HttpOnly when the name or value contains the flag substring.
+  scan_http_security.py _parse_cookies does `low = c.lower()` then
+  `"secure": "secure" in low` and `"http_only": "httponly" in low` - a substring
+  over the whole Set-Cookie string, not a `;`-delimited attribute token. A cookie
+  named __Secure-sid (the common RFC 6265bis prefix) or secure_customer_sig
+  (Shopify) with NO Secure attribute is credited secure=True, so check_cookies
+  reports pass "All cookies carry Secure, HttpOnly, and SameSite" and the missing
+  Secure flag - the exact gap this check exists to catch - is hidden, raising the
+  security band. Reproduced: _parse_cookies("__Secure-sid=abc; HttpOnly;
+  SameSite=Lax")[0]["secure"] is True and check_cookies verdict is pass. This is
+  the substring-on-structured-data class (L1/L4/L5/L12/L15) missed for cookies;
+  same_site is already matched by token (part.startswith("samesite=") over
+  low.split(";")). Fix: detect secure/httponly as whole `;`-split tokens, like
+  same_site. Accept: a test with __Secure-sid (no Secure attr) plus HttpOnly
+  asserts secure is False and check_cookies warns (not pass); a real Secure
+  cookie still passes; scanner suite green.
+  Done: _parse_cookies now parses the ;-delimited attribute tokens after the
+  name=value pair (attrs = [p.strip() for p in c.lower().split(";")[1:]]) and
+  matches secure/http_only by exact token membership; same_site reads from the
+  same tokens. Verified: __Secure-sid=abc; HttpOnly; SameSite=Lax now parses
+  secure=False and check_cookies warns (was a fabricated pass); a value like
+  httponly-secure-theme sets neither flag; a real Secure; HttpOnly cookie still
+  passes; the folded-list case is preserved. New test
+  test_cookie_flags_match_tokens_not_substrings. Scanner 298 -> 299, builder 32,
+  both green; README resynced to 299/331 via --fix (guard exit 0). O5 (async/defer
+  substring) is the remaining same-class Low.
+
+### Next (Medium)
+- [x] **O2 (done, S)** README Install prose contradicts requirements.txt.
+  README.md:158 says "for the Word report only, one package (python-docx)", but
+  requirements.txt pins two - python-docx and matplotlib - and matplotlib is a
+  real runtime dependency (build_exec_report.py:474 calls render_trend_charts for
+  any 3+ quarter report, which raises RuntimeError without matplotlib). The M3
+  fix added matplotlib to requirements.txt and the file tree but left this Install
+  sentence saying "one package". Fix: name both packages (or say "installed via
+  requirements.txt"). Accept: the Install section names matplotlib alongside
+  python-docx, or points at requirements.txt without a wrong count; grep confirms.
+  Done: README Install line now reads "two packages (python-docx, plus matplotlib
+  for the quarterly-trend charts), pinned in requirements.txt". Docs only; count
+  guard in sync at 299/32/331, exit 0.
+- [x] **O3 (done, M)** The CdpSession dispatch layer of the browser tier is
+  entirely untested. capture_rendered.py:264-321 (CdpSession.cmd, wait_event,
+  drop_events, evaluate) is the real logic driving every automated rendered
+  capture - request/response id correlation with a timeout deadline, JSON-RPC
+  error extraction, event buffering, load-event waiting, Runtime.evaluate
+  exception-to-CaptureError - and coverage confirms these lines never run
+  (TestCaptureRendered drives capture_pages through a FakeSession that replaces
+  CdpSession wholesale). It is offline-testable: construct CdpSession(conn) with a
+  stub conn whose read_message yields canned JSON. A regression in id-matching,
+  error extraction, or timeout handling passes CI (which cannot launch a browser)
+  and only surfaces on a live capture. Fix: add offline tests driving CdpSession
+  with a stub connection over the cmd/wait_event/evaluate paths. Accept: new tests
+  execute CdpSession.cmd (id match, JSON-RPC error), wait_event, and evaluate
+  (result and exception-to-CaptureError) with a stub conn; scanner suite green.
+  Done: new TestCdpSession drives CdpSession offline via a FakeConn that records
+  send_text and yields canned JSON from read_message (no socket, no browser). Five
+  tests: cmd matches the response id and buffers an intervening event; cmd raises
+  CaptureError on a JSON-RPC error; wait_event returns None when the read fails
+  (best-effort load wait); evaluate returns the result value; evaluate raises
+  CaptureError on a page exceptionDetails. Scanner 299 -> 304, builder 32, both
+  green; README resynced to 304/336 via --fix (guard exit 0).
+- [x] **O4 (done, M)** The per-run fetch cache is destroyed between the scan and
+  the post-capture re-scan, so a browser-enabled run re-fetches the whole page
+  set. common.enable_fetch_cache/disable_fetch_cache are not reference-counted;
+  scan_site.run has `finally: common.disable_fetch_cache()` (scan_site.py:181),
+  so the inner run nulls the pipeline's shared cache after the first scan and the
+  re-scan (always triggered when a browser is present) starts empty. Reproduced
+  offline: cache is a dict during the first scan, None after it, empty on re-scan.
+  For a 15-page review this re-issues hundreds of requests to the target every
+  run - a real cost and a politeness regression, contradicting run_review.py:71-91's
+  comment that the cache is reused across the re-scan. The teardown is
+  test-enforced (test_scan_site_run_disables_the_cache_afterward), so the fix is
+  to reference-count enable/disable (or let the pipeline own the cache lifetime)
+  and update that test. Accept: after run_review enables the cache, the
+  post-capture re-scan reuses it (a repeated URL is fetched once across scan plus
+  re-scan); scan_site.run standalone still leaves the cache off; both suites green.
+  Done: enable_fetch_cache/disable_fetch_cache are now reference-counted via a new
+  _FETCH_CACHE_DEPTH (both under the existing lock); enable increments and creates
+  the cache once, disable decrements and clears only at depth 0. So run_review's
+  enable (depth 1) keeps the cache alive through scan_site.run's enable/disable
+  (2 -> 1), and the post-capture re-scan reuses the warm cache; the outer disable
+  (1 -> 0) clears it. Verified: the warmup survives the inner disable and clears
+  at the outer; scan_site.run standalone still nulls the cache afterward (the
+  existing teardown test passes unchanged); TestRunLevelDedup still green. New
+  test test_fetch_cache_is_reference_counted_for_the_rescan. Scanner 304 -> 305,
+  builder 32, both green; README resynced to 305/337 via --fix (guard exit 0).
+  All three Phase O High/Medium (O1, O3, O4) plus the O2 doc are now closed.
+
+### Later (Low)
+- [x] **O5 (done, S)** scan_performance._script_resources detects async/defer by
+  substring over the whole tag-attribute region, so a render-blocking
+  <script src="/js/async-bundle.js"> (no async/defer attribute) is miscounted as
+  non-blocking. scan_performance.py:53: `blocking = "async" not in low and
+  "defer" not in low` where low is the full attribute string incl. the src value.
+  Same substring class as O1; soft signal (render_blocking_scripts warns at >3),
+  script paths with these substrings uncommon, hence Low. Fix: match the attribute
+  token, e.g. re.search(r"(?<![-\w])(async|defer)(\s|=|>|$)", low). Accept: a test
+  with src="/js/async-bundle.js" (no async attr) reports blocking True; a real
+  `<script defer src=...>` reports blocking False; scanner suite green.
+  Done: _script_resources now strips quoted attribute values
+  (re.sub(r'"[^"]*"|\'[^\']*\'', "", attrs.lower())) before the async/defer check,
+  so a src path can no longer false-match - more robust than a word-boundary regex
+  (which still trips on a ".async." path segment). Verified: async-bundle.js and
+  asyncstore.js (path only) are blocking True; real async/defer attributes stay
+  blocking False. New test test_script_blocking_ignores_async_defer_in_src_path.
+  Scanner 305 -> 306, both green; README resynced to 306/338 via --fix (guard exit
+  0).
+- [x] **O6 (done, S)** README's "Tests and CI" narrative says "Two offline
+  suites" (README.md:228) and "runs both suites" (:239), but CI now runs three
+  (test_review_tools, test_exec_report, test_report_charts - the third wired in by
+  N2, and the file tree at :267 already notes it). Update the narrative to three
+  suites. Accept: the section names the report-charts suite / says three; the
+  guarded "330 tests total" count is unchanged; grep confirms.
+  Done: the section now reads "Three offline suites ... the scanner and builder
+  suites are 338 tests total, and a report-charts suite adds 8 more", the code
+  block runs test_report_charts, and CI is described as running "all three
+  suites". The guarded "338 tests total" needle is intact; count guard exit 0.
+  Docs only.
+- [x] **O7 (done, S)** scan_dns_email.py:116-117 comment says "14 serial DoH
+  round trips" but DKIM_SELECTORS now holds 26. The note text uses
+  len(DKIM_SELECTORS) so there is no functional bug; only the comment is stale.
+  Fix: correct the comment (or drop the number). Accept: the comment no longer
+  states a wrong selector count; scanner suite green.
+  Done: the comment now reads "one serial DoH round trip per selector otherwise"
+  - dropped the hardcoded number so it cannot drift again. Comment-only, no
+  behavior or count change; scanner suite green at 306, guard exit 0.
+- [ ] **O8 (todo, S)** Hardening (not a current bug): the README's collection
+  counts - "154 tracker domains", "20 CMP hosts", "26 DKIM selector families" -
+  are accurate today but unguarded, the same unguarded-doc-count class that
+  produced O2 (one package), O6 (two suites), and O7 (14 selectors). The
+  check_readme_counts.py gate already derives and enforces test counts and
+  registry counts from the code; extend it to derive these three from the live
+  collections (len(scan_privacy.KNOWN_TRACKERS), CMP_HOSTS, and
+  scan_dns_email.DKIM_SELECTORS) and add them to the checked needles, so a future
+  change to a collection that forgets the README fails CI. Accept: editing any of
+  the three README counts to a wrong value fails check_readme_counts.py; the
+  correct values pass; a test covers the new comparisons; runs in the same CI
+  step.
+
+## Phase N - Second convergence-audit findings (2026-07-04)
+The re-run full-audit pass (after M1-M8 closed; four independent auditors plus a
+deterministic battery, both suites green at 292 + 32 beforehand) confirmed the
+M1-M8 fixes hold and every prior class stays clean, but surfaced two genuine new
+findings and a few Low. One High and one Medium, so convergence is still not met.
+Every task cites file:line and a reproduced behavior; see JOURNAL.md 2026-07-04
+(Phase N audit) for the per-dimension scores.
+
+### Now (High)
+- [x] **N1 (done, S)** check_clickjacking fabricates a clickjacking FAIL for a
+  site with repeated CSP headers when frame-ancestors is not in the last one.
+  scan_http_security.py:92 (check_clickjacking) reads
+  `csp = common.header_value(headers, "content-security-policy", "")`, which
+  returns only the LAST value when the header is folded to a list (origin plus a
+  CDN/WAF both send Content-Security-Policy). But repeated CSP headers are
+  combined (every policy is enforced), which the sibling check_csp handles via
+  _parse_csp (it joins the list with "; "). So a site whose origin CSP carries
+  frame-ancestors 'self' while a CDN appends a second CSP header lacking it is
+  graded fail "Clickjacking exposure" though check_csp correctly sees
+  frame-ancestors. Reproduced: headers {'content-security-policy':
+  ["frame-ancestors 'self'; default-src 'self'", "upgrade-insecure-requests"]}
+  yields check_clickjacking fail while check_csp lists frame-ancestors. A
+  fabricated graded security fail in the CEO deliverable (the charter's worst
+  class) plus a spurious remediation action. This is the header-as-list family
+  (L1/L4) one semantic level deeper: header_value's last-value rule is wrong for
+  a header that must be combined. Fix: combine repeated CSP headers (join the
+  list) before scanning for frame-ancestors, matching check_csp. Accept: a test
+  with a folded CSP list where frame-ancestors is in a non-last part asserts
+  check_clickjacking is pass (not fail); the single-header pass/fail cases still
+  hold; scanner suite green.
+  Done: check_clickjacking now reads the raw CSP (which may be a list) and does
+  `has_fa = bool(raw_csp) and "frame-ancestors" in _parse_csp(raw_csp)`, reusing
+  the same combiner as check_csp (list -> "; "-joined -> directive dict), so
+  repeated headers combine and the match is on the directive name, not a
+  substring. Verified: the N1 folded case (frame-ancestors in the first of two
+  CSP headers) is now pass (was fail); single-header with/without, no-CSP, XFO,
+  and folded-without-frame-ancestors all grade correctly; the existing
+  test_clickjacking and duplicated-header cases still pass. New test
+  test_clickjacking_combines_repeated_csp_headers. Scanner 292 -> 293, builder
+  32, both green; README resynced to 293/325 via --fix (guard exit 0). Closes
+  the header-as-list family at the never-fabricate level (L1/L4 closed
+  never-raise; N1 closes the last-value-is-wrong-for-combined-headers gap).
+- [x] **N6 (done, S)** LOC_RE in discover_pages.py:30 is a ReDoS
+  (catastrophic backtracking). LOC_RE = `<loc>\s*(.*?)\s*</loc>` with re.S: the
+  \s* before and after the lazy .*? overlap it (\s is a subset of ., and re.S
+  makes . match whitespace and newlines), so on a sitemap body containing an
+  opened <loc> followed by whitespace with no matching </loc> - a truncated,
+  malformed, or adversarial sitemap, and _collect_sitemap_urls fetches sitemaps
+  from the target - the engine backtracks over every way to split the whitespace
+  among the three quantifiers. Measured O(N^3): "<loc>" + N spaces runs n=1000
+  0.37s, n=2000 3.1s, n=4000 25s; a body near MAX_BODY_BYTES (3 MB) hangs
+  discovery, and thus the whole run, effectively forever. Found by the N4-run
+  replenishment sweep (discover_pages was not in L22's scanner-regex ReDoS
+  audit). Fix: drop the overlapping \s* and strip in Python -
+  LOC_RE = `<loc>(.*?)</loc>` (lazy body bounded by a required literal is linear),
+  and strip each findall result at the two call sites (:53, :59). Accept: a test
+  asserts LOC_RE.findall on "<loc>" + " "*100000 completes in well under a second
+  and that "<loc> https://x/a </loc>" still yields the trimmed URL; scanner suite
+  green.
+  Done: LOC_RE is now `<loc>(.*?)</loc>` (re.I | re.S) - a lazy body bounded by a
+  required literal, which is linear - and a new _extract_locs(body) helper does
+  [m.strip() for m in LOC_RE.findall(body)] at both call sites (:53, :59),
+  preserving the whitespace and newline trimming the old \s* padding gave.
+  Verified: the 100000-space unclosed-<loc> input now runs in ~1.5 ms (was
+  minutes); "<loc>  https://x/a  </loc>" and a newline-padded loc still yield the
+  trimmed URL. New test test_extract_locs_no_redos_and_trims (asserts < 1s and
+  the trims). Scanner 295 -> 296, builder 32, both green; README resynced to
+  296/328 via --fix (guard exit 0).
+
+### Next (Medium)
+- [x] **N2 (done, S)** CI never runs test_report_charts.py, so the trend-chart
+  module's tests are dead in CI. .github/workflows/ci.yml runs only
+  test_review_tools (line 24) and test_exec_report (line 29); report_charts.py
+  (the quarterly-trend PNG renderer, load-bearing for the report's "Progress this
+  quarter" section) has a dedicated test_report_charts.py (8 tests) that CI never
+  invokes, so a regression in drawable(), metric_panels(), or the K2
+  matplotlib-need guard ships silently. Fix: add a CI step to run
+  test_report_charts (or a unittest discover), and add test_report_charts.py to
+  the README project tree so the third suite is visible. Accept: ci.yml runs
+  test_report_charts; README lists it; both run green locally.
+  Done: appended `python -m unittest test_report_charts` to the ci.yml "Report
+  builder suite" step (same working-directory and after the pip install of
+  requirements.txt, so matplotlib is present). Added report_charts.py and
+  test_report_charts.py to the README project tree (they were both missing).
+  Verified: test_report_charts runs green (8 tests) alongside test_exec_report
+  (32); the count guard stays in sync at 293/32/325 (no counted-suite change, the
+  new tree lines carry no conflicting "(N tests)" needle). This closes the last
+  Medium; the report-charts safety net is now wired into CI on both OSes and
+  Python versions.
+
+### Later (Low)
+- [x] **N3 (done, S)** scan_performance reads Content-Length directly, not via
+  header_value (same header-as-list class as N1). scan_performance.py:81:
+  `length = headers.get("content-length")`; a duplicated Content-Length folds to
+  a list, str(list).isdigit() is False, so the asset is dropped from the weight
+  floor (under-reports; info, not a fabricated grade). Fix: read via
+  common.header_value. Accept: a test with a list-valued content-length measures
+  the asset size; scanner suite green.
+  Done: _measure now reads length via common.header_value (last value; duplicated
+  Content-Length carries identical values per RFC 7230, so last-value is correct
+  here). Deliberately left the adjacent cache_control list-valued with a comment:
+  repeated Cache-Control combines and _cache_max_age joins it, so last-value
+  would drop directives (the N1 lesson - last-value is wrong for combine
+  headers). Verified: a folded ["4096","4096"] now measures 4096 (was None);
+  single value and absent still 5678/None. New test
+  test_measure_reads_folded_content_length. Scanner 293 -> 294, builder 32, both
+  green; README resynced to 294/326 via --fix (guard exit 0).
+- [x] **N4 (done, S)** common.grade band boundaries (score >= 0.85 / 0.65 / 0.4,
+  common.py) are not tested at the exact thresholds; test_grade_bands checks 1.0
+  / 0.75 / 0.5 / 0.0, none on a boundary, so a >= -> > regression would silently
+  misband every scorecard category. Add boundary tests pinning the band at 0.85,
+  0.65, and 0.4. Accept: tests assert the band at each exact threshold; scanner
+  suite green.
+  Done: test_grade_band_boundaries pins score+band at each exact threshold
+  (7 pass + 3 warn = 0.85 Strong; 3 pass + 7 warn = 0.65 Adequate; 2 pass + 3
+  fail = 0.4 Weak) plus the value just below each (0.80 Adequate, 0.60 Weak, 0.30
+  Poor) for the other side. Test-only, no code change. Proven non-vacuous:
+  mutating >= 0.85 to > 0.85 fails the test (restored). Scanner 294 -> 295,
+  builder 32, both green; README resynced to 295/327 via --fix (guard exit 0).
+- [x] **N5 (done, S)** SKILL.md accessibility check list (SKILL.md:35) omits the
+  viewport-zoom (WCAG 1.4.4) check that README:87 lists and scan_accessibility
+  implements. Add it so the list is complete. Accept: SKILL.md names the
+  viewport-zoom check; no code change.
+  Done: SKILL.md line 35 now ends "...empty buttons, viewport zoom (WCAG 1.4.4)",
+  matching scan_accessibility._viewport_check and the README. Docs only; scanner
+  suite unchanged at 296, guard exit 0.
+- [x] **N7 (done, S)** crawler._load_state crashes crawl() on a valid-JSON
+  non-dict state file - the same class as M8 (read_history). crawler.py:60-64
+  catches OSError/ValueError but returns whatever json.loads produced, so a state
+  file corrupted to `42` or `[...]` returns a non-dict, and crawl() line 80
+  (`loaded.get("target")`) then raises AttributeError instead of starting fresh.
+  Reproduced: _load_state on a file containing "42" returns 42, and
+  crawl(..., state_path=<that file>) raises "'int' object has no attribute
+  'get'". Low - opt-in --crawl path, internal state file, and only valid-JSON
+  wrong-type corruption triggers it (a partial write is invalid JSON, already
+  caught) - but _load_state should honor its contract like read_history now does.
+  Fix: return the parsed value only when isinstance(data, dict), else None.
+  Accept: a test asserts _load_state on a "42" file returns None and that crawl
+  with a non-dict state file starts fresh without raising; scanner suite green.
+  Done: _load_state now returns data only when isinstance(data, dict), else None,
+  with a comment. Verified: int/str/list inputs return None, dict is preserved,
+  and crawl with a "42" state file starts fresh (2 pages) without raising. New
+  test test_non_dict_state_file_is_ignored_not_a_crash. Scanner 296 -> 297,
+  builder 32, both green; README resynced to 297/329 via --fix (guard exit 0).
+- [x] **N8 (done, S)** Close the non-dict-JSON-load class: three more twins of
+  M8/N7 remain, each reading an internal file the tool writes and calling .get()
+  with only a parse-error guard, so a valid-JSON non-dict (external corruption of
+  the evidence dir) crashes the scan run with AttributeError instead of
+  degrading. Sites: scan_vitals.load_metrics (scan_vitals.py:43 -> :46
+  data.get("pages"), metrics.json), scan_site.load_rendered_snapshots
+  (scan_site.py:71 -> :75 manifest.get("pages"), manifest.json), and
+  scan_site.attach_delta (scan_site.py:418, prev scan JSON passed to diff_issues,
+  which does prev.get). Reproduced: diff_issues(42, {...}) raises "'int' object
+  has no attribute 'get'". Low (internal files, external-corruption-only
+  trigger), found by the N7-run json.loads class sweep. Fix: guard each with
+  isinstance(data, dict) so a non-dict falls back to the reader's empty result
+  (None / {} / no delta). The CLI-read scan/report JSON (draft_report_data.py:408,
+  build_exec_report.py:1057, capture_rendered.py:636) read a user-supplied path
+  and may traceback on a non-dict; that is an acceptable bad-argument traceback,
+  noted not required. Accept: a test corrupting each of metrics.json,
+  manifest.json, and the previous scan JSON to a non-dict asserts the reader
+  degrades (None / {} / no delta) without raising; scanner suite green.
+  Done: added `if not isinstance(data, dict)` guards after the parse-error catch
+  in scan_vitals.load_metrics (-> None), scan_site.load_rendered_snapshots
+  (-> {}), and scan_site.attach_delta's scan-JSON fallback (-> no delta), each
+  with a comment. The ledger path of attach_delta was already M8-safe. Verified:
+  a non-dict metrics.json/manifest.json/prev-scan-JSON each degrades without
+  raising (was AttributeError). New combined test
+  test_corrupt_non_dict_json_files_degrade_not_crash. The three CLI-read spots
+  are left as an acceptable bad-argument traceback, as noted. Scanner 297 -> 298,
+  builder 32, both green; README resynced to 298/330 via --fix (guard exit 0).
+  The non-dict-JSON-load class is now closed across every internal reader.
+
+## Phase M - Convergence full-audit findings (2026-07-04)
+The first full-audit pass for convergence (four independent read-only auditors
+across every dimension, both suites green at 285 + 31 beforehand) found a defect
+class the eleven prior partial audits never checked: a network-primitive failure
+(a failed fetch or a failed DoH lookup) treated as a measured negative, which
+fabricates findings in the CEO deliverable. Two High and two Medium. Convergence
+is not met. Every task cites file:line and a reproduced behavior; see JOURNAL.md
+2026-07-04 (Phase M audit) for the per-dimension scores.
+
+### Now (High)
+- [x] **M1 (done, S)** scan_http_security fabricates security findings for an
+  unreachable target. scan_http_security.py:237-238: _scan grades every header
+  check off `res.get("final_headers", {}) or {}` with no guard on res["ok"]; the
+  result even carries a `reachable` flag (:262) it never acts on. On a
+  no-response fetch (ok=False, hops=[], final_headers={}) the scan emits five
+  fabricated FAILs (hsts, clickjacking, x_content_type_options, referrer_policy,
+  permissions_policy), a csp WARN, and information_disclosure: pass "No
+  version-revealing banners observed." - a definitive clean claim about data
+  never measured - for a Poor 0.21 band that flows straight into the deliverable.
+  Reproduced by stubbing http_fetch to the common.py:262 no-response shape. The
+  correct pattern is scan_tls.check_caa (info when not ok) and the page scanners
+  (bail on ok=False). Fix: when the target is unreachable (not res["ok"] and no
+  hops), return the header checks as info/unknown, not fail/pass. Accept: a test
+  stubbing http_fetch to the no-response dict asserts no check verdict is fail
+  and information_disclosure is info (not pass), and the band is Not measured
+  (not Poor); the healthy-target tests still pass; scanner suite green.
+  Done: added a measured = res["ok"] guard and a header_check(fn, *args) wrapper
+  in _scan that returns info "Target did not respond to the HTTPS request; this
+  header could not be measured." for the eight header-derived checks (hsts, csp,
+  clickjacking, x_content_type_options, referrer_policy, permissions_policy,
+  cookies, information_disclosure) when ok is False; https_redirect and
+  security_txt already degraded on their own fetches (:32, :206). Chose res["ok"]
+  (not "ok and no hops") because http_fetch returns ok=True for any completed
+  response incl. 4xx/5xx, so a real error page still grades and only a genuine
+  no-response is gated. When measured, header_check calls the check unchanged, so
+  the healthy path is byte-identical. New test
+  test_unreachable_target_is_not_measured_not_fabricated asserts no fail verdict,
+  information_disclosure and hsts are info, and the band is Not measured.
+  Reproduced Poor 0.21 before the fix, Not measured after. Scanner 285 -> 286,
+  builder 31, both green; README resynced to 286/317 via check_readme_counts.py
+  --fix (guard exit 0).
+- [x] **M2 (done, S)** scan_dns_email fabricates SPF/DMARC fails when the DoH
+  lookup fails. scan_dns_email.py:60,82: check_spf/check_dmarc do
+  `records, _ = _txt_records(domain)`, discarding the res["ok"]/error that
+  _txt_records already returns (:56). On a DoH failure (a dns.google timeout or
+  rate-limit mid-run) records is [] and both return fail "No SPF/DMARC record..."
+  for a Poor email-auth band, though nothing was ever observed. check_dnssec and
+  check_mx similarly assert "not signed"/"no mail here" from an unknown result
+  (info, lower impact). Reproduced by stubbing doh_query to ok=False. The correct
+  pattern is scan_tls.check_caa:91-93 (`if not res["ok"]: return info`). Fix:
+  these checks must return info/unknown when res["ok"] is False, distinguishing
+  "no record published" from "lookup failed". Accept: a test stubbing doh_query
+  to ok=False asserts spf and dmarc are info (not fail) with an honest
+  lookup-failed note; the existing real-record parsing tests still pass; scanner
+  suite green.
+  Done: closed the whole "DoH failure treated as a measured negative" class in
+  scan_dns_email. check_spf/check_dmarc now capture res and return info
+  "<x> lookup failed (...); presence could not be determined." when not res["ok"]
+  (before the "no record" fail); check_mx and check_dnssec do the same (info
+  "lookup failed", not "does not receive mail"/"not signed"). check_mx marks
+  lookup_ok False on failure, so _scan sets has_mx to None (tri-state), and a new
+  shared _mx_gate(has_mx, feature) helper makes MTA-STS/TLS-RPT/BIMI report
+  "applicability unknown" instead of the false "domain has no MX records"; the
+  has_mx False path keeps its byte-identical "not applicable" note. Two updated
+  test stubs (test_spf_all_mechanism, test_dmarc_rua) now return {"ok": True}
+  since the checks read res["ok"]. New tests: test_doh_failure_is_unknown_not_
+  fabricated (spf/dmarc/mx/dnssec info, honest note, gate unknown) and
+  test_full_scan_with_dns_down_is_not_fabricated_poor (offline; band not Poor,
+  no fail). Reproduced Poor-with-fabricated-fails before, band Not measured and
+  spf/dmarc info after. Scanner 286 -> 288, builder 31, both green; README
+  resynced to 288/319 via --fix (guard exit 0).
+
+### Next (Medium)
+- [x] **M3 (done, S)** requirements.txt omits matplotlib, a hard dependency of
+  the builder's trend-charts feature. report_charts.py imports matplotlib and
+  build_exec_report.add_trend_section (build_exec_report.py:474) calls
+  render_trend_charts with no fallback, so a report whose trend has three or more
+  quarters raises RuntimeError when matplotlib is absent. requirements.txt lists
+  only python-docx and its comment claims "whose only third-party dependency is
+  python-docx", so a user who installs per the docs and builds a 3+ quarter
+  retainer report hits that RuntimeError. Fix: declare matplotlib in
+  requirements.txt (pinned) and correct the comment, or make add_trend_section
+  degrade gracefully (skip charts with a note) when matplotlib is absent and
+  document it as optional. Accept: requirements.txt plus its comment name every
+  third-party dependency the builder needs, or the builder renders a report
+  without matplotlib and a test proves the graceful skip; builder suite green.
+  Done: took the declare option (it matches the deliberate K2 design of failing
+  loudly when a needed chart cannot render, rather than silently shipping a
+  chart-less report). requirements.txt now pins matplotlib>=3.7,<4 (installed
+  3.10.8 satisfies it) and its comment names both deps and their roles. Added
+  the builder analog of L17's charter guard:
+  TestBuilderDependencies.test_builder_third_party_imports_are_declared
+  ast-parses build_exec_report.py and report_charts.py, and asserts every
+  third-party import (docx -> python-docx, matplotlib) is declared in
+  requirements.txt, so the exact undeclared-dependency drift that made M3 now
+  fails CI. Proven non-vacuous: removing matplotlib from requirements.txt fails
+  it with "builder imports 'matplotlib' ... does not declare it" (restored).
+  Builder 31 -> 32, scanner 288, both green; README resynced to 288/32/320 via
+  --fix (guard exit 0).
+- [x] **M4 (done, S)** capture_rendered abort/restart safety net is untested.
+  capture_rendered.py:577-590: the three-consecutive-failure abort
+  (`if consecutive_failures >= 3: ... break`) and the browser-restart-failure
+  path (`except (CaptureError, OSError): ... break`) have no coverage - the only
+  failure test fails exactly one page, so consecutive_failures never reaches 3
+  and the restart always succeeds. A regression to the threshold or the counter
+  reset would let a dead browser churn the whole page set (each restart waits up
+  to LAUNCH_WAIT_S = 15s) with no test catching it. Fix: add a test that drives
+  three consecutive page failures and asserts the run aborts with the "aborting
+  the capture run" note, and one where the restart raises and asserts the
+  "browser restart failed" abort. Accept: both branches are entered by new tests
+  asserting the documented abort; scanner suite green.
+  Done: added test_three_consecutive_failures_abort_the_run (all pages fail via
+  FakeSession(fail_goto=all); asserts ok False, "aborting the capture run" note,
+  exactly 3 failures recorded, the 4th page never tried, nothing captured) and
+  test_browser_restart_failure_aborts_the_run (a factory that returns a working
+  initial session then raises on the relaunch; asserts ok False, "browser restart
+  failed" note, and exactly two factory calls). Both assert states set only
+  inside the target branches, and a mutation (>= 3 -> >= 99) fails the abort test
+  (restored), confirming non-vacuous coverage. Scanner 288 -> 290, builder 32,
+  both green; README resynced to 290/322 via --fix (guard exit 0).
+
+### Later (Low)
+- [x] **M5 (done, S)** SKILL.md names the wrong CrUX key variable. SKILL.md:41
+  and :56 say field data needs GOOGLE_API_KEY, but scan_crux.py:65 reads
+  CRUX_API_KEY first and only falls back to GOOGLE_API_KEY (README lists both,
+  preferring CRUX_API_KEY). Update SKILL.md to name CRUX_API_KEY (preferred) and
+  GOOGLE_API_KEY. Accept: grep of SKILL.md shows both keys with CRUX_API_KEY
+  named as preferred; no code change.
+  Done: SKILL.md line 41 now reads "when CRUX_API_KEY, or the fallback
+  GOOGLE_API_KEY, is set", matching scan_crux.py:65's precedence. Only one CrUX
+  mention exists in SKILL.md (the audit's ":56" reference was off by lines).
+  Docs only; scanner suite unchanged at 290, guard exit 0. Noted but not fixed:
+  scan_crux.py:8 docstring still says "Needs a GOOGLE_API_KEY" - not false
+  (GOOGLE_API_KEY works as fallback), and M5's acceptance is "no code change", so
+  the internal docstring is left as a below-threshold item.
+- [x] **M6 (done, S)** registrable_domain, a shared domain helper, lives in a
+  peer scanner. scan_dns_email.py:42 defines registrable_domain + MULTI_SUFFIXES,
+  imported by seven modules (scan_tls, scan_privacy, scan_page_security,
+  scan_performance, scan_crawl, discover_pages, crawler). A utility imported by
+  seven modules from a sibling scanner is a leaky dependency. Relocate it to
+  common.py, keeping scan_dns_email working. Accept: registrable_domain lives in
+  common.py, the importers reference it there, and both suites stay green with
+  byte-identical scan output on a canned run.
+  Done: moved MULTI_SUFFIXES + registrable_domain verbatim into common.py beside
+  the host/URL helpers. scan_dns_email now calls common.registrable_domain
+  internally; the seven importers each swapped dns.registrable_domain ->
+  common.registrable_domain (13 call sites) and dropped the now-dead
+  "import scan_dns_email as dns" (all seven used dns only for this helper). The
+  test_registrable_domain unit test targets common. Verified: no
+  dns.registrable_domain / scan_dns_email.registrable_domain / MULTI_SUFFIXES
+  remains outside common.py; all nine touched modules compile; scanner 290,
+  builder 32, both green; count guard unchanged (no test added). Helper output
+  unchanged incl. multi-suffix (example.com.au) and single-label (localhost)
+  edges. Behavior byte-identical (verbatim function, contract tests pass).
+- [x] **M7 (done, S)** Replenishment from the M4 iteration partial audit
+  (encoding/charset robustness). _decode_body is robust (errors="replace", plus a
+  LookupError/TypeError fallback to utf-8), but common._decompress catches only
+  (OSError, zlib.error); gzip.decompress on a truncated stream raises EOFError,
+  which propagates. When a gzip body exceeds MAX_BODY_BYTES (3 MB compressed) the
+  resp.read cap truncates it, so _decompress raises EOFError, http_fetch's outer
+  except turns the whole fetch into ok=False "EOFError...", and the page is
+  reported as unreachable rather than partially analyzed - unlike a large
+  uncompressed page, which gets its first 3 MB analyzed. Reproduced: a
+  half-truncated gzip stream makes _decompress propagate EOFError. Low (trigger
+  is a >3 MB compressed page, degrades to ok=False with no crash or fabrication),
+  but the framing is misleading and the partial content is lost. Fix: decompress
+  gzip via zlib.decompressobj(16 + zlib.MAX_WBITS) so a truncated stream yields
+  its decompressed prefix (matching the uncompressed-truncation behavior), or at
+  minimum catch EOFError. Accept: a test feeds a gzip body truncated mid-stream
+  and asserts _decompress returns the decompressed prefix (not a raise, not raw
+  compressed bytes); scanner suite green.
+  Done: _decompress now uses streaming decompressors for both codecs - gzip via
+  zlib.decompressobj(16 + zlib.MAX_WBITS), zlib-deflate via
+  zlib.decompressobj(zlib.MAX_WBITS) with the raw-deflate
+  (-zlib.MAX_WBITS) fallback preserved - so a truncated stream yields its
+  decompressed prefix instead of raising. Removed the now-unused import gzip.
+  Verified: a half-truncated gzip (539 of 1078 bytes) yields a 9912-byte prefix
+  starting with the real text; complete gzip/deflate bodies and the
+  magic-byte auto-detect all round-trip unchanged. New test
+  test_truncated_gzip_yields_decoded_prefix. Scanner 290 -> 291, builder 32,
+  both green; README resynced to 291/323 via --fix (guard exit 0).
+- [x] **M8 (done, S)** Replenishment from the M6 iteration partial audit
+  (corrupt-persisted-state handling). capture_rendered._load_or_new is robust
+  (bad JSON or wrong shape -> rebuild), but scan_site.read_history admits any
+  valid-JSON line, including a non-dict. Its docstring claims "malformed lines
+  are skipped", yet a line like `42` or `"x"` (external ledger corruption) is
+  kept, and a consumer (write_digest_md line 503 `e.get("bands", {})`,
+  trends.quarterly_points) then raises AttributeError on it. Reproduced: a ledger
+  with a dict line then `42` returns [dict, 42] and the consumer crashes with
+  "'int' object has no attribute 'get'". Low (a partial/interrupted append yields
+  invalid JSON, which is already skipped; only valid-JSON-non-dict corruption
+  triggers it), but read_history should honor its own contract. Fix: skip lines
+  that do not parse to a dict. Accept: a test feeds a jsonl with a dict line and
+  a valid-JSON non-dict line and asserts read_history returns only the dict;
+  scanner suite green.
+  Done: read_history now parses each line, then appends only when
+  isinstance(obj, dict); the docstring records that a valid-JSON non-dict line is
+  skipped for the same reason. New test
+  test_read_history_skips_valid_json_non_dict_lines feeds a dict line, then 42, a
+  string, and a list, and asserts only the two dict entries survive and all are
+  dicts (before the fix it returned five and a consumer's .get crashed). Scanner
+  291 -> 292, builder 32, both green; README resynced to 292/324 via --fix (guard
+  exit 0).
+
+### Declined
+- common._decompress runs zlib/brotli with no max_length, so a hostile 3 MB
+  compressed body could expand to gigabytes (Phase O audit): the threat model is
+  passive scanning of authorized sites, not adversarial input, and MAX_BODY_BYTES
+  already caps the download; a decompression bomb is not realistic here.
+Marginal Low observations from the Phase M audit, judged not worth a task:
+- common.py optional `import brotli` sits outside the TestScannerCharter guard
+  (which globs scan_*.py only): intentional, guarded, degrades to raw; the charter
+  is a scanner invariant, and extending it to common.py would flag a deliberate
+  optional enhancement.
+- No MAX_BODY_BYTES-style size cap on the RDAP/CrUX/DoH JSON reads: all three hit
+  trusted first-party endpoints (IANA, Google), so the risk is theoretical.
+- Per-run fetch cache has no eviction: bounded at 512 entries and the crawl path
+  is opt-in, so it is not a real cliff.
+- CrUX key passed as a URL query param: a valid key never leaks; only a malformed
+  key could surface via an InvalidURL repr, which requires an already-broken key.
+- scan()/main() boilerplate repeated across the 14 scanners: deliberate
+  standalone-CLI-per-module design; a shared helper would couple them.
+- draft_report_data.LABEL_TO_CATEGORY duplicates the registry's label->category
+  map (Phase N audit): drift degrades one weakness bullet's "Example:" suffix,
+  never a crash or wrong number, and the map is tiny; deriving it from the
+  registry is a nicety, not a fix.
+- scan_site orchestrator hardcodes the "performance" key for the rendered-DOM
+  skip (Phase N audit): a documented single exception to the registry-driven
+  design; moving it to a scanner flag is churn for one line.
+
 ## Phase L - Audit findings (Ralph audit pass 2026-07-04)
 Generated by an evidence-based audit of the whole suite (both test suites green
 at 266 scanner + 31 builder before the audit). Every task cites a file:line and
@@ -239,7 +791,7 @@ High/Medium; one genuine same-class doc-guard gap surfaced.
   unit-test it: a matching README yields [], a wrong count yields the specific
   mismatch. Accept: a test drives the pure checker over in-memory README strings
   (matching and mismatched); the CLI still works; scanner suite green.
-- [ ] **L20 (todo, S)** Replenishment from the iteration-8 partial audit. This
+- [x] **L20 (done, S)** Replenishment from the iteration-8 partial audit. This
   audit swept two more classes and found them clean: no mutable default
   arguments anywhere in the suite, and discover_pages core functions are tested
   (discover() itself is covered indirectly by the run_review integration test).
@@ -251,6 +803,26 @@ High/Medium; one genuine same-class doc-guard gap surfaced.
   raw header/list/dict value, and normalize any found (or record that none
   exist). Accept: every such site either renders a clean string or is confirmed
   to only ever receive a string; a test covers any fix; scanner suite green.
+  Done: swept both named writers; no new leak. scan_site's digest writer
+  (write_digest_md, issue_line, console main) embeds only scanner-built note
+  strings, band names, and integer counts, with pages rendered via ', '.join -
+  no raw header/list/dict embed. build_exec_report renders JSON-contract strings
+  through python-docx sinks (add_run/set_cell_text require a string, so a list
+  would raise, not repr) with the numeric-ish values str()-wrapped; its source,
+  draft_report_data, builds every finding/evidence/detail/value as a string, an
+  f-string over strings/ints, or a number-formatted value (fmt guarded by
+  value is not None). The header-as-list normalization that prevented the one
+  L18 leak is already enforced at the scanner boundary (common.header_value;
+  http_security CSP/report-only isinstance/join). To make the class
+  un-reintroducible registry-wide, added
+  TestToolContract.test_no_repr_leak_in_notes_on_duplicated_headers: under the
+  L19 folded-header stimulus every registered tool's check notes carry no
+  list/dict repr signature (['/{') and every stored value stays scalar. Proven
+  non-vacuous - reverting the L18 header_value fix makes scan_performance.
+  cache_control fail it ("Cache-Control: ['max-age=3600', 'no-cache']."),
+  restoring passes. Scanner 283 -> 284, builder 31, both green; README resynced
+  to 284/315 (the L11 guard confirmed sync, exit 0). This closes the
+  output-repr class (the L18 family) registry-wide.
 - [x] **L18 (done, S)** Replenishment from the iteration-6 partial audit (a
   sweep of header-as-list handling in the non-http_security scanners, the L1
   class). scan_performance was already list-safe in its parsing paths
@@ -263,7 +835,7 @@ High/Medium; one genuine same-class doc-guard gap surfaced.
   common.header_value (the L1 helper). Accept: a test with a list-valued
   cache-control yields a clean string in the note and stored cache_control;
   scanner suite green.
-- [ ] **L21 (todo, S)** Replenishment from the iteration-9 partial audit, which
+- [x] **L21 (done, S)** Replenishment from the iteration-9 partial audit, which
   swept the last unchecked class - thread-safety in the fan-out scanners - and
   found it clean: scan_links/scan_performance/scan_dns_email all use
   pool.map(pure_worker, items), every .append() is in a serial pre-fan-out
@@ -276,6 +848,19 @@ High/Medium; one genuine same-class doc-guard gap surfaced.
   discovers the guards and does not re-audit closed classes. Accept: PLAN.md has
   the section naming each CI guard (with its test/script) and each audited class
   with its outcome; no code change; suites unaffected.
+  Done: added PLAN.md section 38 "Enforced invariants and audited-clean classes
+  (Phase L convergence record)" listing five CI-enforced invariants, each with
+  its test or script (README test counts -> check_readme_counts.py +
+  TestReadmeCountGuard; line-17 registry facts -> same script; pure-stdlib
+  charter -> TestScannerCharter; header never-raise ->
+  test_no_tool_raises_on_duplicated_headers; note never-repr ->
+  test_no_repr_leak_in_notes_on_duplicated_headers), and nine audited-clean
+  classes each with its outcome (three CLOSED, six CLEAN, now including the
+  division-by-zero sweep from L20's run). Added a Phase L pointer to section 38
+  in the section 6 Roadmap so an auditor finds it. Docs only; no code change.
+  Verified: count guard exit 0, scanner suite unchanged at 284, both green; a
+  closing note records that the section does not itself satisfy the
+  Definition of done.
 - [x] **L19 (done, S)** Replenishment from the iteration-7 partial audit. This
   audit swept two more classes and found the scanners clean: no unguarded
   int()/float() on external data (all such calls are behind str().isdigit(),
@@ -308,7 +893,7 @@ High/Medium; one genuine same-class doc-guard gap surfaced.
   requests" into scan_seo.py fails the guard and names the offender (then
   restored). Runs in the offline suite (so CI). Scanner 280 -> 282, green;
   README resynced to 282/313.
-- [ ] **L22 (todo, S)** Replenishment from the iteration-10 partial audit, which
+- [x] **L22 (done, S)** Replenishment from the iteration-10 partial audit, which
   swept ReDoS risk and found the scanner regexes safe (negated char classes,
   lazy-with-anchor, and simple \s*/\d+ quantifiers - no (X+)+/(X*)* nesting;
   input is bounded by MAX_BODY_BYTES). That is the seventh class audited clean;
@@ -320,6 +905,34 @@ High/Medium; one genuine same-class doc-guard gap surfaced.
   Accept: with a drifted README, --fix rewrites it and a following plain run
   exits 0; without --fix behaviour is unchanged; a test drives the rewrite over
   an in-memory README string.
+  Done: added a pure fixed_readme(text, scanner, builder, scanners, categories)
+  to check_readme_counts.py that regex-rewrites all seven count sites (the two
+  suite comments disambiguated by the test module named on their line), plus a
+  --fix branch in main() that writes it back; without --fix behaviour is
+  unchanged (check and exit 0/1). Dogfooded live: adding this task's own test
+  drifted the suite to 285, a plain run reported the four drifted sites (exit 1),
+  --fix rewrote README to 285/316 preserving surrounding text (e.g. the scanner
+  comment tail), and the following plain run exited 0. Test
+  test_fix_rewrites_every_drifted_count_site drives the rewrite over an in-memory
+  README fixture: a fully drifted copy yields mismatches, fixed_readme clears
+  them all, and re-fixing is a no-op (idempotent). Scanner 284 -> 285, builder
+  31, both green; README resynced to 285/316 via --fix itself (guard exit 0).
+
+### Later (Low) - replenishment from the third run's partial audit (2026-07-04)
+Open fell to two (L21, L22) after L20, so a partial audit ran on a class not
+previously swept: division-by-zero / empty-collection math. Clean across the
+suite, no new task filed. scan_readability.py:105 (word_count / sentence_count)
+cannot divide by zero - word_count >= MIN_WORDS (100) guarantees non-whitespace
+text, which guarantees _sentences returns >= 1 part (reproduced: 80 words of
+punctuation-free text still yields sentence_count 1); :120 (syllables /
+word_count) and :107 (link_words / word_count) are covered by the same >= 100
+floor and an explicit "if word_count" guard; common.grade guards graded == 0 ->
+score None; scan_performance.py:146 guards uncompressed / transfer with
+"if transfer"; scan_vitals has no variable division. Eighth class audited clean
+(after substring-parsing, header-as-list, int/float, mutable-defaults,
+concurrency, builder-access, ReDoS, and now the output-repr class L20 closed).
+L21 (record enforced invariants in PLAN) and L22 (README --fix) remain the
+genuine open items.
 
 ## Phase K - Quarterly trend layer follow-ups (final review backlog 2026-07-02)
 - [x] **K1 (done, S)** Order-independent quarter selection: trends.quarterly_points

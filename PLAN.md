@@ -167,6 +167,10 @@ Visual design remains a browser-assisted manual step per SKILL.md, not a scanner
 Phase D - Reporting automation: optionally generate a first-draft
 `exec_report_data.json` directly from the scan JSON to cut manual transcription,
 keeping the human-authored findings on top.
+Phase L - Convergence hardening: turn load-bearing facts into CI guards and
+sweep the suite for whole defect classes. The enforced invariants and the
+classes audited clean are recorded in section 38; consult it before re-auditing
+so closed ground is not swept again.
 
 ## 7. Design: scan_privacy (Phase C; spec C1, implemented C2)
 Status: IMPLEMENTED (C2). `tools/scan_privacy.py` is registered as a page tool
@@ -1179,3 +1183,79 @@ rdap_domain (info verdicts, dates carried, honest degradation, no grade
 change), _key_dates assembly and the None case, _in_days phrasing, and the
 builder panel render (three cards, section in contents). common.rdap_domain is
 stubbed in the suite header alongside http_post_json and env_value.
+
+## 38. Enforced invariants and audited-clean classes (Phase L convergence record)
+The Phase L improvement pass (multiple /jeffy runs, 2026-07-04) converted facts
+that were "true by discipline" into guards that fail CI on drift, and swept the
+suite for whole defect classes rather than fixing instances. This section
+records what is guarded and what has been audited clean, so future work starts
+from here and does not re-audit closed ground. Every guard below runs offline in
+the test suites (so in CI); check_readme_counts.py also runs as its own ci.yml
+step.
+
+CI-enforced invariants (guard -> what it locks, with its test or script):
+- README test counts (badge, summary line, both suite comments, file-tree
+  annotation) equal the measured suite sizes: tools/check_readme_counts.py
+  (L11); its pure comparison core readme_mismatches() is unit-tested by
+  TestReadmeCountGuard (L16).
+- README line-17 registry facts ("14 registered scanners, 10 scorecard
+  categories") match the live registry: same check_readme_counts.py, derived
+  from registry.host_tools() + registry.page_tools() (L14).
+- Scanners import only the standard library plus local modules (design
+  principle 2, the zero-dependency charter):
+  TestScannerCharter.test_scanners_import_only_stdlib_and_local ast-parses every
+  scan_*.py; test_guard_would_catch_a_third_party_import proves the guard is not
+  vacuous (L17).
+- Every registered tool tolerates duplicated (list-folded) response headers
+  without raising: TestToolContract.test_no_tool_raises_on_duplicated_headers
+  (L19), backing the common.header_value normalization (L1/L4).
+- No tool leaks a Python list/dict repr into a human-facing note, and every
+  stored check value stays scalar, even under folded headers:
+  TestToolContract.test_no_repr_leak_in_notes_on_duplicated_headers (L20).
+- Every third-party import in the report builder (build_exec_report.py,
+  report_charts.py) is declared in requirements.txt:
+  TestBuilderDependencies.test_builder_third_party_imports_are_declared (M3), the
+  builder analog of the scanner charter guard.
+
+Defect classes audited clean (class -> outcome):
+1. Substring matching on structured data (SPF/DMARC/DKIM/BIMI tags, header
+   banners): CLOSED - every read parses at token or tag boundaries (L1, L4, L5,
+   L12, L15).
+2. Header-as-list (origin plus CDN fold a header into a list): CLOSED - values
+   are read through common.header_value or isinstance/join; never-raise and
+   never-repr are locked in registry-wide (L1, L4, L18, L19, L20).
+3. Output-repr in the human-facing text builders (scan_site digest, exec
+   report): CLOSED - both writers embed only pre-normalized strings; guarded by
+   L20.
+4. Unguarded int()/float() on external data: CLEAN - all behind str().isdigit(),
+   a \d+ group, the _MONTHS map, or a stdlib-guaranteed-numeric value.
+5. Mutable default arguments: CLEAN - none anywhere in the suite.
+6. Concurrency in the fan-out scanners: CLEAN - pool.map over a pure per-item
+   worker; every .append() is in a serial pre-fan-out builder; the only
+   thread-shared state (the common.http_fetch cache) is locked.
+7. Builder data access: CLEAN - defensive .get with fallbacks; the one required
+   field (slug) raises a clear error by design.
+8. ReDoS in the scanner regexes: CLEAN - negated char classes, lazy-with-anchor,
+   or simple \s*/\d+ quantifiers; no (X+)+ / (X*)* nesting; input is bounded by
+   MAX_BODY_BYTES.
+9. Division-by-zero / empty-collection math: CLEAN - readability's word/sentence
+   ratios are bounded by the MIN_WORDS (100) floor and the word-to-sentence
+   coupling through one text (verified by reproduction); common.grade guards
+   graded == 0 -> score None; scan_performance guards its compression ratio with
+   if-transfer; no other variable division exists.
+10. Slug / output-filename safety: CLEAN - the slug that names every artifact
+    file comes from common.host_of via urlparse().hostname, which returns only
+    the host token (port, userinfo, and path are dropped; reproduced
+    example.com:8443/path -> example-com and a/../b -> a with no traversal), and
+    DNS hostname grammar excludes every filesystem-unsafe character.
+11. Timeout / resource-bound coverage: CLEAN - every network entry point
+    (http_fetch, http_post_json, _http_get_json, doh_query, rdap_domain,
+    tls_info, _probe_legacy) threads a finite timeout (DEFAULT_TIMEOUT = 15s,
+    10s for the legacy probe) into its blocking call; bodies are capped at
+    MAX_BODY_BYTES and redirects at 5, so no single host can stall a run.
+
+Definition-of-done note: this record does not by itself satisfy convergence,
+which requires a single full-audit pass executed in one iteration that rescores
+every applicable dimension at zero High and zero Medium (see "Definition of
+done" at the top of this file). The record exists so that pass does not repeat
+these closed sweeps.

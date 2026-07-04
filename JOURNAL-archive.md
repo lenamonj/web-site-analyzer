@@ -1681,3 +1681,1480 @@ The archive is append-only history and was not rewritten.
 Moved the 5 oldest working entries to JOURNAL-archive.md to keep
 this file under the 500-line threshold; the last 10 entries remain here.
 The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - L10: DRY the self-describing scan() wrapper into common.finalize
+
+**Task:** L10 (M), first task of the second /jeffy run. The three-line scan()
+tail (stamp category, stamp grade from the tool's own verdicts, return) was
+copy-pasted verbatim into all 14 scanners.
+
+**What I did:** added common.finalize(result, category) that stamps category and
+the rolled-up grade and returns the dict. Confirmed the three-line block was
+byte-identical across all 14 scanners (a script check), then replaced each with
+a single `return common.finalize(result, CATEGORY)`. grep confirms no scanner
+stamps grade inline anymore.
+
+**Scope decision (recorded per the no-behavior-change constraint):** the task
+also named the pass/warn/fail tally loop duplicated across scanners. I did NOT
+fold it into finalize, because scan_tls uniquely emits no summary key; a
+finalize that always computed summary would add one to scan_tls, an observable
+output change. The tally consolidation is filed as L13 (a common.summarize
+helper that leaves scan_tls alone).
+
+**Files changed:** common.py (finalize), the 14 scan_*.py wrappers,
+test_review_tools.py (test_finalize_stamps_category_and_grade), BACKLOG.md (L10
+done, L13 added), JOURNAL.md (this entry).
+
+**Verification:** captured a canned offline scan of scan_http_security before
+and after (stubbed http_fetch, five folded headers): category security, grade
+band Strong score 0.88, summary {pass 7, warn 0, fail 1, info 2} - byte
+identical both ways, proving no scorecard change. Scanner suite 272 -> 273
+(finalize unit test), builder 31, both green. git diff is a clean -3/+1 per
+scanner with no line-ending noise (.gitattributes forces LF).
+
+**Learnings:** the safe way to DRY a wrapper that is "identical" across many
+files is to first prove byte-identity mechanically, then replace mechanically,
+then prove output-identity on a canned run - not to eyeball it. The asymmetry
+(scan_tls has no summary) is exactly the kind of thing a blind fold-everything
+refactor would have silently changed.
+
+**Next:** L11 - add a CI step that fails when the README test counts disagree
+with the actual suite counts.
+
+---
+
+## 2026-07-04 - L11: CI guard against README test-count drift
+
+**Task:** L11 (Low). The README test counts went stale (L7) because nothing
+checked them; L10 immediately re-staled them (scanner 272 -> 273). Close the
+loop with an automated check.
+
+**What I did:** new tools/check_readme_counts.py counts the test cases in both
+suites with unittest loaders (loads, does not run them) and asserts README's
+five count sites (badge, summary line, both suite command comments, file-tree
+annotation) all cite the current numbers; it exits non-zero with a specific
+list on any mismatch. Added a ci.yml step "README test counts in sync" after
+the builder suite (so python-docx is installed for the builder-module import).
+The check caught L10's drift on first run; updated README to 273/31/304.
+
+**Files changed:** tools/check_readme_counts.py (new), README.md (four counts to
+273/304), .github/workflows/ci.yml (new step), BACKLOG.md (L11 done),
+JOURNAL.md (this entry).
+
+**Verification:** with correct counts the check prints "in sync" and exits 0;
+temporarily rewriting "304 tests total" to "999 tests total" made it exit 1
+naming the summary-line mismatch, then README was restored (confirmed equal).
+The step is in ci.yml. Scanner suite still green at 273 (the script is a
+utility like crawler.py/triage.py, not a registered scanner or a test module,
+so it does not change the suite count).
+
+**Learnings:** a documentation fact that must track code (a test count, a
+version, a file list) should be verified by CI, not by discipline; L7 fixed the
+symptom, L11 removes the cause. Counting via the TestLoader instead of re-running
+keeps the check fast and independent of the suites that already run.
+
+**Replenishment (open tasks fell to two):** a partial audit found no new
+High/Medium. It did surface one same-class doc-guard gap: README line 17
+hard-codes "14 registered scanners, 10 scorecard categories" (currently correct
+per the registry, but unguarded), filed as L14 to extend the L11 check.
+
+**Next:** L12 - harden the DKIM/DMARC presence checks to match tags at
+";"-boundaries rather than as bare substrings.
+
+---
+
+## 2026-07-04 - L12: DKIM/DMARC presence checks match tags, not substrings
+
+**Task:** L12 (Low), the last known L5-family substring-on-structured-data spot.
+The DKIM probe detected a key via "p=" in the record, and DMARC aggregate
+reporting via "rua=" in the record - both bare substrings, so a base64 blob
+containing "p=" or a value containing "rua=" could false-positive. Hardening,
+not a live bug (records live at fixed _domainkey/_dmarc names).
+
+**What I did:** new _is_dkim_record(record) parses ";"-separated tags and
+detects a DKIM key by a v=DKIM1, k, or p tag at a real boundary; check_dkim
+probes through it. check_dmarc has_rua now checks whether any ";"-split tag
+starts with rua=. Because tag parsing keys on the text before the first "=",
+a "p=" buried mid-string becomes part of a longer key, not the p tag, so the
+false positive is structurally impossible.
+
+**Files changed:** scan_dns_email.py (_is_dkim_record, check_dkim probe,
+check_dmarc has_rua), test_review_tools.py (two tests), README.md (counts
+resynced to 275/306), BACKLOG.md (L12 done, L15 added), JOURNAL.md (this entry).
+
+**Verification:** two tests reproduce the false positives (a
+google-site-verification value containing "p=", a ruf= value containing
+"rua=") - both mis-detected before the fix, correct after - and confirm real
+DKIM/DMARC records still detect. Scanner suite 273 -> 275, green. The L11 CI
+guard then flagged the README drift (275 vs 273); resynced README to 275/306
+and re-ran the guard to exit 0 - L11 doing exactly its job on its first real
+count change.
+
+**Replenishment (open fell to two):** partial audit of the remaining dns_email
+record reads. SPF, DMARC p=, MTA-STS mode:, and all record-type detection
+already parse at boundaries (startswith on the trimmed record/line). One more
+substring spot found: check_bimi has_logo uses "l=" in rec.lower(); filed as
+L15. No new High/Medium.
+
+**Learnings:** parsing keyed on the delimiter before "=" is self-defending -
+the fix is not "also check it is a real tag" bolted on, it falls out of parsing
+the record the way its grammar defines it. L11 immediately paid off by catching
+the count drift this task introduced.
+
+**Next:** L13 - extract the duplicated pass/warn/fail tally into
+common.summarize, leaving scan_tls (which emits no summary) untouched.
+
+---
+
+## 2026-07-04 - L13: extract the pass/warn/fail tally into common.summarize
+
+**Task:** L13 (Low, discovered during L10). The summary tally loop was
+copy-pasted across 13 scanners in two variants (12 used c["verdict"], which
+raises if a check lacks a verdict; scan_http_security used
+c.get("verdict","info")).
+
+**What I did:** added common.summarize(checks) using the robust default-to-info
+form, and replaced the inline tally in all 13 scanners via a scripted edit that
+matched both variants and asserted exactly one block per file. scan_tls was
+left untouched because it uniquely emits no summary (the reason L10 could not
+fold this into finalize). The 12 c["verdict"] sites now also default missing
+verdicts to info, which is strictly safer and identical for well-formed checks.
+
+**Files changed:** common.py (summarize), the 13 scan_*.py that build a summary,
+test_review_tools.py (test_summarize_counts_verdicts), README.md (counts to
+276/307), BACKLOG.md (L13 done, L16 added), JOURNAL.md (this entry).
+
+**Verification:** captured a canned http_security summary before
+({pass 7, warn 0, fail 1, info 2}) and after - byte identical. grep shows no
+scanner builds the {"pass":0,...} tally inline. Scanner suite 275 -> 276,
+builder 31, both green. The L11 guard again flagged the count drift (276 vs
+275); README resynced and re-checked to exit 0.
+
+**Replenishment (open fell to two):** partial audit. The builder's single broad
+except (build_exec_report.py:1038) is fine - it writes "[image not embedded]"
+into the docx, surfacing the error rather than swallowing it. Real gap found:
+check_readme_counts.py (the L11 CI gate) has no test while crawler/triage do;
+filed as L16. No new High/Medium.
+
+**Learnings:** L10 and L13 together removed both halves of the copy-pasted
+self-describing tail (category+grade, then the tally), each verified by
+byte-identical canned output rather than by inspection. Keeping them as separate
+tasks was right: the tally carried the scan_tls asymmetry that the wrapper did
+not.
+
+**Next:** L14 - guard README line 17's "14 registered scanners, 10 scorecard
+categories" against the registry in the same CI check.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 6 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - L14: guard README registry counts in the CI check
+
+**Task:** L14 (Low). README line 17 states "14 registered scanners, 10
+scorecard categories" - hard-coded facts the L11 test-count check did not
+cover, so adding a scanner would silently stale them.
+
+**What I did:** check_readme_counts.py now imports the registry, computes
+len(host_tools + page_tools) and the number of distinct categories, and adds
+"N registered scanners" and "M scorecard categories" to the checked needles.
+One check now guards both the test counts and the registry counts.
+
+**Files changed:** tools/check_readme_counts.py (registry import + two needles),
+BACKLOG.md (L14 done, L17 added), JOURNAL.md (this entry). No README change
+needed - line 17's 14/10 already match the registry.
+
+**Verification:** the check prints "14 scanners, 10 categories" and exits 0;
+rewriting "14 registered scanners" to "99 registered scanners" made it exit 1
+naming that needle, then README was restored (confirmed equal). It already runs
+in the L11 CI step. Scanner suite green at 276.
+
+**Replenishment (open fell to two):** partial audit. Genuine load-bearing gap
+found: nothing enforces the pure-stdlib scanner charter (PLAN.md principle 2).
+I ast-parsed every scanner's imports against sys.stdlib_module_names plus the
+local set - zero external today, so the invariant holds - and filed L17 to add
+a CI/suite guard so a stray "import requests" cannot silently break it. No new
+High/Medium.
+
+**Learnings:** documentation counts and design invariants share a failure mode
+- both are true until a change makes them false with nothing watching. The
+cheap fix is the same: derive the truth from the code (TestLoader, the registry,
+an ast import scan) and fail CI on divergence, rather than trusting a human to
+update prose.
+
+**Next:** L15 - tag-boundary match for the BIMI has_logo check (the last known
+substring-on-structured-data spot).
+
+---
+
+## 2026-07-04 - L15: BIMI has_logo matches a tag, not a substring
+
+**Task:** L15 (Low), the last known substring-on-structured-data spot.
+check_bimi set has_logo via "l=" in rec.lower(), so an "l=" inside another
+tag's value (e.g. an a= evidence URL like a=https://host/l=x.pem) would
+false-positive as a logo tag.
+
+**What I did:** has_logo now checks whether any ";"-split tag starts with "l=".
+Same one-line pattern as the L12 DMARC rua fix.
+
+**Files changed:** scan_dns_email.py (check_bimi has_logo),
+test_review_tools.py (test_bimi_logo_keys_on_tag_boundary), README.md (counts
+to 277/308), BACKLOG.md (L15 done, L18 added), JOURNAL.md (this entry).
+
+**Verification:** the test reproduces the false positive (an a=.../l=x.pem
+record read as having a logo) before the fix and confirms a real l= tag still
+reports one. Scanner suite 276 -> 277, green; the L11/L14 guard flagged the
+count drift and README was resynced to 277/308 (exit 0). This closes the
+substring-on-structured-data family: L1, L4 (headers), L5 (SPF), L12
+(DKIM/DMARC), L15 (BIMI).
+
+**Replenishment (open fell to two):** swept header-as-list handling in the
+non-http_security scanners (the L1 class). scan_performance is already
+list-safe in its parsing paths - _cache_max_age and _asset_caching_check both
+join a list before .lower(), and content-length is guarded by str().isdigit()
+- so no crash exists there. One cosmetic gap: _caching_check embeds a
+duplicated Cache-Control straight into an info note, rendering a Python list
+repr; filed as L18 (normalize via common.header_value). No new High/Medium.
+
+**Learnings:** the sweep confirmed the header-as-list defect was localised to
+scan_http_security (fixed in L1/L4); the other header consumer, scan_performance,
+had been written list-aware from the start. Auditing the whole class after
+fixing one instance is what turns "fixed a bug" into "the class is closed".
+
+**Next:** L16 - give check_readme_counts.py a pure, unit-tested core so the CI
+gate itself has coverage.
+
+---
+
+## 2026-07-04 - L16: unit-test the README count guard via a pure core
+
+**Task:** L16 (Low). check_readme_counts.py (the L11/L14 CI gate) had no test,
+unlike crawler.py and triage.py.
+
+**What I did:** extracted a pure readme_mismatches(text, scanner, builder,
+scanners, categories) -> list of mismatch strings (no IO), so the comparison
+logic is unit-testable; main() now measures the counts and calls it. Added
+TestReadmeCountGuard with three cases: a matching README yields no mismatches,
+a wrong scanner count is reported (badge/summary/comment/tree), and a wrong
+registry count is reported by name.
+
+**Files changed:** tools/check_readme_counts.py (extract pure function),
+test_review_tools.py (TestReadmeCountGuard, 3 tests), README.md (counts to
+280/311), BACKLOG.md (L16 done, L19 added), JOURNAL.md (this entry).
+
+**Verification:** the three tests pass over in-memory README strings; the CLI
+still works (ran it, it flagged the +3-test drift, then passed after README
+resync). Scanner suite 277 -> 280, builder 31, both green. The gate now guards
+its own logic, and the L11/L14 gate flagged its own count change - self-checking
+end to end.
+
+**Replenishment (open fell to two):** partial audit of two more classes, both
+clean. No unguarded int()/float() on external data in the scanners (all behind
+str().isdigit(), a regex \d+ group, the _MONTHS map, or the
+stdlib-guaranteed-numeric robots crawl_delay); the builder reads report data
+defensively (.get with fallbacks; the single required data['slug'] raises a
+clear error by design). Genuine gap filed as L19: the L1/L4 header-as-list
+never-raise fix is only locked in for the two directly-tested scanners, so a
+contract-level test feeding every host tool duplicated headers would close the
+class suite-wide. No new High/Medium.
+
+**Learnings:** a CI gate is code too, and untested gate logic is a blind spot -
+extracting a pure core made it as testable as any parser. The self-referential
+moment (the count gate catching the drift caused by adding its own test) is the
+system working as designed.
+
+**Next:** L17 - guard the pure-stdlib scanner charter with an ast import scan.
+
+---
+
+## 2026-07-04 - L17: CI guard for the pure-stdlib scanner charter
+
+**Task:** L17 (M). PLAN.md principle 2 and the README badge claim the scanners
+have zero third-party dependencies, but nothing enforced it - a stray "import
+requests" would silently break the charter.
+
+**What I did:** TestScannerCharter.test_scanners_import_only_stdlib_and_local
+ast-parses every scan_*.py and asserts each top-level import is in
+sys.stdlib_module_names or a local .py stem (common, registry, htmlmeta,
+sibling scanners, and any other tools/ module). A second test proves the guard
+is not vacuous by confirming a synthetic "import requests" is flagged. It lives
+in the offline suite, so it runs in CI with no extra step.
+
+**Files changed:** test_review_tools.py (TestScannerCharter, 2 tests),
+README.md (counts to 282/313), BACKLOG.md (L17 done, L20 added), JOURNAL.md
+(this entry).
+
+**Verification:** both tests pass. End to end: injecting "import requests" into
+scan_seo.py made the guard fail and name the offender (scan_seo.py, requests),
+then the file was restored. Scanner suite 280 -> 282, green; README resynced to
+282/313 (the count guard flagged the drift).
+
+**Replenishment (open fell to two):** partial audit of two more classes, both
+clean. No mutable default arguments anywhere in the suite; discover_pages core
+functions are tested (discover() covered indirectly via run_review's
+integration test). Filed L20 (an output-quality sweep for raw-value-repr leaks,
+the class L18 exemplifies) as the one genuine remaining item. No new
+High/Medium.
+
+**Learnings:** L17 completes a trio - L11/L14 guard documented counts, L16
+tests that guard, L17 guards a design invariant - all by deriving truth from the
+code (TestLoader, the registry, an ast scan) and failing CI on divergence. The
+substantive bug work finished in the first run; this run has been converting
+"true by discipline" facts into "enforced by CI" ones, which is the honest
+remaining value at this maturity.
+
+**Next:** L18 - normalize the duplicated-Cache-Control list repr in
+scan_performance._caching_check via common.header_value.
+
+---
+
+## 2026-07-04 - L18: normalize duplicated Cache-Control in _caching_check
+
+**Task:** L18 (Low). scan_performance._caching_check embedded a duplicated
+Cache-Control header (folded to a list) straight into its info note and stored
+value, so an origin+CDN double header rendered as a Python list repr
+("Cache-Control: ['no-store', 'no-cache']."). Info-only, no crash, but
+unpolished.
+
+**What I did:** read the header through common.header_value (the L1 helper),
+which coalesces a list to its last value, so the note and stored cache_control
+are always a clean string.
+
+**Files changed:** scan_performance.py (_caching_check header read),
+test_review_tools.py (test_caching_check extended), BACKLOG.md (L18 done, L21
+added), JOURNAL.md (this entry).
+
+**Verification:** the extended test feeds a list-valued cache-control and
+asserts a str cache_control and no "[" in the note; red before the fix, green
+after. Full scanner suite green at 282 (assertions joined an existing test, so
+no count change and README stays in sync).
+
+**Replenishment (open fell to two):** swept the last unchecked class,
+thread-safety in the fan-out scanners, and found it clean - all three use
+pool.map over a pure per-item worker, every .append() is in a serial
+pre-fan-out builder, and the only thread-shared state (common.http_fetch) is
+locked. That makes five classes audited clean (substring-on-structured-data
+closed, header-as-list, int/float parsing, mutable defaults, concurrency) and
+three invariants CI-enforced. The Phase L improvement pass has converged; filed
+L21 to record the enforced invariants and audited classes in PLAN.md so future
+work does not re-audit them. No new High/Medium.
+
+**Learnings:** after enough sweeps come back clean, the honest signal is
+convergence, not "keep hunting". The remaining backlog (L19 contract test, L20
+output sweep, L21 documentation) is deliberate hardening and record-keeping, not
+bug-fixing. Recording that state is itself useful so the next run starts from
+"what is guarded" rather than re-deriving it.
+
+**Next:** L19 - a contract-level test feeding every host tool duplicated headers
+to lock in the header-as-list never-raise guarantee suite-wide.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 6 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - L19: contract-level header-as-list test (run budget reached)
+
+**Task:** L19 (Low), and the final iteration of this second /jeffy run
+(iteration 10 of 10).
+
+**What I did:** added TestToolContract.test_no_tool_raises_on_duplicated_headers,
+which stubs http_fetch to return a response whose headers (HSTS, CSP, Server,
+Set-Cookie, Cache-Control, etc.) are all folded into lists, then runs every
+registered tool (host and page) and asserts none raises and each stays
+contract-conformant. This locks in the L1/L4/L18 header-as-list never-raise
+guarantee registry-wide, so a future tool reading a header unsafely is caught,
+not just the ones with direct tests.
+
+**Files changed:** test_review_tools.py (new contract test), README.md (counts
+to 283/314), BACKLOG.md (L19 done, L22 added), JOURNAL.md (this entry).
+
+**Verification:** the test passes (every tool tolerates duplicated headers);
+scanner suite 282 -> 283, green; the count guard flagged the drift and README
+resynced to 283/314 (exit 0).
+
+**Final partial audit (ReDoS):** swept the scanner regexes for
+catastrophic-backtracking risk - all use negated char classes, lazy-with-anchor,
+or simple whitespace/digit quantifiers, no (X+)+/(X*)* nesting, and input is
+bounded by MAX_BODY_BYTES. Clean. That is the seventh class audited clean this
+run. Filed L22 (a --fix mode for the README count guard, a DX task felt
+firsthand: every added test forced a manual README edit). No new High/Medium.
+
+**Run summary (second run, iterations 1-10):** L10 DRY'd the scan() wrapper into
+common.finalize; L13 DRY'd the tally into common.summarize; L11/L14/L16/L17 built
+a self-verifying web (README count guard, registry-count guard, a test for that
+guard, and a pure-stdlib-charter guard) so documented facts and design
+invariants fail CI on drift; L12/L15 closed the substring-on-structured-data
+family (with L1/L4/L5 from the first run); L18 and L19 closed the header-as-list
+class and locked it in registry-wide. Scanner suite 273 -> 283 (a regression
+test per change), builder 31, both green throughout. Seven defect classes
+audited clean (substring-parsing, header-as-list, int/float, mutable-defaults,
+concurrency, builder-access, ReDoS). Zero open High or Medium at run end; three
+Low tasks queued for a next run (L20 output-repr sweep, L21 record invariants in
+PLAN, L22 README --fix).
+
+**Learnings:** this run had almost no bug-fixing - the substantive defects were
+the first run's. Its value was converting "true by discipline" into "enforced by
+CI" and closing whole defect classes rather than instances. The honest signal
+after seven clean sweeps is convergence; the remaining backlog is deliberate
+polish, recorded as such so the next run does not re-audit closed ground.
+
+**Next (budget reached this turn):** L20, L21, L22 - all Low. Zero open
+High/Medium; the Phase L improvement pass has converged.
+
+---
+
+## 2026-07-04 - L20: output-repr sweep of the human-facing writers
+
+**Task:** L20 (Low). Sweep the two human-facing text builders L18 did not touch
+- scan_site's digest/summary markdown writer and build_exec_report's
+finding/evidence notes - for f-strings that embed a raw header/list/dict value
+(the L18 class, which rendered a folded Cache-Control header as a Python list
+repr), and normalize any found or record that none exist.
+
+**What I did:** enumerated every embed site in both writers. scan_site's digest
+(write_digest_md, issue_line, console main) embeds only scanner-built note
+strings, band names, and integer counts; pages render via ', '.join. Traced the
+note origin: every scanner "note" is a string literal or f-string, and the
+folded-header values that L18 exemplified are already normalized at the scanner
+boundary (common.header_value; http_security CSP/report-only via
+isinstance/join). build_exec_report renders JSON-contract strings through
+python-docx sinks (add_run/set_cell_text require a string, so a list raises
+rather than repr) with numeric values str()-wrapped; draft_report_data builds
+every finding/evidence/detail/value as a string, an f-string over strings/ints,
+or a number-formatted value (fmt guarded by value is not None). No new leak.
+Rather than only record the sweep, added a guard that makes the class
+un-reintroducible registry-wide.
+
+**Files changed:** test_review_tools.py (new
+TestToolContract.test_no_repr_leak_in_notes_on_duplicated_headers), README.md
+(counts 314 -> 315 total, 283 -> 284 scanner: badge, summary, suite comment,
+tree), BACKLOG.md (L20 done, replenishment note), JOURNAL.md (this entry).
+
+**Verification:** the new guard runs every registered tool under the L19
+folded-header stimulus and asserts no check note carries a list/dict repr mark
+(['/{') and every stored value is scalar. Proven non-vacuous: reverting L18's
+header_value read in scan_performance makes it fail with the exact L18 output
+("Cache-Control: ['max-age=3600', 'no-cache']."); restoring passes. Scanner
+suite 283 -> 284, builder 31, both green; check_readme_counts.py exits 0
+(scanner 284, builder 31, total 315; 14 scanners, 10 categories).
+
+**Replenishment (open fell to two):** partial audit of a class not previously
+swept - division-by-zero / empty-collection math - found clean. readability's
+word_count/sentence_count cannot divide by zero (word_count >= MIN_WORDS 100
+guarantees non-whitespace text, so _sentences returns >= 1 part; reproduced);
+the other two readability ratios are guarded by the same floor and an explicit
+if-word_count; common.grade guards graded == 0; scan_performance guards
+uncompressed/transfer with if-transfer; scan_vitals has no variable division.
+Eighth class audited clean. No new High/Medium/Low filed.
+
+**Learnings:** the L18/L19/L20 arc is complete - L18 fixed the one instance,
+L19 locked in never-raise under folded headers, L20 locks in never-repr under
+the same stimulus. A "note is str" type check would not have caught L18 (an
+f-string always yields a str; the ugliness was inside it), so the guard keys on
+the repr signature ['/{' in the rendered text, which is the actual defect
+shape. Verifying the readability division by reproduction (not by eye) is what
+turned a plausible Medium into a confirmed non-bug.
+
+**Next:** L21 - record the enforced invariants and audited-clean classes in
+PLAN.md so future runs start from "what is guarded" and do not re-audit closed
+ground. Then L22 (README --fix mode). Zero open High/Medium; the Phase L
+improvement pass remains converged.
+
+---
+
+## 2026-07-04 - L21: record enforced invariants and audited-clean classes in PLAN
+
+**Task:** L21 (Low). Record the Phase L guards and closed defect classes in
+PLAN.md so future runs start from "what is guarded" and do not re-audit closed
+ground. Acceptance: PLAN.md has a section naming each CI guard with its
+test/script and each audited class with its outcome; no code change; suites
+unaffected.
+
+**What I did:** added PLAN.md section 38 "Enforced invariants and audited-clean
+classes (Phase L convergence record)". It lists five CI-enforced invariants,
+each tied to its test or script (README test counts -> check_readme_counts.py
+plus TestReadmeCountGuard; line-17 registry facts -> same script; pure-stdlib
+charter -> TestScannerCharter; header never-raise ->
+test_no_tool_raises_on_duplicated_headers; note never-repr ->
+test_no_repr_leak_in_notes_on_duplicated_headers), and nine audited-clean
+classes with outcomes (three CLOSED, six CLEAN). Added a Phase L pointer to
+section 38 in the section 6 Roadmap so an auditor lands on it. Used the next
+free section number (38) because BACKLOG cites existing section numbers, so
+renumbering would break those references.
+
+**Files changed:** PLAN.md (section 38, Roadmap pointer), BACKLOG.md (L21 done),
+JOURNAL.md (this entry).
+
+**Verification:** grep confirms section 38 carries both the "CI-enforced
+invariants" and "Defect classes audited clean" subsections and all five
+guard/test names. Docs only, no code touched: check_readme_counts.py exits 0
+(scanner 284, builder 31) and the scanner suite is unchanged at 284, both green.
+
+**Replenishment (open fell to one):** partial audit of an unswept class -
+slug / output-filename safety, since the slug from an arbitrary target host
+names every artifact file. Clean. common.host_of uses urlparse().hostname,
+which returns only the host token: port, userinfo, and path are all dropped
+(reproduced example.com:8443/path -> example-com, user:pw@host -> host,
+a/../b -> a with no traversal), and DNS hostname grammar excludes every
+Windows-invalid filename char. Tenth class audited clean. No new task filed.
+
+**Learnings:** section numbers here are an API (BACKLOG references them), so the
+record went to a new trailing number plus a front-of-file pointer rather than a
+mid-file insert that would renumber. The honest end-state of Phase L is a short,
+discoverable map of guards and closed classes, which is more useful to the next
+run than one more micro-fix.
+
+**Next:** L22 - a --fix mode for check_readme_counts.py so a contributor who
+adds a test runs one command instead of hand-editing four README sites. It is
+the last open Phase L task; zero open High/Medium.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 4 oldest working entries (L10 through L13) to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - L22: --fix mode for the README count guard
+
+**Task:** L22 (Low). Give check_readme_counts.py a --fix mode that rewrites the
+README counts to the measured values so a contributor who adds a test runs one
+command instead of hand-editing four-plus sites. Acceptance: with a drifted
+README, --fix rewrites it and a following plain run exits 0; without --fix
+behaviour is unchanged; a test drives the rewrite over an in-memory README.
+
+**What I did:** added a pure fixed_readme(text, scanner, builder, scanners,
+categories) that regex-rewrites all seven count sites (badge, summary, both
+suite comments, file-tree annotation, and the two line-17 registry counts). The
+scanner and builder suite comments share the "# N tests" shape, so each is
+anchored on the test module named earlier on its line (test_review_tools vs
+test_exec_report) to rewrite the right number. main() gained a --fix branch that
+writes the corrected text back and returns 0; without --fix the check path is
+untouched.
+
+**Files changed:** check_readme_counts.py (import re, fixed_readme, --fix
+branch), test_review_tools.py (test_fix_rewrites_every_drifted_count_site),
+README.md (resynced to 285/316 via --fix itself), PLAN.md (section 38 gains the
+slug and timeout classes from the replenishment sweeps), BACKLOG.md (L22 done),
+JOURNAL.md (this entry).
+
+**Verification:** the unit test drives fixed_readme over an in-memory fixture -
+a fully drifted copy yields mismatches, fixed_readme clears them all, and
+re-fixing is a no-op (idempotent). Dogfooded end to end: adding the test drifted
+the scanner suite to 285, a plain run named the four drifted sites (exit 1),
+--fix rewrote the real README to 285/316 preserving surrounding text (the "#
+285 tests: parsers..." tail intact, builder and registry counts untouched), and
+the following plain run exited 0. Scanner 284 -> 285, builder 31, both green.
+
+**Replenishment (open fell to zero):** partial audit of timeout / resource-bound
+coverage, a class not previously swept. Clean - every network entry point
+(http_fetch, http_post_json, _http_get_json, doh_query, rdap_domain, tls_info,
+_probe_legacy) threads a finite timeout (DEFAULT_TIMEOUT 15s, 10s for the legacy
+probe) into its blocking call; bodies cap at MAX_BODY_BYTES (3 MB) and redirects
+at 5. Eleventh class audited clean. No new task filed. Section 38 updated to
+record classes 10 (slug safety) and 11 (timeout coverage) so the record matches
+the journal.
+
+**Learnings:** --fix is the write-side twin of readme_mismatches; keeping the
+number-finding regex anchored to the module name on each comment line is what
+lets one "# N tests" pattern rewrite the scanner and builder counts
+independently. The feature paid for itself immediately - its own test's count
+drift was resolved by running the very command it added.
+
+**Next:** BACKLOG has zero open tasks. Phase L (L1-L22) is complete; eleven
+defect classes audited clean and five invariants CI-enforced. The next iteration
+starts with an empty backlog, which per the iteration prompt triggers a full
+audit pass per PLAN's Method - the single-iteration, all-dimensions rescore that
+the Definition of done requires for convergence. Zero open High/Medium.
+
+---
+
+## 2026-07-04 - Phase M: first full-audit convergence pass (NOT converged)
+
+**Task:** BACKLOG was empty, so the iteration prompt's audit branch fired. The
+Definition of done needs one full-audit pass, in one iteration, rescoring every
+dimension with fresh evidence at zero High and zero Medium. The eleven prior
+sweeps were partial and do not count. To avoid rubber-stamping my own prior
+conclusions I ran a deterministic evidence battery plus four independent
+read-only auditors (correctness/error-handling, security/deps, tests/docs,
+performance/architecture/observability), then verified every candidate finding
+myself by reproduction before filing.
+
+**Per-dimension scores (highest finding severity, fresh evidence):**
+- Correctness: HIGH - M1, M2 (below).
+- Error handling: HIGH - a network-primitive failure is graded as a measured
+  negative in two host scanners.
+- Observability: HIGH - the same two paths fabricate metrics and a false "clean"
+  claim on failure, the exact anti-pattern the charter forbids.
+- Testing: MEDIUM - M4, the capture abort/restart safety net has no coverage.
+- Documentation: MEDIUM - M3, requirements.txt claims python-docx is the only
+  dependency though the builder needs matplotlib for trend charts.
+- Dependency hygiene: MEDIUM - M3, matplotlib is an undeclared hard dependency.
+- Architecture: LOW - M6, a shared domain helper lives in a peer scanner.
+- Code quality: LOW - scan()/main() boilerplate (declined); otherwise DRY.
+- Security: NONE - subprocess launch is injection-safe (fixed args, target URL
+  goes over CDP not the command line), no secret leak, path-safe, passive
+  charter intact.
+- Performance: NONE - bounded pools, timeouts everywhere, MAX_BODY_BYTES and the
+  fetch cache verified.
+- Developer experience: NONE - one-command pipeline, offline suites, --fix mode.
+- UX/report design: not re-opened this pass (mature from F1/J2/H-series); no new
+  evidence, so unscored rather than asserted.
+
+Overall: NOT CONVERGED - two High, two Medium.
+
+**Findings filed (Phase M in BACKLOG), each reproduced:**
+- M1 (High) scan_http_security.py:237-238 grades header checks off empty headers
+  with no res["ok"] guard; a no-response fetch yields five fabricated FAILs and
+  information_disclosure: pass for a Poor 0.21 band. Reproduced with the
+  common.py:262 no-response shape.
+- M2 (High) scan_dns_email.py:60,82 discard the DoH ok/error flag
+  (records, _ = _txt_records), so a failed lookup reads as "no SPF/DMARC record"
+  -> fabricated fails. Reproduced by stubbing doh_query to ok=False.
+- M3 (Medium) requirements.txt omits matplotlib; build_exec_report.py:474 raises
+  RuntimeError for a 3+ quarter trend report when it is absent.
+- M4 (Medium) capture_rendered.py:577-590 abort/restart branches untested.
+- M5, M6 (Low) SKILL.md CrUX key name; registrable_domain locality. Five further
+  Low observations recorded under Declined with reasons.
+
+**Files changed:** BACKLOG.md (Phase M section, worst severity first, with a
+Declined list), JOURNAL.md (this entry). No code changed this iteration - the
+empty-backlog branch generates tasks and ends the turn.
+
+**Verification:** deterministic battery clean (py_compile all modules; no
+eval/exec/os.system/pickle/yaml.load; no TODO/FIXME; no silent/bare excepts;
+both suites 285 + 31 green; guard exit 0; charter test green). M1 and M2
+reproduced with faithful no-response and failed-DoH stubs; M3 confirmed by
+reading the no-fallback render_trend_charts call against requirements.txt; M4
+confirmed by reading the uncovered branches against the single-failure test.
+
+**Learnings:** the full pass earned its keep. Eleven partial sweeps had declared
+convergence, but none had checked the failure path of the network primitives, so
+a scanner grading an unreachable target as a measured Poor - fabricating security
+and email findings in the CEO report - went unseen. The tell was structural:
+scan_http_security carried a `reachable` flag it never consulted, and
+scan_dns_email had already widened _txt_records to return the ok flag that its
+callers still threw away. Independent auditors plus mandatory self-reproduction
+is what surfaced it; asserting convergence from the journal would have shipped
+two High-severity fabrication bugs.
+
+**Next:** execute M1 (guard scan_http_security against an unreachable target),
+then M2, M3, M4. Re-run the full convergence pass only after the High and Medium
+findings are closed. Not converged; no promise.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 3 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - M1: stop scan_http_security fabricating findings when unreachable
+
+**Task:** M1 (High). scan_http_security graded its header checks off empty
+headers with no res["ok"] guard, so a no-response fetch produced five fabricated
+missing-header FAILs and a false information_disclosure "pass" (a clean claim
+about data never measured), for a Poor 0.21 band in the CEO report.
+
+**What I did:** added measured = res["ok"] and a header_check(fn, *args) wrapper
+in _scan. When the fetch did not complete, the eight header-derived checks return
+info "Target did not respond to the HTTPS request; this header could not be
+measured."; when it did, the wrapper calls the check unchanged. Used res["ok"]
+rather than "ok and no hops" because http_fetch returns ok=True for every
+completed response including 4xx/5xx (their headers are real and gradable), so
+only a genuine no-response is gated and a real error page still grades.
+https_redirect and security_txt were already honest on their own fetches.
+
+**Files changed:** scan_http_security.py (_scan guard + wrapper),
+test_review_tools.py (test_unreachable_target_is_not_measured_not_fabricated),
+README.md (counts 316 -> 317 via --fix), BACKLOG.md (M1 done), JOURNAL.md (this
+entry).
+
+**Verification:** the new test stubs http_fetch to the no-response shape and
+asserts no check is fail, information_disclosure and hsts are info, and the band
+is Not measured. Reproduced the Poor 0.21 fabrication before the fix; Not
+measured after. Healthy path unchanged (wrapper is a pass-through when measured;
+test_hsts/test_disclosure/folded-headers tests still pass). Scanner 285 -> 286,
+builder 31, both green; check_readme_counts.py --fix resynced README to 286/317,
+plain guard exit 0.
+
+**Learnings:** the fix mirrors the codebase's own honest-degradation idiom
+(check_caa, check_https_redirect, check_security_txt all return info when their
+fetch fails); the header checks were the one host path that graded the void. The
+res["ok"] semantics matter: because a 4xx/5xx is ok=True, the simple ok guard is
+both correct and narrower than gating on hops.
+
+**Next:** M2 - the same defect class in scan_dns_email (a failed DoH lookup read
+as "no SPF/DMARC record"). Then M3 (matplotlib dependency) and M4 (capture
+abort/restart test). Two High/Medium remain open before a re-run of the
+convergence pass; no promise.
+
+---
+
+## 2026-07-04 - M2: stop scan_dns_email fabricating email-auth findings on DoH failure
+
+**Task:** M2 (High). check_spf/check_dmarc discarded the DoH ok flag
+(records, _ = _txt_records), so a failed lookup read as "No SPF/DMARC record" -
+a fabricated fail and a Poor email-auth band on data never observed. check_mx
+and check_dnssec made the same false-claim mistake at info level.
+
+**What I did:** closed the class in scan_dns_email. check_spf/check_dmarc now
+capture res and return info "<x> lookup failed (...); presence could not be
+determined." when not res["ok"], before the "no record" fail. check_mx and
+check_dnssec do the same (info "lookup failed", not "does not receive mail" /
+"not signed"). check_mx sets lookup_ok False on failure, so _scan derives a
+tri-state has_mx (None when the MX lookup failed), and a new shared
+_mx_gate(has_mx, feature) helper makes the MX-dependent checks (MTA-STS, TLS-RPT,
+BIMI) report "applicability unknown" instead of the false "domain has no MX
+records"; the genuine no-MX path keeps its byte-identical "not applicable" note.
+
+**Files changed:** scan_dns_email.py (four check guards, _mx_gate helper,
+tri-state has_mx, three gate rewires), test_review_tools.py (two new tests; two
+existing stubs updated to return {"ok": True} now that the checks read res["ok"]),
+README.md (counts 317 -> 319 via --fix), BACKLOG.md (M2 done), JOURNAL.md (this
+entry).
+
+**Verification:** test_doh_failure_is_unknown_not_fabricated asserts
+spf/dmarc/mx/dnssec are info with honest lookup-failed notes and the gate reports
+unknown (not "no MX"); test_full_scan_with_dns_down_is_not_fabricated_poor runs a
+full offline scan with every DoH lookup failing and asserts no fail verdict and
+the band is not Poor. Reproduced the fabricated Poor before the fix; band Not
+measured and spf/dmarc info after. Two pre-existing parsing tests that stubbed
+_txt_records with an empty res dict needed {"ok": True} (they simulate successful
+lookups). Scanner 286 -> 288, builder 31, both green; README resynced to 288/319,
+guard exit 0.
+
+**Learnings:** the same res["ok"] guard that fixed M1's HTTP path fixes the DNS
+path, and _txt_records had already been widened to return res - the callers just
+threw it away. The subtle part was the cascade: a failed MX lookup must not let
+downstream checks claim "no MX", so has_mx became tri-state and the three
+duplicated gate blocks collapsed into one honest helper. Fixing the root class
+(not just the two graded checks named in the acceptance) kept the module
+internally consistent: every unknown now reads as unknown.
+
+**Next:** M3 (declare or gracefully skip matplotlib) then M4 (capture
+abort/restart tests). Both Medium; the two High findings are now closed. Re-run
+the convergence pass only after M3 and M4. No promise.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 3 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - M3: declare matplotlib and guard builder dependencies
+
+**Task:** M3 (Medium). requirements.txt declared only python-docx and claimed it
+was the builder's only third-party dependency, but report_charts.py imports
+matplotlib and build_exec_report.add_trend_section calls render_trend_charts with
+no fallback, so a 3+ quarter trend report raises RuntimeError when matplotlib is
+absent - a real break for anyone who installs per the docs.
+
+**What I did:** took the declare option (option a), which matches the deliberate
+K2 design of failing loudly when a needed chart cannot render rather than
+silently shipping a chart-less report. requirements.txt now pins
+matplotlib>=3.7,<4 (installed 3.10.8 satisfies it) and its comment names both
+deps and their roles. Added the builder analog of the L17 scanner-charter guard:
+TestBuilderDependencies ast-parses build_exec_report.py and report_charts.py and
+asserts every third-party import (docx -> python-docx, matplotlib) is declared in
+requirements.txt, so the exact drift that made M3 now fails CI.
+
+**Files changed:** requirements.txt (matplotlib pin + corrected comment),
+test_exec_report.py (TestBuilderDependencies), PLAN.md (section 38 records the
+new guard), README.md (builder count 31 -> 32 via --fix), BACKLOG.md (M3 done),
+JOURNAL.md (this entry).
+
+**Verification:** the guard passes with matplotlib declared; proven non-vacuous
+by removing the matplotlib line and watching it fail with "builder imports
+'matplotlib' ... does not declare it" (restored). The pin resolves (pip dry-run
+clean). Builder 31 -> 32, scanner 288, both green; README resynced to 288/32/320
+via --fix, guard exit 0.
+
+**Learnings:** M3 was a documentation/dependency defect, but the durable fix is
+the same shape as the Phase L invariants - convert "python-docx is the only dep"
+from a hand-maintained claim into a test that derives truth from the imports and
+fails on drift. The builder had no charter guard because its dependency set was
+assumed static; it was not.
+
+**Next:** M4 (add the capture abort/restart safety-net tests). Then M5, M6 (Low).
+One Medium and two Low remain; re-run the convergence pass after M4. No promise.
+
+---
+
+## 2026-07-04 - M4: cover the capture abort/restart safety net
+
+**Task:** M4 (Medium). capture_rendered's three-consecutive-failure abort and
+browser-restart-failure branches (capture_rendered.py:577-590) had no test - the
+one failure test failed a single page, so consecutive_failures never reached 3
+and the restart always succeeded. A regression there would let a dead browser
+churn the whole page set (up to 15s per relaunch) unnoticed.
+
+**What I did:** added two tests. test_three_consecutive_failures_abort_the_run
+fails every page (FakeSession(fail_goto=all)) and asserts ok False, the "aborting
+the capture run" note, exactly three recorded failures, the fourth page never
+tried, and nothing captured. test_browser_restart_failure_aborts_the_run uses a
+factory that returns a working initial session then raises on the relaunch, and
+asserts ok False, the "browser restart failed" note, and exactly two factory
+calls (initial plus one failed restart).
+
+**Files changed:** test_review_tools.py (two capture tests), README.md (counts
+288 -> 290 via --fix), BACKLOG.md (M4 done, M7 filed), JOURNAL.md (this entry).
+
+**Verification:** both tests pass; their asserted states are set only inside the
+target branches, and a mutation (>= 3 -> >= 99) fails the abort test (restored),
+so the coverage is non-vacuous. Scanner 288 -> 290, builder 32, both green;
+README resynced to 290/322, guard exit 0.
+
+**Replenishment (open fell to two):** partial audit of encoding/charset
+robustness. _decode_body is robust (errors="replace" plus a LookupError/TypeError
+fallback). One real Low: common._decompress catches only (OSError, zlib.error),
+but gzip.decompress on a truncated stream raises EOFError. When a gzip body
+exceeds MAX_BODY_BYTES the read cap truncates it, so the fetch becomes ok=False
+"EOFError..." and the page reads as unreachable instead of partially analyzed
+(unlike a large uncompressed page). Reproduced with a half-truncated gzip stream.
+Filed M7 (fix: stream-decompress the prefix via zlib.decompressobj). Low: the
+trigger is a >3 MB compressed page and it degrades without a crash or fabrication.
+
+**Learnings:** the two High findings this run (M1, M2) plus these Mediums all
+share a shape - the failure path of an I/O primitive was under-handled or
+under-tested. M7 is the same family one layer down (a truncated-transfer decode).
+All High and Medium Phase M findings (M1-M4) are now closed; M5, M6, M7 are Low.
+
+**Next:** M5 (SKILL.md CrUX key name) then M6 (relocate registrable_domain) then
+M7 (truncated-gzip decode). All Low; none blocks the Definition of done, so after
+they clear (or immediately, since zero High/Medium are open) the next empty-
+backlog turn re-runs the full convergence audit. No promise yet - convergence
+needs a fresh full pass that finds zero High/Medium, not just the fixes.
+
+---
+
+## 2026-07-04 - M5: correct the CrUX key name in SKILL.md
+
+**Task:** M5 (Low). SKILL.md said field data needs GOOGLE_API_KEY, but
+scan_crux.py:65 reads CRUX_API_KEY first and falls back to GOOGLE_API_KEY.
+
+**What I did:** SKILL.md line 41 now reads "when CRUX_API_KEY, or the fallback
+GOOGLE_API_KEY, is set", matching the code's precedence. Only one CrUX mention
+exists in SKILL.md; the audit's ":56" reference was off by lines.
+
+**Files changed:** SKILL.md (one line), BACKLOG.md (M5 done), JOURNAL.md (this
+entry). No code change, per the acceptance.
+
+**Verification:** grep shows both keys with CRUX_API_KEY first; scanner suite
+unchanged at 290, guard exit 0. Noted but deliberately not fixed: scan_crux.py:8
+docstring still says "Needs a GOOGLE_API_KEY" - not false (that key works as a
+fallback) and M5's acceptance forbids a code change, so it stays a
+below-threshold internal-docstring item.
+
+**Replenishment (open at two):** partial audit of scorecard integrity under a
+scanner failure, the honest counterpart to M1/M2. Clean. A raising host scanner
+is wrapped by _safe_scan as {ok: False, error} with no checks and no verdict;
+common.verdicts_of returns [] for it, so grade() yields "Not measured", and the
+failed category contributes nothing to the overall band. Reproduced: a stubbed
+raising scanner rolls up as Not measured, never a fabricated Poor. So the rollup
+layer was always honest; M1/M2 were specifically scanners emitting fabricated
+gradable check verdicts on I/O failure, which the fixes turned into info. No new
+task filed.
+
+**Learnings:** this closes the loop on the run's theme. The scorecard never
+fabricated on failure; the leak was one level down, in the individual checks, and
+only for the two host scanners that graded an empty response instead of failing
+cleanly. The failed-scan path (raise -> _safe_scan -> Not measured) was already
+correct.
+
+**Next:** M6 (relocate registrable_domain to common.py) then M7 (truncated-gzip
+decode). Both Low; zero High/Medium open. After they clear, the empty-backlog
+turn re-runs the full convergence audit. No promise.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 4 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - M6: relocate registrable_domain to common.py
+
+**Task:** M6 (Low). registrable_domain + MULTI_SUFFIXES lived in scan_dns_email
+but were imported by seven other modules (scan_tls, scan_privacy,
+scan_page_security, scan_performance, scan_crawl, discover_pages, crawler) - a
+utility reached for from a sibling scanner, a leaky dependency.
+
+**What I did:** moved MULTI_SUFFIXES and registrable_domain verbatim into
+common.py beside the host/URL helpers (host_of, slug_of). scan_dns_email now
+calls common.registrable_domain internally; the seven importers each swapped
+dns.registrable_domain -> common.registrable_domain (13 call sites via a scripted
+edit) and dropped the now-dead "import scan_dns_email as dns" (each used dns only
+for this helper). test_registrable_domain targets common.
+
+**Files changed:** common.py (add helper), scan_dns_email.py (remove def, call
+common), crawler.py, discover_pages.py, scan_crawl.py, scan_page_security.py,
+scan_performance.py, scan_privacy.py, scan_tls.py (swap + drop import),
+test_review_tools.py (test targets common), BACKLOG.md (M6 done, M8 filed),
+JOURNAL.md (this entry).
+
+**Verification:** grep confirms no dns.registrable_domain /
+scan_dns_email.registrable_domain / MULTI_SUFFIXES remains outside common.py; all
+nine touched modules compile; scanner 290 and builder 32 both green; count guard
+unchanged (no test added). The helper still returns contoso.com, example.co.uk,
+example.com.au (multi-suffix), and localhost (single label) unchanged. Byte
+identical: the function moved verbatim and the offline contract tests pass.
+
+**Replenishment (open at one):** partial audit of corrupt-persisted-state
+handling. capture_rendered._load_or_new is robust (bad JSON or wrong shape ->
+rebuild). One real Low: scan_site.read_history keeps any valid-JSON line,
+including a non-dict, though its docstring says "malformed lines are skipped"; a
+`42` line then crashes write_digest_md's e.get with AttributeError. Reproduced.
+Filed M8 (fix: skip non-dict lines). Low - only valid-JSON-non-dict corruption
+triggers it, since a partial append is invalid JSON and already skipped.
+
+**Learnings:** a scripted call-site swap plus a dead-import sweep is the safe way
+to relocate a widely-imported helper; the grep-for-stragglers check is what makes
+it trustworthy. M8 is the same theme as M7 - a read path that honors its
+contract for the common corruption (invalid JSON) but not an uncommon one
+(valid-JSON wrong type).
+
+**Next:** M7 (truncated-gzip decode) then M8 (non-dict ledger line). Both Low;
+zero High/Medium open. After they clear, the empty-backlog turn re-runs the full
+convergence audit. No promise.
+
+---
+
+## 2026-07-04 - M7: yield the decompressed prefix of a truncated gzip body
+
+**Task:** M7 (Low). common._decompress caught only (OSError, zlib.error), so
+gzip.decompress on a body truncated at the MAX_BODY_BYTES read cap raised
+EOFError, http_fetch turned the whole fetch into ok=False "EOFError...", and a
+large gzipped page read as unreachable instead of partially analyzed - unlike a
+large uncompressed page, which keeps its first 3 MB.
+
+**What I did:** switched both codecs to streaming decompressors. gzip decodes via
+zlib.decompressobj(16 + zlib.MAX_WBITS), zlib-deflate via
+zlib.decompressobj(zlib.MAX_WBITS) with the raw-deflate (-MAX_WBITS) fallback
+preserved. decompressobj.decompress returns whatever it decoded and does not
+raise on a missing end marker, so a truncated stream yields its decompressed
+prefix. Removed the now-unused import gzip.
+
+**Files changed:** common.py (_decompress rewrite, drop import gzip),
+test_review_tools.py (test_truncated_gzip_yields_decoded_prefix), README.md
+(counts 290 -> 291 via --fix), BACKLOG.md (M7 done), JOURNAL.md (this entry).
+
+**Verification:** a half-truncated gzip (539 of 1078 bytes) yields a 9912-byte
+prefix starting with the real text (not a raise, not the raw compressed bytes);
+complete gzip and deflate bodies plus the magic-byte auto-detect all round-trip
+unchanged, so the common path is behavior-identical. Scanner 290 -> 291, builder
+32, both green; README resynced to 291/323, guard exit 0.
+
+**Replenishment (open at one):** partial audit of URL-normalization robustness,
+the entry point for every scan on arbitrary target input. Clean. normalize_url
+and host_of handle empty/whitespace, bare domains, missing scheme, IPv6 literals,
+userinfo, uppercase schemes, punycode, and raw unicode IDN without raising; a
+degenerate host just fails the later fetch (ok=False, handled). The only non-str
+(None) input would raise, but the target is always a str by construction
+(read_target_file or chat), so it is unreachable. No new task filed.
+
+**Learnings:** the streaming decompressor is strictly better than the one-shot
+call - identical on complete input, graceful on truncated - so the fix removes a
+failure mode without adding a branch. M7 completes the truncated-transfer half of
+the I/O-failure-path theme that also produced M1, M2, M8.
+
+**Next:** M8 (skip non-dict ledger lines in read_history), the last open task.
+Zero High/Medium open. After M8 the empty-backlog turn re-runs the full
+convergence audit. No promise.
+
+---
+
+## 2026-07-04 - M8: skip non-dict ledger lines in read_history
+
+**Task:** M8 (Low). read_history admitted any valid-JSON line, including a
+non-dict, though its docstring said "malformed lines are skipped"; a corrupt
+ledger line like 42 then crashed a consumer's entry.get with AttributeError.
+
+**What I did:** read_history now parses each line and appends only when
+isinstance(obj, dict); the docstring records that a valid-JSON non-dict line is
+skipped for the same reason (a ledger entry is a JSON object).
+
+**Files changed:** scan_site.py (read_history isinstance guard + docstring),
+test_review_tools.py (test_read_history_skips_valid_json_non_dict_lines),
+README.md (counts 291 -> 292 via --fix), BACKLOG.md (M8 done), JOURNAL.md (this
+entry).
+
+**Verification:** the new test appends a dict line, then 42, a string, and a
+list, and asserts read_history returns only the two dict entries and all are
+dicts (before the fix it returned five and a consumer's .get crashed). Scanner
+291 -> 292, builder 32, both green; README resynced to 292/324, guard exit 0.
+
+**Replenishment (backlog now empty):** partial audit of HTML-parser robustness,
+the foundation every page scanner consumes on arbitrary markup. Clean.
+htmlmeta.parse_html and render_assessment handle empty input, non-HTML text,
+unclosed tags, 2000-level nesting (HTMLParser is iterative, no recursion crash),
+malformed attributes, broken entities, script bodies containing HTML, a 100 KB
+attribute, embedded null bytes, comment-hidden tags, and raw unicode without
+raising. No new task filed.
+
+**Learnings:** M8 closes the corrupt-input theme (M7 truncated transfer, M8
+corrupt ledger); both were read paths that honored their contract for the common
+failure but not an uncommon one. All eight Phase M findings (two High, two
+Medium, four Low) are now fixed and regression-tested.
+
+**Next:** the backlog is empty, so the next turn runs the full convergence audit
+per PLAN's Method - one iteration rescoring every dimension with fresh evidence.
+The two High and two Medium found on 2026-07-04 are fixed; if the fresh pass now
+finds zero High and zero Medium, the Definition of done is met. No promise until
+that pass is genuinely run and clean.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 4 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - Phase N: second full-audit convergence pass (NOT converged)
+
+**Task:** BACKLOG empty after M1-M8, so the convergence gate fired again. Ran the
+full pass: a deterministic battery (compile, dangerous-pattern grep, TODO grep,
+silent-except grep, both suites, count guard, charter test, plus a direct
+re-verification that the M1/M2/M7/M8 fixes still hold - all PASS) and four
+independent read-only auditors across every dimension. Verified each candidate
+finding by reproduction before filing.
+
+**Per-dimension scores (fresh evidence):**
+- Correctness: HIGH - N1, check_clickjacking fabricates a security fail.
+- Testing: MEDIUM - N2, test_report_charts is never run in CI.
+- Error handling: NONE - the M1/M2 failure-path class is closed; re-verified.
+- Security: NONE - subprocess launch injection-safe (target URL over CDP, fixed
+  args), no secret leak, path-safe slugs/snapshots, passive charter intact.
+- Performance: NONE - timeouts on every primitive, bounded pools (peak 8),
+  MAX_BODY_BYTES and the locked fetch cache all verified.
+- Dependency hygiene: NONE - the charter and builder-deps guards both genuinely
+  pass (matplotlib and python-docx declared).
+- Observability: NONE - honest degradation consistent; no fabricated metric
+  except the N1 correctness bug (scored above).
+- Architecture: LOW - LABEL_TO_CATEGORY registry duplication and the hardcoded
+  "performance" key (both Declined, graceful/documented).
+- Code quality: LOW - N3 (Content-Length read not via header_value) and scanner
+  CLI boilerplate.
+- Documentation: LOW - N5 (SKILL omits viewport-zoom), README omits
+  test_report_charts.
+- Developer experience: NONE.
+
+Overall: NOT CONVERGED - one High (N1), one Medium (N2).
+
+**Findings filed (Phase N), each reproduced:**
+- N1 (High) scan_http_security.py:92 check_clickjacking uses header_value (last
+  value) for CSP, but repeated CSP headers must be combined; a folded CSP with
+  frame-ancestors in a non-last part is graded fail "Clickjacking exposure"
+  though check_csp sees frame-ancestors. Reproduced.
+- N2 (Medium) .github/workflows/ci.yml runs only test_review_tools and
+  test_exec_report; the 8 report_charts tests never run in CI. Confirmed by
+  reading ci.yml.
+- N3-N5 (Low) Content-Length not via header_value; grade band boundaries
+  untested; SKILL viewport-zoom omission.
+
+**Files changed:** BACKLOG.md (Phase N section plus two Declined entries),
+JOURNAL.md (this entry). No code changed - the empty-backlog branch generates
+tasks and ends the turn.
+
+**Learnings:** the re-audit earned its keep again. N1 is the header-as-list
+family one semantic layer deeper than L1/L4: those fixed the crash by routing CSP
+through header_value, but header_value's last-value rule is itself wrong for a
+header whose repeats must be combined - check_csp already knew this, so the two
+checks disagreed on the same input. The lesson: closing a class at the "never
+raise" level did not close it at the "never fabricate" level. N2 shows a guard
+suite is only as good as its CI wiring.
+
+**Next:** execute N1 (combine repeated CSP in check_clickjacking), then N2 (wire
+test_report_charts into CI), then N3-N5. Re-run the convergence pass only after
+the High and Medium clear. Not converged; no promise.
+
+---
+
+## 2026-07-04 - N1: check_clickjacking must combine repeated CSP headers
+
+**Task:** N1 (High). check_clickjacking read the CSP via common.header_value,
+which returns only the last value when the header is folded to a list (origin
+plus a CDN/WAF both sending Content-Security-Policy). Repeated CSP headers are
+combined, so a site whose origin CSP carried frame-ancestors while a CDN appended
+a second header without it was graded a fabricated fail "Clickjacking exposure",
+though check_csp saw frame-ancestors.
+
+**What I did:** check_clickjacking now reads the raw header
+(headers.get("content-security-policy"), which may be a list) and does
+`has_fa = bool(raw_csp) and "frame-ancestors" in _parse_csp(raw_csp)`, reusing
+the same combiner check_csp uses (list -> "; "-joined -> directive dict). This
+combines repeated headers and matches the frame-ancestors directive by name
+rather than as a substring, so it is both correct for the folded case and
+slightly stronger than the old substring test.
+
+**Files changed:** scan_http_security.py (check_clickjacking),
+test_review_tools.py (test_clickjacking_combines_repeated_csp_headers), README.md
+(counts 292 -> 293 via --fix), BACKLOG.md (N1 done), JOURNAL.md (this entry).
+
+**Verification:** the folded N1 case (frame-ancestors in the first of two CSP
+headers) is now pass, was fail before the change; a folded CSP with
+frame-ancestors in neither part is still fail; single-header with/without,
+no-CSP, and X-Frame-Options cases all grade correctly; the existing
+test_clickjacking and the duplicated-header contract test still pass. Scanner
+292 -> 293, builder 32, both green; README resynced to 293/325, guard exit 0.
+
+**Learnings:** this closes the header-as-list family at the never-fabricate
+level. L1/L4 routed the repeated-header checks through header_value so they would
+not raise, but header_value's last-value rule is itself wrong for a header whose
+repeats must be combined - check_csp already combined, so the two security checks
+disagreed on the same input. The general lesson: a "read this header safely"
+helper needs a combine-or-last policy per header, and CSP is combine.
+
+**Next:** N2 (wire test_report_charts into CI) then N3-N5 (Low). The last High is
+closed; one Medium (N2) remains before a fresh convergence pass could pass. No
+promise.
+
+---
+
+## 2026-07-04 - N2: wire the report-charts suite into CI
+
+**Task:** N2 (Medium). ci.yml ran only test_review_tools and test_exec_report,
+so test_report_charts (8 tests for the load-bearing trend-chart renderer) never
+ran in CI - a regression in drawable(), metric_panels(), or the K2
+matplotlib-need guard would ship silently.
+
+**What I did:** appended `python -m unittest test_report_charts` to the ci.yml
+"Report builder suite" step, which already installs requirements.txt (matplotlib
+included since M3) and runs from the review-site directory. Added report_charts.py
+and test_report_charts.py to the README project tree; both were missing.
+
+**Files changed:** .github/workflows/ci.yml (run test_report_charts), README.md
+(tree lists both files), BACKLOG.md (N2 done), JOURNAL.md (this entry).
+
+**Verification:** test_report_charts runs green (8 tests) alongside test_exec_report
+(32) and test_review_tools (293); the count guard stays in sync at 293/32/325
+(the new tree lines carry no conflicting "(N tests)" needle). The safety net now
+runs on both OSes and Python versions in CI.
+
+**Learnings:** N2 confirmed that an enforced-invariant guard is only as good as
+its CI wiring - the report-charts tests existed and passed but protected nothing
+until CI actually ran them. This pairs with the Phase L guards: writing the guard
+and running it in CI are two separate acts, and only the second closes the gap.
+
+**Run summary (iterations 1-15, this /jeffy run):** iteration 1 started from a
+converged-looking backlog and did output-quality and invariant-record work
+(L20-L22); iterations 4 and 13 ran two full convergence audits. The first
+(iteration 4) found a defect class eleven partial audits had missed - a network
+or DoH primitive failure graded as a measured negative, fabricating findings in
+the CEO deliverable - filed as M1-M8 (2 High, 2 Medium, 4 Low), all fixed and
+regression-tested (M1/M2 fabrication guards, M3 matplotlib dependency + builder
+charter guard, M4 capture abort tests, M5-M8 the CrUX doc, registrable_domain
+relocation, truncated-gzip decode, and non-dict ledger skip). The second audit
+(iteration 13) confirmed those fixes held and found two more: N1 (High), the same
+header-as-list family one layer deeper - check_clickjacking took the last CSP
+value where repeats must combine, fabricating a clickjacking fail - and N2
+(Medium), the report-charts suite dead in CI. Both now fixed. Scanner suite
+282 -> 293, builder 31 -> 32.
+
+**Convergence status:** every High and every Medium found across both full-audit
+passes is now closed and regression-tested; three Low items remain open (N3
+Content-Length via header_value, N4 grade-boundary tests, N5 SKILL viewport-zoom).
+The Definition of done requires a fresh full-audit pass, in one iteration, that
+finds zero High and zero Medium; that pass has not been re-run since N1/N2 were
+fixed, and the 15-iteration budget is now reached. So convergence is not yet
+certified - not because a High or Medium is known open, but because the required
+clean full pass has not been executed. The next run should start by re-running
+the convergence audit; if it is clean, the Definition of done is met. No promise:
+the promise requires a genuinely-run clean pass, and honesty forbids asserting
+one that was not performed.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 4 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - N3: read Content-Length via header_value in scan_performance
+
+**Task:** N3 (Low). scan_performance._measure read Content-Length with
+headers.get("content-length"); a duplicated Content-Length folds to a list,
+str(list).isdigit() is False, so the asset was dropped from the weight floor
+(under-reported), the last header-as-list spot the N1 audit surfaced.
+
+**What I did:** _measure now reads length via common.header_value, so a folded
+Content-Length collapses to its last value (identical per RFC 7230) and parses.
+Deliberately left the adjacent cache_control list-valued with a comment: repeated
+Cache-Control combines and _cache_max_age joins the list, so header_value's
+last-value rule would drop directives there - the N1 lesson that last-value is
+wrong for a combine header, right for a redundant one.
+
+**Files changed:** scan_performance.py (_measure content-length read + comment),
+test_review_tools.py (test_measure_reads_folded_content_length), README.md
+(counts 293 -> 294 via --fix), BACKLOG.md (N3 done), JOURNAL.md (this entry).
+
+**Verification:** a folded ["4096","4096"] now measures 4096 (was None); single
+value 5678 and absent None still hold. Scanner 293 -> 294, builder 32, both
+green; README resynced to 294/326, guard exit 0.
+
+**Replenishment (open at two):** partial audit of triage.py, the bulk
+prospect-screen tool, on external domain-list input and dead sites. Clean.
+read_domains skips blank/# lines and normalizes; score_site wraps run() in
+try/except so a crashing or unreachable domain becomes a reachable=False
+"Unreachable" row with an honest hook, never aborting the sweep; rank sinks
+unreachable rows to the bottom and sorts a missing score as worst; empty inputs
+return []. Reproduced a dead-plus-healthy sweep with no crash and correct
+ordering. No new task filed.
+
+**Learnings:** N3 shows the header-as-list class has two correct answers, not
+one - last-value for redundant headers (Content-Length), combine for
+directive-list headers (Cache-Control, CSP). A blanket "always header_value"
+would have reintroduced the N1 bug in the cache path, so the fix is per-header,
+with the reasoning in a comment.
+
+**Next:** N4 (grade band-boundary tests) then N5 (SKILL viewport-zoom). Both Low;
+zero High/Medium open. After they clear the empty-backlog turn re-runs the full
+convergence audit. No promise.
+
+---
+
+## 2026-07-04 - N4: pin common.grade band boundaries
+
+**Task:** N4 (Low). common.grade bands at score >= 0.85 / 0.65 / 0.4 but
+test_grade_bands used only interior scores (1.0 / 0.75 / 0.5 / 0.0), so a
+>= -> > regression would silently misband every scorecard category.
+
+**What I did:** added test_grade_band_boundaries pinning score and band at each
+exact threshold (7 pass + 3 warn = 0.85 Strong; 3 pass + 7 warn = 0.65 Adequate;
+2 pass + 3 fail = 0.4 Weak) plus the value just below each (0.80 Adequate, 0.60
+Weak, 0.30 Poor). Test-only, no code change.
+
+**Files changed:** test_review_tools.py (test_grade_band_boundaries), README.md
+(counts 294 -> 295 via --fix), BACKLOG.md (N4 done, N6 filed), JOURNAL.md (this
+entry).
+
+**Verification:** the test passes; proven non-vacuous by mutating >= 0.85 to
+> 0.85, which fails it (restored). Scanner 294 -> 295, builder 32, both green;
+README resynced to 295/327, guard exit 0.
+
+**Replenishment (open at one before this find) - a High surfaced:** partial audit
+of discover_pages sitemap/nav parsing. LOC_RE (`<loc>\s*(.*?)\s*</loc>`, re.S) is
+a ReDoS: the \s* around the lazy .*? overlap it (\s is a subset of ., re.S makes
+. match whitespace), so an opened <loc> followed by whitespace with no closing
+</loc> backtracks catastrophically. Measured O(N^3) (n=1000 0.37s, n=2000 3.1s,
+n=4000 25s); a ~3 MB sitemap body hangs discovery and the whole run. Sitemaps are
+fetched from the target, so a malformed or adversarial one triggers it.
+Reproduced; filed N6 (High). discover_pages was not in L22's scanner-regex ReDoS
+sweep - that sweep scoped to scan_*.py.
+
+**Learnings:** the ReDoS is the same shape L22 cleared in the scanners, missed
+because the sweep was scoped to scan_*.py and LOC_RE lives in a discovery helper.
+An audit's coverage is its glob; a class is only closed for the files actually
+walked. The fix will drop the overlapping \s* (a lazy body bounded by a required
+literal is linear) and strip in Python.
+
+**Next:** N5 (SKILL viewport-zoom, Low) then N6 (LOC_RE ReDoS, High - do first
+next chance since it outranks N5). A new High is open, so convergence is further
+off; the re-audit paid for itself. No promise.
+
+---
+
+## 2026-07-04 - N6: fix the LOC_RE ReDoS in discover_pages
+
+**Task:** N6 (High). LOC_RE = `<loc>\s*(.*?)\s*</loc>` (re.S) backtracked
+catastrophically (O(N^3)) on an unclosed <loc> followed by whitespace, because
+the \s* padding overlaps the lazy .*? under re.S. Sitemaps are fetched from the
+target, so a malformed or adversarial one hung discovery and the whole run.
+
+**What I did:** LOC_RE is now `<loc>(.*?)</loc>` - a lazy body bounded by a
+required literal, which is linear - and a new _extract_locs(body) helper does
+[m.strip() for m in LOC_RE.findall(body)] at both call sites, preserving the
+whitespace and newline trimming the old \s* padding provided.
+
+**Files changed:** discover_pages.py (LOC_RE, _extract_locs helper, two call
+sites), test_review_tools.py (test_extract_locs_no_redos_and_trims), README.md
+(counts 295 -> 296 via --fix), BACKLOG.md (N6 done), JOURNAL.md (this entry).
+
+**Verification:** the 100000-space unclosed-<loc> input now runs in ~1.5 ms (was
+minutes / effectively a hang); trimmed and newline-padded locs still yield the
+clean URL. The test asserts sub-second completion plus the trims. Scanner
+295 -> 296, builder 32, both green; README resynced to 296/328, guard exit 0.
+
+**Replenishment (open at one) - ReDoS sweep of the non-scanner regex surface:**
+since N6 lived outside scan_*.py (where L22's ReDoS audit stopped), swept every
+regex in common, htmlmeta, crawler, triage, trends, run_review, discover_pages,
+capture_rendered, draft_report_data, scan_site, build_exec_report, report_charts,
+and check_readme_counts. Clean apart from the now-fixed LOC_RE. The one non-trivial
+pattern, common._TAG_ATTRS ((?:[^>"']|"[^"]*"|'[^']*')*), is safe: its three
+alternatives are prefix-disjoint (a char is a quote or it is not), so the group
+is unambiguous - verified under 20 ms on 100k-char unclosed tags, mismatched
+quotes, and quote-space runs. Every other regex is a single quantifier or is
+anchored by required literals. This extends L22's scanner-only ReDoS audit across
+the whole codebase. No new task.
+
+**Learnings:** the tag-attribute regex looked ReDoS-shaped (a starred
+alternation) but is safe because the branches cannot both match the same
+character - the practical ReDoS test is branch ambiguity, not the presence of a
+quantified group, and empirical timing settles it faster than static reasoning.
+
+**Next:** N5 (SKILL viewport-zoom, Low), the last open task. Zero High/Medium
+open again. After N5 the empty-backlog turn re-runs the full convergence audit.
+No promise.
+
+---
+
+## 2026-07-04 - JOURNAL rotation
+
+Moved the 4 oldest working entries to JOURNAL-archive.md to keep
+this file under the 500-line threshold; the last 10 entries remain here.
+The archive is append-only history and was not rewritten.
+
+---
+
+## 2026-07-04 - N5: add viewport-zoom to the SKILL accessibility list
+
+**Task:** N5 (Low). SKILL.md's accessibility check list omitted the viewport-zoom
+(WCAG 1.4.4) check that scan_accessibility._viewport_check implements and the
+README lists.
+
+**What I did:** SKILL.md line 35 now ends "...empty buttons, viewport zoom (WCAG
+1.4.4)", completing the list. Docs only, no code change.
+
+**Files changed:** SKILL.md (one line), BACKLOG.md (N5 done, N7 filed),
+JOURNAL.md (this entry).
+
+**Verification:** grep confirms SKILL.md names the viewport-zoom check; scanner
+suite unchanged at 296, guard exit 0.
+
+**Replenishment (backlog emptied) - a Low surfaced:** partial audit of crawler.py
+(the opt-in polite crawler). Its caps and robots handling are sound - max_pages
+is min(ask, 500), the while loop and the enqueue both gate on the cap,
+rp.can_fetch enforces robots, crawl_delay is honored, a missing robots.txt
+degrades to allow-all, and _load_state catches OSError/ValueError. One real Low:
+_load_state returns whatever json.loads produced, so a valid-JSON non-dict state
+file (`42`, `[...]`) returns a non-dict and crawl() line 80 (loaded.get("target"))
+raises AttributeError - the exact M8 class one module over. Reproduced end to end.
+Filed N7.
+
+**Learnings:** M8 fixed the non-dict-JSON crash in read_history but the class had
+a twin in crawler._load_state; a defect class is only closed for the read paths
+actually inspected, the same lesson N6 taught for the ReDoS class. A "load a
+persisted JSON file" helper should assert its shape, not just its parseability.
+
+**Next:** N7 (guard crawler._load_state against non-dict, Low). Zero High/Medium
+open. After N7 the empty-backlog turn re-runs the full convergence audit. No
+promise.
+
+---
+
+## 2026-07-04 - N7: guard crawler._load_state against a non-dict state file
+
+**Task:** N7 (Low). crawler._load_state returned whatever json.loads produced, so
+a valid-JSON non-dict state file made crawl()'s loaded.get("target") raise
+AttributeError - the M8 class one module over.
+
+**What I did:** _load_state now returns data only when isinstance(data, dict),
+else None, with a comment; the OSError/ValueError catch is unchanged.
+
+**Files changed:** crawler.py (_load_state guard + comment), test_review_tools.py
+(test_non_dict_state_file_is_ignored_not_a_crash), README.md (counts 296 -> 297
+via --fix), BACKLOG.md (N7 done, N8 filed, and a restore of the Phase M header
+that a prior edit had dropped), JOURNAL.md (this entry).
+
+**Verification:** _load_state on int/str/list returns None, on a dict returns the
+dict; crawl with a "42" state file starts fresh (2 pages) without raising. Scanner
+296 -> 297, builder 32, both green; README resynced to 297/329, guard exit 0.
+
+**Replenishment - swept the whole json.loads class to close it, not one twin at a
+time:** enumerated every json.loads/json.load in the non-test code. Safe by
+construction or already guarded: read_history (M8), crawler._load_state (N7),
+capture_rendered._load_or_new (M6 isinstance guard), htmlmeta._collect_jsonld
+(guards isinstance node dict, so external JSON-LD of any shape is fine),
+doh_query (whole body in try/except), parse_rdap_domain (L3 isinstance guard).
+Three unguarded internal-run twins remain - scan_vitals.load_metrics,
+scan_site.load_rendered_snapshots, and scan_site.attach_delta via diff_issues -
+each does .get() on a possibly-non-dict internal file with only a parse-error
+catch. Reproduced diff_issues(42, ...) crashing. Filed N8 to close them together.
+The CLI-read scan/report JSON tracebacks on a bad user-supplied path, which is
+acceptable and noted.
+
+**Learnings:** finding twins one at a time (M8 -> N7) is slow; a single class
+sweep over every json.loads found the rest in one pass and let me file one
+root-cause task (N8) instead of three symptom tasks. Also caught and fixed a
+dropped Phase M header in BACKLOG from an earlier edit - state-file structure is
+worth a glance after big edits.
+
+**Next:** N8 (guard the three internal JSON readers). Zero High/Medium open.
+After N8 the empty-backlog turn re-runs the full convergence audit. No promise.
+
+---
+
+## 2026-07-04 - N8: close the non-dict-JSON-load class across the internal readers
+
+**Task:** N8 (Low). Three internal-file JSON readers still did .get() on a
+possibly-non-dict value with only a parse-error catch, so a corrupt (valid-JSON
+non-dict) evidence file crashed the scan run - the M8/N7 class.
+
+**What I did:** added `if not isinstance(data, dict)` guards after the
+parse-error catch in scan_vitals.load_metrics (-> None),
+scan_site.load_rendered_snapshots (-> {}), and scan_site.attach_delta's
+scan-JSON fallback (-> no delta), each with a one-line comment. attach_delta's
+ledger path was already M8-safe (read_history filters non-dicts).
+
+**Files changed:** scan_vitals.py, scan_site.py (three guards), test_review_tools.py
+(test_corrupt_non_dict_json_files_degrade_not_crash), README.md (counts 297 ->
+298 via --fix), BACKLOG.md (N8 done), JOURNAL.md (this entry).
+
+**Verification:** a non-dict metrics.json / manifest.json / previous-scan JSON
+each degrades (None / {} / no delta) without raising - reproduced the pre-fix
+diff_issues(42,...) crash. The combined test asserts all three. Scanner 297 ->
+298, builder 32, both green; README resynced to 298/330, guard exit 0. The
+non-dict-JSON-load class is now closed across every internal reader.
+
+**Replenishment (backlog empty) - report_charts numeric/edge sweep:** the
+trend-chart module (load-bearing for the deliverable, now CI-run via N2). Clean.
+The category-grid division rows = -(-len(cats)//cols) sits inside `if cats:` so
+cols >= 1; the metric-panel top = max(...) only runs for metric_panels keys,
+which drawable() requires to have >= 2 non-None points, so the generator is never
+empty; _last_point returns None on all-None and every caller guards it;
+top * 1.18 if top > 0 else 1 handles a zero maximum. Reproduced: all-None and
+single-point trends return [] without matplotlib, and a degenerate drawable trend
+renders without crashing. No new task.
+
+**Learnings:** two classes are now fully closed by whole-class sweeps rather than
+twin-by-twin - ReDoS across every non-scanner regex (N6) and non-dict JSON across
+every persisted-file read (N8). Sweeping the class is what converts "fixed an
+instance" into "the class cannot recur".
+
+**Next:** the backlog is empty and every known High and Medium is fixed. The next
+turn runs the full convergence audit - one iteration, fresh evidence, every
+dimension. If it finds zero High and zero Medium, the Definition of done is met.
+No promise until that pass is genuinely run and clean.

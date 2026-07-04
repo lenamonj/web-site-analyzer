@@ -15,7 +15,6 @@ import sys
 from urllib.parse import urljoin
 
 import common
-import scan_dns_email as dns
 
 CATEGORY = "seo"
 SCOPE = "host"
@@ -88,7 +87,7 @@ def check_host_canonicalization(host):
     that never converge split link equity and confuse crawlers. Applies only
     when the target is the apex or www.<apex>; a real subdomain site has no
     www twin to canonicalize."""
-    apex = dns.registrable_domain(host)
+    apex = common.registrable_domain(host)
     if host not in (apex, f"www.{apex}"):
         return {"verdict": "info", "host": host,
                 "note": f"Host {host} is a subdomain; apex/www canonicalization not applicable."}

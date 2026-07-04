@@ -49,3 +49,9 @@ PROSPECTS.txt
 # internal planning docs with no reason to be public. BEFORE MAKING THE REPO
 # PUBLIC, remove them from tracking and scrub them from history (see the
 # go-public checklist). Prospect lists and sales/ stay ignored regardless.
+
+# Transient session-scoped ralph-loop state (never commit)
+.claude/ralph-loop.local.md
+
+# Coverage artifacts from ad-hoc test-coverage runs
+.coverage

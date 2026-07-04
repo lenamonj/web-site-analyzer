@@ -89,8 +89,11 @@ def check_referrer_policy(headers):
 
 def check_clickjacking(headers):
     xfo = common.header_value(headers, "x-frame-options")
-    csp = common.header_value(headers, "content-security-policy", "")
-    has_fa = "frame-ancestors" in csp.lower()
+    # Repeated CSP headers are combined (every policy enforced), not last-wins,
+    # so parse the raw value - which may be a list - via _parse_csp and match the
+    # frame-ancestors directive by name rather than taking header_value's last.
+    raw_csp = headers.get("content-security-policy")
+    has_fa = bool(raw_csp) and "frame-ancestors" in _parse_csp(raw_csp)
     if xfo or has_fa:
         src = "X-Frame-Options" if xfo else "CSP frame-ancestors"
         return {"x_frame_options": xfo, "csp_frame_ancestors": has_fa,
@@ -162,17 +165,18 @@ def _parse_cookies(headers):
     cookies = raw if isinstance(raw, list) else [raw]
     parsed = []
     for c in cookies:
-        low = c.lower()
         name = c.split("=", 1)[0].strip()
-        same_site = None
-        for part in low.split(";"):
-            part = part.strip()
-            if part.startswith("samesite="):
-                same_site = part.split("=", 1)[1]
+        # Attributes are ;-delimited tokens after the name=value pair; match the
+        # Secure/HttpOnly flags by whole token, not substring, so a cookie named
+        # __Secure-* or a value containing "secure"/"httponly" is not miscredited
+        # with a flag it lacks.
+        attrs = [p.strip() for p in c.lower().split(";")[1:]]
+        same_site = next((a.split("=", 1)[1] for a in attrs
+                          if a.startswith("samesite=")), None)
         parsed.append({
             "name": name,
-            "secure": "secure" in low,
-            "http_only": "httponly" in low,
+            "secure": "secure" in attrs,
+            "http_only": "httponly" in attrs,
             "same_site": same_site,
         })
     return parsed
@@ -236,20 +240,34 @@ def _scan(url):
     host = common.host_of(url)
     res = common.http_fetch(url, want_body=False)
     headers = res.get("final_headers", {}) or {}
+    # http_fetch returns ok=True for any completed response, 4xx/5xx included
+    # (their headers are real and gradable); ok=False means no response arrived.
+    # When nothing arrived, an absent header is "not measured", never a
+    # fabricated fail or a false "clean" pass on data we never saw.
+    # https_redirect and security_txt make their own fetches and degrade on their
+    # own, so only the header-derived checks are gated here.
+    measured = res["ok"]
+
+    def header_check(fn, *fn_args):
+        if not measured:
+            return _verdict("info", "Target did not respond to the HTTPS request; "
+                                    "this header could not be measured.")
+        return fn(*fn_args)
 
     checks = {
         "https_redirect": check_https_redirect(host),
-        "hsts": check_hsts(headers),
-        "content_security_policy": check_csp(headers),
-        "clickjacking": check_clickjacking(headers),
-        "x_content_type_options": check_simple_header(
-            headers, "X-Content-Type-Options", "nosniff",
+        "hsts": header_check(check_hsts, headers),
+        "content_security_policy": header_check(check_csp, headers),
+        "clickjacking": header_check(check_clickjacking, headers),
+        "x_content_type_options": header_check(
+            check_simple_header, headers, "X-Content-Type-Options", "nosniff",
             "No X-Content-Type-Options. MIME sniffing possible."),
-        "referrer_policy": check_referrer_policy(headers),
-        "permissions_policy": check_simple_header(
-            headers, "Permissions-Policy", None, "No Permissions-Policy set."),
-        "cookies": check_cookies(headers),
-        "information_disclosure": check_disclosure(headers),
+        "referrer_policy": header_check(check_referrer_policy, headers),
+        "permissions_policy": header_check(
+            check_simple_header, headers, "Permissions-Policy", None,
+            "No Permissions-Policy set."),
+        "cookies": header_check(check_cookies, headers),
+        "information_disclosure": header_check(check_disclosure, headers),
         "security_txt": check_security_txt(res.get("final_url") or url),
     }
 

@@ -43,6 +43,8 @@ def load_metrics(url):
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+    if not isinstance(data, dict):  # corrupt metrics.json: not measured, not a crash
+        return None
     return (data.get("pages") or {}).get(common.normalize_url(url))
 
 

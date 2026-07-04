@@ -7,7 +7,6 @@ Everything here is passive: plain GET/HEAD requests, a TLS handshake, and
 DNS-over-HTTPS lookups. No logins, no form posts, no path brute forcing.
 """
 
-import gzip
 import json
 import re
 import ssl
@@ -61,6 +60,23 @@ def slug_of(url):
     return host.replace(".", "-")
 
 
+# Minimal multi-label public suffixes so registrable-domain guessing is sane.
+MULTI_SUFFIXES = {
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "org.au",
+    "co.jp", "co.nz", "co.za", "com.br", "com.cn", "com.mx",
+}
+
+
+def registrable_domain(host):
+    """Best-effort organizational domain (no Public Suffix List dependency).
+    Shared host helper: several scanners and the discovery/crawler tools compare
+    same-site by registrable domain, so it lives here rather than in one scanner."""
+    labels = host.strip(".").split(".")
+    if len(labels) >= 3 and ".".join(labels[-2:]) in MULTI_SUFFIXES:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:]) if len(labels) >= 2 else host
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Disable urllib's automatic redirect following so we can record each hop."""
 
@@ -104,16 +120,20 @@ def header_value(headers, name, default=None):
 
 
 def _decompress(raw, encoding):
-    """Decode gzip or deflate bodies. Servers may compress even when not asked."""
+    """Decode gzip or deflate bodies. Servers may compress even when not asked.
+    Uses streaming decompressors so a body truncated at the MAX_BODY_BYTES read
+    cap still yields its decompressed prefix (matching how a truncated
+    uncompressed body keeps its first bytes) instead of raising or leaving the
+    body compressed."""
     enc = (encoding or "").lower().strip()
     try:
         if enc == "gzip" or (not enc and raw[:2] == b"\x1f\x8b"):
-            return gzip.decompress(raw)
+            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw)
         if enc == "deflate":
             try:
-                return zlib.decompress(raw)
+                return zlib.decompressobj(zlib.MAX_WBITS).decompress(raw)
             except zlib.error:
-                return zlib.decompress(raw, -zlib.MAX_WBITS)  # raw deflate stream
+                return zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw)  # raw deflate stream
         if enc == "br":
             try:
                 import brotli
@@ -143,21 +163,28 @@ def _decode_body(raw, content_type):
 _FETCH_CACHE = None
 _FETCH_CACHE_LOCK = threading.Lock()
 _FETCH_CACHE_MAX = 512
+_FETCH_CACHE_DEPTH = 0
 
 
 def enable_fetch_cache():
-    """Turn the per-run cache on. Keeps existing entries when already on, so
-    a pipeline that enabled it before scan_site.run does not lose its warmup."""
-    global _FETCH_CACHE
+    """Turn the per-run cache on, reference-counted so nested enablers compose:
+    run_review enables it, scan_site.run enables it again, and the cache (with its
+    warmup) survives scan_site.run's disable so the post-capture re-scan reuses it
+    instead of re-fetching the whole page set. Cleared only when the outermost
+    enabler disables."""
+    global _FETCH_CACHE, _FETCH_CACHE_DEPTH
     with _FETCH_CACHE_LOCK:
+        _FETCH_CACHE_DEPTH += 1
         if _FETCH_CACHE is None:
             _FETCH_CACHE = {}
 
 
 def disable_fetch_cache():
-    global _FETCH_CACHE
+    global _FETCH_CACHE, _FETCH_CACHE_DEPTH
     with _FETCH_CACHE_LOCK:
-        _FETCH_CACHE = None
+        _FETCH_CACHE_DEPTH = max(0, _FETCH_CACHE_DEPTH - 1)
+        if _FETCH_CACHE_DEPTH == 0:
+            _FETCH_CACHE = None
 
 
 def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want_body=True,

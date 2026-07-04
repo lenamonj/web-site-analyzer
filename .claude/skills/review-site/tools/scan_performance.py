@@ -20,7 +20,6 @@ from urllib.parse import urljoin, urlparse
 
 import common
 import htmlmeta
-import scan_dns_email as dns
 
 MAX_RESOURCES = 40
 RES_TIMEOUT = 8
@@ -50,8 +49,10 @@ def _script_resources(html, base):
         m = SRC_RE.search(attrs)
         if not m:
             continue
-        low = attrs.lower()
-        blocking = "async" not in low and "defer" not in low
+        # async/defer are bare boolean attributes; strip quoted values first so a
+        # src path like /js/async-bundle.js is not misread as an async attribute.
+        bare = re.sub(r'"[^"]*"|\'[^\']*\'', "", attrs.lower())
+        blocking = "async" not in bare and "defer" not in bare
         out.append({"url": urljoin(base, m.group(1)), "blocking": blocking})
     return out
 
@@ -79,7 +80,12 @@ def _collect_resources(html, parsed, base):
 def _measure(resource):
     res = common.http_fetch(resource["url"], method="HEAD", want_body=False, timeout=RES_TIMEOUT)
     headers = res.get("final_headers") or {}
-    length = headers.get("content-length")
+    # A duplicated Content-Length folds to a list (identical values per RFC 7230);
+    # read the last value so str(...).isdigit() sees a string, not the list repr.
+    # cache_control below stays list-valued on purpose: repeated Cache-Control
+    # combines, and _cache_max_age joins it (unlike last-value, which would drop
+    # directives).
+    length = common.header_value(headers, "content-length")
     size = int(length) if length and str(length).isdigit() else None
     return {**resource, "bytes": size, "status": res.get("final_status"),
             "cache_control": headers.get("cache-control")}
@@ -172,7 +178,7 @@ def _scan(url, page=None):
 
     base = res["final_url"]
     html = res["body"] or ""
-    page_domain = dns.registrable_domain(common.host_of(base))
+    page_domain = common.registrable_domain(common.host_of(base))
 
     resources = _collect_resources(html, parsed, base)
     truncated = len(resources) > MAX_RESOURCES
@@ -190,7 +196,7 @@ def _scan(url, page=None):
     resource_bytes = sum(r["bytes"] for r in known)
     unknown_size = len(measured) - len(known)
     third_party = sorted({common.host_of(r["url"]) for r in measured
-                          if dns.registrable_domain(common.host_of(r["url"])) != page_domain})
+                          if common.registrable_domain(common.host_of(r["url"])) != page_domain})
     blocking_scripts = [r for r in measured if r["type"] == "script" and r.get("blocking")]
     largest = sorted(known, key=lambda r: r["bytes"], reverse=True)[:5]
 

@@ -20,7 +20,6 @@ from urllib.parse import urljoin, urlparse
 
 import common
 import htmlmeta
-import scan_dns_email as dns
 
 MAX_CHILD_SITEMAPS = 5
 MAX_URLS = 500
@@ -28,7 +27,7 @@ MAX_SECTIONS = 8
 PER_SECTION = 3
 MAX_PROPOSED = 15
 LOCALE_RE = re.compile(r"^[a-z]{2}([-_][a-z]{2})?$", re.I)
-LOC_RE = re.compile(r"<loc>\s*(.*?)\s*</loc>", re.I | re.S)
+LOC_RE = re.compile(r"<loc>(.*?)</loc>", re.I | re.S)
 LEGAL_KEYWORDS = ("legal", "privacy", "terms", "cookie", "contact", "about",
                   "career", "imprint", "disclaimer", "accessibility", "gdpr")
 
@@ -45,19 +44,27 @@ def _is_legal(url):
     return any(k in path for k in LEGAL_KEYWORDS)
 
 
+def _extract_locs(body):
+    """<loc> contents, whitespace-trimmed. LOC_RE deliberately omits the \\s*
+    padding the old <loc>\\s*(.*?)\\s*</loc> had: under re.S, \\s overlaps the
+    lazy .*?, so an unclosed <loc> followed by whitespace backtracked
+    catastrophically (ReDoS). Trimming in Python is linear."""
+    return [m.strip() for m in LOC_RE.findall(body)]
+
+
 def _collect_sitemap_urls(base, robots_sitemaps):
     start = robots_sitemaps[0] if robots_sitemaps else urljoin(base, "/sitemap.xml")
     res = common.http_fetch(start, want_body=True)
     if res["final_status"] != 200 or not res["body"]:
         return {"found": False, "urls": [], "sitemaps_read": []}
     body = res["body"]
-    locs = LOC_RE.findall(body)
+    locs = _extract_locs(body)
     if "<sitemapindex" in body.lower():
         page_urls, read = [], [start]
         for child in locs[:MAX_CHILD_SITEMAPS]:
             r = common.http_fetch(child, want_body=True)
             if r["final_status"] == 200 and r["body"]:
-                page_urls.extend(LOC_RE.findall(r["body"]))
+                page_urls.extend(_extract_locs(r["body"]))
                 read.append(child)
             if len(page_urls) >= MAX_URLS:
                 break
@@ -74,7 +81,7 @@ def _internal_nav_links(anchors, base, domain):
         absolute = urljoin(base, href).split("#")[0]
         if urlparse(absolute).scheme not in ("http", "https"):
             continue
-        if dns.registrable_domain(common.host_of(absolute)) != domain:
+        if common.registrable_domain(common.host_of(absolute)) != domain:
             continue
         if absolute not in seen:
             seen.add(absolute)
@@ -112,7 +119,7 @@ def discover(url):
         return {"tool": "discover_pages", "target": url, "ok": False, "error": home["error"]}
 
     base = home["final_url"]
-    domain = dns.registrable_domain(common.host_of(base))
+    domain = common.registrable_domain(common.host_of(base))
     parsed = htmlmeta.parse_html(home["body"])
     render = htmlmeta.render_assessment(parsed, home["body"] or "")
 
@@ -127,7 +134,7 @@ def discover(url):
 
     all_urls, seen = [], set()
     for u in [base] + sm["urls"] + nav:
-        if dns.registrable_domain(common.host_of(u)) == domain and u not in seen:
+        if common.registrable_domain(common.host_of(u)) == domain and u not in seen:
             seen.add(u)
             all_urls.append(u)
 

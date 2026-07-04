@@ -20,7 +20,6 @@ import time
 import warnings
 
 import common
-import scan_dns_email as dns
 
 EXPIRY_WARN_DAYS = 21
 
@@ -166,7 +165,7 @@ def _scan(target):
             "http2": http2,
             "expiry": {"verdict": expiry_verdict, "note": expiry_note},
             "hostname_coverage": {"verdict": coverage_verdict, "note": coverage_note},
-            "caa": check_caa(dns.registrable_domain(host)),
+            "caa": check_caa(common.registrable_domain(host)),
         },
     }
 

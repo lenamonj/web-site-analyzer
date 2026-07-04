@@ -71,6 +71,8 @@ def load_rendered_snapshots(slug):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
+    if not isinstance(manifest, dict):  # corrupt manifest: no snapshots, not a crash
+        return {}
     out = {}
     for url, entry in (manifest.get("pages") or {}).items():
         f = base / (entry.get("file") or "")
@@ -379,7 +381,10 @@ def append_history(result, path):
 
 
 def read_history(path):
-    """All ledger entries, oldest first; malformed lines are skipped."""
+    """All ledger entries, oldest first; malformed lines are skipped. A ledger
+    entry is a JSON object, so a valid-JSON non-dict line (external corruption)
+    is skipped too - consumers do entry.get(...) and would crash on a bare int
+    or list."""
     path = Path(path)
     if not path.exists():
         return []
@@ -389,9 +394,11 @@ def read_history(path):
         if not line:
             continue
         try:
-            entries.append(json.loads(line))
+            obj = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(obj, dict):
+            entries.append(obj)
     return entries
 
 
@@ -412,6 +419,8 @@ def attach_delta(result, json_path, history_path=None):
         try:
             prev = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            return
+        if not isinstance(prev, dict):  # corrupt scan JSON: no delta, not a crash
             return
     result["delta"] = diff_issues(prev, result)
 

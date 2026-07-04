@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/github/license/lenamonj/web-site-analyzer)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/scanner%20dependencies-zero-2ea44f)
-![Tests](https://img.shields.io/badge/tests-314%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-338%20passing-2ea44f)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Scope](https://img.shields.io/badge/scope-passive%20%26%20external-orange)
 ![Rendered evidence](https://img.shields.io/badge/rendered%20evidence-headless%20Chrome%20DevTools-blueviolet)
@@ -155,8 +155,9 @@ The rules that make the output trustworthy, enforced by code and tests rather th
 
 ## Install
 
-Requirements: Python 3.10+ and, for the Word report only, one package
-(python-docx), pinned in `requirements.txt`:
+Requirements: Python 3.10+ and, for the Word report only, two packages
+(python-docx, plus matplotlib for the quarterly-trend charts), pinned in
+`requirements.txt`:
 
 ```
 pip install -r requirements.txt
@@ -225,18 +226,19 @@ Environment (via env or a git-ignored `.env` at the repo root): `CRUX_API_KEY` o
 
 ## Tests and CI
 
-Two offline suites, 314 tests total, no network, run in about a second:
+Three offline suites, no network, run in about a second - the scanner and builder suites are 338 tests total, and a report-charts suite adds 8 more:
 
 ```
 cd .claude/skills/review-site/tools
-python -m unittest test_review_tools        # 283 tests: parsers, graders, tool contract, pipeline, capture
+python -m unittest test_review_tools        # 306 tests: parsers, graders, tool contract, pipeline, capture
 cd ..
-python -m unittest test_exec_report         # 31 tests: the docx builder (needs python-docx)
+python -m unittest test_exec_report         # 32 tests: the docx builder (needs python-docx)
+python -m unittest test_report_charts       # 8 tests: the quarterly-trend chart renderer (needs matplotlib)
 ```
 
 The scanner suite drives the HTML parser, every grading function, the tool contract across the whole registry (every registered tool is swept for result shape, category stamping, and no-raise-on-network-failure), the full pipeline with stubbed network primitives, and the browser tier with crafted WebSocket bytes and a fake DevTools session (including the RFC 6455 accept-key test vector). Network primitives are stubbed suite-wide so no test can ever reach a real network or read a real key.
 
-[GitHub Actions](https://github.com/lenamonj/web-site-analyzer/actions) runs both suites on every push across Ubuntu and Windows, on Python 3.10 and 3.13.
+[GitHub Actions](https://github.com/lenamonj/web-site-analyzer/actions) runs all three suites on every push across Ubuntu and Windows, on Python 3.10 and 3.13.
 
 ---
 
@@ -262,7 +264,9 @@ LICENSE                                    MIT
   skills/review-site/
     SKILL.md                               The review workflow and rules
     build_exec_report.py                   Deterministic python-docx report builder
+    report_charts.py                       Quarterly-trend chart renderer (matplotlib)
     test_exec_report.py                    Builder test suite
+    test_report_charts.py                  Trend-chart renderer suite (run in CI)
     tools/                                 The evidence engine (pure standard library)
       common.py                            Shared fetch (cached, gzip-aware), DoH, TLS, grading
       htmlmeta.py                          Single-pass HTML extractor shared by all page scanners
@@ -275,7 +279,7 @@ LICENSE                                    MIT
       scan_site.py                         Orchestrator + scorecard, writes the evidence JSON
       draft_report_data.py                 Drafts report data incl. executive summary and action plan
       run_review.py                        One command: discover, scan, capture, re-scan, draft
-      test_review_tools.py                 Offline scanner suite (283 tests)
+      test_review_tools.py                 Offline scanner suite (306 tests)
       CAPTURE.md                           Manual browser-capture reference (fallback path)
 planning/
   _evidence/                               Scan JSON, digests, ledgers, rendered snapshots (internal)

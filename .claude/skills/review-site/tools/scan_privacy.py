@@ -19,7 +19,6 @@ from urllib.parse import urljoin, urlparse
 
 import common
 import htmlmeta
-import scan_dns_email as dns
 
 CATEGORY = "privacy"
 SCOPE = "page"
@@ -252,7 +251,7 @@ def _third_parties(urls, page_domain):
     """Distinct third-party registrable domains among the resource URLs."""
     seen, out = set(), []
     for u in urls:
-        domain = dns.registrable_domain(urlparse(u).hostname or "")
+        domain = common.registrable_domain(urlparse(u).hostname or "")
         if domain and domain != page_domain and domain not in seen:
             seen.add(domain)
             out.append(domain)
@@ -337,7 +336,7 @@ def _scan(url, page=None):
         }
         third = []
     else:
-        page_domain = dns.registrable_domain(common.host_of(base))
+        page_domain = common.registrable_domain(common.host_of(base))
         urls = _collect_resource_urls(body, parsed, base)
         third = _third_parties(urls, page_domain)
         trackers = _match_trackers(urls)

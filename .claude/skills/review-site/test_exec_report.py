@@ -438,5 +438,58 @@ class TestReportLabel(unittest.TestCase):
                     self.assertTrue(para.paragraph_format.keep_with_next)
 
 
+class TestBuilderDependencies(unittest.TestCase):
+    """M3: every third-party import in the builder modules must be declared in
+    requirements.txt, so a report never fails on an undeclared dependency (the
+    matplotlib gap that made M3). This is the builder analog of the scanner
+    charter guard (PLAN section 38); before the fix matplotlib was imported by
+    report_charts.py but absent from requirements.txt, and this test would fail."""
+
+    REVIEW = Path(__file__).resolve().parent
+    ROOT = REVIEW.parents[2]
+    IMPORT_TO_PACKAGE = {"docx": "python-docx"}  # import name -> pip package name
+
+    def _third_party_imports(self, path):
+        import ast
+        local = {p.stem for p in self.REVIEW.glob("*.py")}
+        local |= {p.stem for p in (self.REVIEW / "tools").glob("*.py")}
+        mods = set()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                mods.add(node.module.split(".")[0])
+        return {m for m in mods
+                if m not in sys.stdlib_module_names and m not in local}
+
+    def _declared_packages(self):
+        pkgs = set()
+        for line in (self.ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name = line
+            for sep in ("<", ">", "=", "!", "~", " "):
+                name = name.split(sep)[0]
+            pkgs.add(name.strip().lower())
+        return pkgs
+
+    def test_builder_third_party_imports_are_declared(self):
+        declared = self._declared_packages()
+        found = set()
+        for module in ("build_exec_report.py", "report_charts.py"):
+            found |= self._third_party_imports(self.REVIEW / module)
+        self.assertTrue(found, "no third-party imports discovered; the ast/glob "
+                               "scan is broken (it should find docx and matplotlib)")
+        for imp in found:
+            pkg = self.IMPORT_TO_PACKAGE.get(imp, imp).lower()
+            self.assertIn(pkg, declared,
+                          f"builder imports {imp!r} ({pkg}) but requirements.txt "
+                          f"does not declare it")
+        self.assertIn("python-docx", declared)
+        self.assertIn("matplotlib", declared)
+
+
 if __name__ == "__main__":
     unittest.main()

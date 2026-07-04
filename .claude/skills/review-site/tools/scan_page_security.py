@@ -20,7 +20,6 @@ from urllib.parse import urljoin, urlparse
 
 import common
 import htmlmeta
-import scan_dns_email as dns
 
 CATEGORY = "security"
 SCOPE = "page"
@@ -45,7 +44,7 @@ INLINE_HANDLER_RE = re.compile(r"\son[a-z]+\s*=\s*[\"']", re.I)
 
 def _cross_origin_resources(body, base):
     """(url, has_integrity) for cross-origin scripts and stylesheets."""
-    page_domain = dns.registrable_domain(common.host_of(base))
+    page_domain = common.registrable_domain(common.host_of(base))
     out = []
     for attrs in SCRIPT_RE.findall(body):
         m = SRC_RE.search(attrs)
@@ -62,7 +61,7 @@ def _cross_origin_resources(body, base):
     for url, has_sri in out:
         host = common.host_of(url)
         if urlparse(url).scheme in ("http", "https") and host \
-                and dns.registrable_domain(host) != page_domain:
+                and common.registrable_domain(host) != page_domain:
             cross.append((url, has_sri))
     return cross
 

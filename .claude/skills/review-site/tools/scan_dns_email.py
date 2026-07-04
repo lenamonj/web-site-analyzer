@@ -29,22 +29,8 @@ DKIM_SELECTORS = [
     "fm1", "fm2", "fm3", "protonmail", "protonmail2", "protonmail3", "zoho",
 ]
 
-# Minimal multi-label public suffixes so registrable-domain guessing is sane.
-MULTI_SUFFIXES = {
-    "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "org.au",
-    "co.jp", "co.nz", "co.za", "com.br", "com.cn", "com.mx",
-}
-
 CATEGORY = "dns_email"
 SCOPE = "host"
-
-
-def registrable_domain(host):
-    """Best-effort organizational domain (no Public Suffix List dependency)."""
-    labels = host.strip(".").split(".")
-    if len(labels) >= 3 and ".".join(labels[-2:]) in MULTI_SUFFIXES:
-        return ".".join(labels[-3:])
-    return ".".join(labels[-2:]) if len(labels) >= 2 else host
 
 
 def _txt_records(name):
@@ -57,7 +43,10 @@ def _txt_records(name):
 
 
 def check_spf(domain):
-    records, _ = _txt_records(domain)
+    records, res = _txt_records(domain)
+    if not res["ok"]:
+        return {"present": None, "record": None, "verdict": "info",
+                "note": f"SPF lookup failed ({res['error']}); presence could not be determined."}
     spf = next((r for r in records if r.lower().startswith("v=spf1")), None)
     if not spf:
         return {"present": False, "record": None,
@@ -79,7 +68,10 @@ def check_spf(domain):
 
 
 def check_dmarc(domain):
-    records, _ = _txt_records(f"_dmarc.{domain}")
+    records, res = _txt_records(f"_dmarc.{domain}")
+    if not res["ok"]:
+        return {"present": None, "record": None, "verdict": "info",
+                "note": f"DMARC lookup failed ({res['error']}); presence could not be determined."}
     dmarc = next((r for r in records if r.lower().startswith("v=dmarc1")), None)
     if not dmarc:
         return {"present": False, "record": None,
@@ -120,8 +112,9 @@ def check_dkim(domain):
         records, _ = _txt_records(f"{sel}._domainkey.{domain}")
         return any(_is_dkim_record(r) for r in records)
 
-    # Bounded fan-out over the selector list (14 serial DoH round trips
-    # otherwise); executor.map preserves order so output stays deterministic.
+    # Bounded fan-out over the selector list (one serial DoH round trip per
+    # selector otherwise); executor.map preserves order so output stays
+    # deterministic.
     with ThreadPoolExecutor(max_workers=8) as pool:
         hits = list(pool.map(probe, DKIM_SELECTORS))
     found = [sel for sel, hit in zip(DKIM_SELECTORS, hits) if hit]
@@ -137,6 +130,9 @@ def check_dkim(domain):
 
 def check_mx(domain):
     res = common.doh_query(domain, "MX")
+    if not res["ok"]:
+        return {"records": [], "lookup_ok": False, "verdict": "info",
+                "note": f"MX lookup failed ({res['error']}); mail routing could not be determined."}
     hosts = [a.split()[-1].rstrip(".") for a in res["answers"] if a]
     if hosts:
         return {"records": hosts, "verdict": "info", "note": f"{len(hosts)} MX host(s)."}
@@ -145,17 +141,34 @@ def check_mx(domain):
 
 def check_dnssec(domain):
     res = common.doh_query(domain, "DNSKEY")
+    if not res["ok"]:
+        return {"signed": None, "verdict": "info",
+                "note": f"DNSSEC lookup failed ({res['error']}); signing status could not be determined."}
     if res["answers"]:
         return {"signed": True, "verdict": "pass", "note": "DNSSEC keys published (zone is signed)."}
     return {"signed": False, "verdict": "info", "note": "No DNSKEY; zone is not DNSSEC-signed."}
+
+
+def _mx_gate(has_mx, feature):
+    """Applicability gate shared by the MX-dependent checks. has_mx is None when
+    the MX lookup itself failed (so applicability is unknown, never claim "no
+    MX"), False when the domain has no MX (not applicable), else None-return to
+    proceed. Returns the info dict to short-circuit, or None to continue."""
+    if has_mx is None:
+        return {"verdict": "info", "note": f"Mail routing could not be determined "
+                                           f"(MX lookup failed); {feature} applicability unknown."}
+    if not has_mx:
+        return {"verdict": "info", "note": f"Domain has no MX records; {feature} not applicable."}
+    return None
 
 
 def check_mta_sts(domain, has_mx):
     """MTA-STS (RFC 8461): protects inbound SMTP from TLS downgrade. Record
     in DNS plus a policy file at a standardized well-known URI. Absence is
     reported, not graded down (adoption is minority)."""
-    if not has_mx:
-        return {"verdict": "info", "note": "Domain has no MX records; MTA-STS not applicable."}
+    gate = _mx_gate(has_mx, "MTA-STS")
+    if gate:
+        return gate
     records, _ = _txt_records(f"_mta-sts.{domain}")
     rec = next((r for r in records if r.lower().startswith("v=stsv1")), None)
     if not rec:
@@ -180,8 +193,9 @@ def check_mta_sts(domain, has_mx):
 
 def check_tls_rpt(domain, has_mx):
     """TLS-RPT (RFC 8460): where SMTP TLS failures get reported."""
-    if not has_mx:
-        return {"verdict": "info", "note": "Domain has no MX records; TLS-RPT not applicable."}
+    gate = _mx_gate(has_mx, "TLS-RPT")
+    if gate:
+        return gate
     records, _ = _txt_records(f"_smtp._tls.{domain}")
     rec = next((r for r in records if r.lower().startswith("v=tlsrptv1")), None)
     if rec:
@@ -194,8 +208,9 @@ def check_tls_rpt(domain, has_mx):
 def check_bimi(domain, has_mx):
     """BIMI: brand logo shown next to authenticated mail. Cosmetic but a
     signal of mature email posture; requires DMARC enforcement to work."""
-    if not has_mx:
-        return {"verdict": "info", "note": "Domain has no MX records; BIMI not applicable."}
+    gate = _mx_gate(has_mx, "BIMI")
+    if gate:
+        return gate
     records, _ = _txt_records(f"default._bimi.{domain}")
     rec = next((r for r in records if r.lower().startswith("v=bimi1")), None)
     if rec:
@@ -259,9 +274,11 @@ def check_domain_registration(domain):
 
 def _scan(target):
     host = common.host_of(target) or target.strip()
-    domain = registrable_domain(host)
+    domain = common.registrable_domain(host)
     mx = check_mx(domain)
-    has_mx = bool(mx["records"])
+    # None when the MX lookup itself failed, so the MX-dependent checks report
+    # "unknown" rather than the false "domain has no MX records".
+    has_mx = None if mx.get("lookup_ok") is False else bool(mx["records"])
     checks = {
         "spf": check_spf(domain),
         "dmarc": check_dmarc(domain),

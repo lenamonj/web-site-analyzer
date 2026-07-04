@@ -23,7 +23,6 @@ from urllib.parse import urldefrag, urljoin, urlparse
 
 import common
 import htmlmeta
-import scan_dns_email as dns
 
 DEFAULT_DELAY = 1.0          # seconds between requests; Crawl-delay can raise it
 MAX_PAGES_CEILING = 500      # absolute cap regardless of the caller's ask
@@ -52,7 +51,7 @@ def _eligible(url, domain):
     parts = urlparse(url)
     if parts.scheme not in ("http", "https"):
         return False
-    if dns.registrable_domain(parts.hostname or "") != domain:
+    if common.registrable_domain(parts.hostname or "") != domain:
         return False
     path = parts.path.lower()
     return not any(path.endswith(ext) for ext in SKIP_EXTENSIONS)
@@ -60,9 +59,12 @@ def _eligible(url, domain):
 
 def _load_state(path):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    # A state file is a JSON object; a valid-JSON non-dict (external corruption)
+    # is treated as no state, so the caller's loaded.get(...) cannot crash.
+    return data if isinstance(data, dict) else None
 
 
 def crawl(target, max_pages=100, delay=DEFAULT_DELAY, state_path=None,
@@ -72,7 +74,7 @@ def crawl(target, max_pages=100, delay=DEFAULT_DELAY, state_path=None,
     given."""
     target = common.normalize_url(target)
     max_pages = min(max_pages, MAX_PAGES_CEILING)
-    domain = dns.registrable_domain(common.host_of(target))
+    domain = common.registrable_domain(common.host_of(target))
 
     state = {"target": target, "visited": [], "queue": [target],
              "collected": [], "skipped_by_robots": 0, "errors": 0}

@@ -10,6 +10,7 @@ exact drift that made L7 necessary.
 Run from anywhere: paths are resolved from this file's location.
 """
 import importlib
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -47,6 +48,31 @@ def readme_mismatches(text, scanner, builder, scanners, categories):
             for where, needle in expected.items() if needle not in text]
 
 
+def fixed_readme(text, scanner, builder, scanners, categories):
+    """Rewrite the documented counts in the README text to the measured values,
+    the write-side of readme_mismatches so a contributor runs one command instead
+    of hand-editing every site. Pure (no IO) and idempotent: each site is matched
+    by pattern and only its number replaced, so an already-correct README returns
+    unchanged. The scanner and builder suite comments are disambiguated by the
+    test module named earlier on their line. A site the README does not contain
+    is left as-is; --fix corrects drifted numbers, it does not restructure the
+    file.
+    """
+    total = scanner + builder
+    subs = [
+        (r"tests-\d+%20passing", f"tests-{total}%20passing"),
+        (r"\d+ tests total", f"{total} tests total"),
+        (r"(test_review_tools[^\n#]*#\s*)\d+(\s+tests)", rf"\g<1>{scanner}\g<2>"),
+        (r"(test_exec_report[^\n#]*#\s*)\d+(\s+tests)", rf"\g<1>{builder}\g<2>"),
+        (r"\(\d+ tests\)", f"({scanner} tests)"),
+        (r"\d+ registered scanners", f"{scanners} registered scanners"),
+        (r"\d+ scorecard categories", f"{categories} scorecard categories"),
+    ]
+    for pattern, repl in subs:
+        text = re.sub(pattern, repl, text)
+    return text
+
+
 def main():
     if str(TOOLS) not in sys.path:
         sys.path.insert(0, str(TOOLS))
@@ -59,6 +85,17 @@ def main():
     categories = len({t.category for t in tools})
 
     text = README.read_text(encoding="utf-8")
+
+    if "--fix" in sys.argv[1:]:
+        fixed = fixed_readme(text, scanner, builder, scanners, categories)
+        if fixed != text:
+            README.write_text(fixed, encoding="utf-8")
+            print(f"README counts rewritten: scanner {scanner}, builder {builder}, "
+                  f"total {total}; {scanners} scanners, {categories} categories.")
+        else:
+            print("README counts already in sync; nothing to rewrite.")
+        return 0
+
     problems = readme_mismatches(text, scanner, builder, scanners, categories)
 
     if problems:
