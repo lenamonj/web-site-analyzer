@@ -480,6 +480,27 @@ def grade(verdicts):
     return {**counts, "graded": graded, "score": round(score, 2), "band": band}
 
 
+def finalize(result, category):
+    """Stamp a scan result with its own category and grade so the
+    self-describing wrapper (PLAN.md section 4) is defined once here instead of
+    copy-pasted into every scanner's scan(). The grade is the tool's own
+    verdicts rolled up by grade(); returns the same dict for chaining."""
+    result["category"] = category
+    result["grade"] = grade(verdicts_of(result))
+    return result
+
+
+def summarize(checks):
+    """Pass/warn/fail/info counts across a checks map, for a result's summary.
+    Defined once instead of re-implemented in every scanner's _scan. A check
+    with no verdict counts as info, so a malformed check never raises."""
+    counts = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
+    for c in checks.values():
+        verdict = c.get("verdict", "info")
+        counts[verdict] = counts.get(verdict, 0) + 1
+    return counts
+
+
 def enable_utf8_stdout():
     """Windows consoles default to cp1252 and choke on site content. Force UTF-8."""
     try:

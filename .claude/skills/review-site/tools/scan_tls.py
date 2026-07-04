@@ -175,9 +175,7 @@ def scan(*args, **kwargs):
     """Public entry: run the scan and stamp the tool's own category and grade so
     the result is self-describing (see PLAN.md section 4)."""
     result = _scan(*args, **kwargs)
-    result["category"] = CATEGORY
-    result["grade"] = common.grade(common.verdicts_of(result))
-    return result
+    return common.finalize(result, CATEGORY)
 
 
 def main():

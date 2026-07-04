@@ -152,7 +152,9 @@ def _compression_check(res):
 
 
 def _caching_check(headers):
-    cc = headers.get("cache-control")
+    # Coalesce a duplicated Cache-Control (folded to a list) to one string so
+    # the info note and stored value never render a Python list repr (L18).
+    cc = common.header_value(headers, "cache-control")
     etag = bool(headers.get("etag"))
     if cc:
         return {"cache_control": cc, "etag": etag, "verdict": "info", "note": f"Cache-Control: {cc}."}
@@ -226,9 +228,7 @@ def _scan(url, page=None):
     if render["likely_client_rendered"]:
         checks["static_weight"]["note"] += " Page is client-rendered, so most weight is not visible here."
 
-    tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
-    for c in checks.values():
-        tally[c["verdict"]] = tally.get(c["verdict"], 0) + 1
+    tally = common.summarize(checks)
 
     return {
         "tool": "scan_performance",
@@ -248,9 +248,7 @@ def scan(*args, **kwargs):
     """Public entry: run the scan and stamp the tool's own category and grade so
     the result is self-describing (see PLAN.md section 4)."""
     result = _scan(*args, **kwargs)
-    result["category"] = CATEGORY
-    result["grade"] = common.grade(common.verdicts_of(result))
-    return result
+    return common.finalize(result, CATEGORY)
 
 
 def main():

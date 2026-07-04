@@ -99,9 +99,7 @@ def _scan(target):
 
 
 def _result(host, origin, queried, checks):
-    tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
-    for c in checks.values():
-        tally[c["verdict"]] = tally.get(c["verdict"], 0) + 1
+    tally = common.summarize(checks)
     return {
         "tool": "scan_crux",
         "host": host,
@@ -116,9 +114,7 @@ def scan(*args, **kwargs):
     """Public entry: run the scan and stamp the tool's own category and grade so
     the result is self-describing (see PLAN.md section 4)."""
     result = _scan(*args, **kwargs)
-    result["category"] = CATEGORY
-    result["grade"] = common.grade(common.verdicts_of(result))
-    return result
+    return common.finalize(result, CATEGORY)
 
 
 def main():

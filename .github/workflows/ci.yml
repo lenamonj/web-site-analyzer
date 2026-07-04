@@ -27,3 +27,5 @@ jobs:
         run: |
           pip install -r ../../../requirements.txt
           python -m unittest test_exec_report
+      - name: README test counts in sync
+        run: python .claude/skills/review-site/tools/check_readme_counts.py

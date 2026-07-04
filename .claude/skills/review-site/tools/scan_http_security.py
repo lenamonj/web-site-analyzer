@@ -253,9 +253,7 @@ def _scan(url):
         "security_txt": check_security_txt(res.get("final_url") or url),
     }
 
-    tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
-    for c in checks.values():
-        tally[c.get("verdict", "info")] = tally.get(c.get("verdict", "info"), 0) + 1
+    tally = common.summarize(checks)
 
     return {
         "tool": "scan_http_security",
@@ -274,9 +272,7 @@ def scan(*args, **kwargs):
     """Public entry: run the scan and stamp the tool's own category and grade so
     the result is self-describing (see PLAN.md section 4)."""
     result = _scan(*args, **kwargs)
-    result["category"] = CATEGORY
-    result["grade"] = common.grade(common.verdicts_of(result))
-    return result
+    return common.finalize(result, CATEGORY)
 
 
 def main():

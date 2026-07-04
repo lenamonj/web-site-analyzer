@@ -128,7 +128,7 @@ carries an acceptance check. Ordered worst severity first. See JOURNAL.md
   nothing; scanner suite green.
   Done: removed the VOID_TAGS line. grep over tools/ returns no match; scanner
   suite green at 272.
-- [ ] **L10 (todo, M)** DRY the self-describing wrapper. The identical scan()
+- [x] **L10 (done, M)** DRY the self-describing wrapper. The identical scan()
   tail (result["category"]=CATEGORY; result["grade"]=common.grade(
   common.verdicts_of(result))) is copy-pasted across 14 scanners, and the same
   pass/warn/fail tally loop across 12. Add a common.finalize(result, CATEGORY)
@@ -136,6 +136,16 @@ carries an acceptance check. Ordered worst severity first. See JOURNAL.md
   once (in common.py); grep shows no scanner re-implements the category+grade
   stamping inline; both suites green with identical scorecard output on a
   canned run.
+  Done: added common.finalize(result, category) (category + grade). All 14
+  scanner scan() wrappers now return common.finalize(_scan(...), CATEGORY);
+  grep confirms no scanner stamps grade inline. Deliberately scoped OUT the
+  tally-loop consolidation: scan_tls uniquely emits no summary, so folding the
+  tally into finalize would add a summary key to scan_tls (an observable-output
+  change the constraints forbid). The remaining tally duplication is filed as
+  L13. Verified: a canned offline scan gives a byte-identical grade/summary to
+  the pre-refactor baseline (security, Strong, 0.88); scanner suite 272 -> 273
+  (new test_finalize_stamps_category_and_grade), builder 31, both green; diff
+  is a clean -3/+1 per file, no line-ending noise.
 
 ### Later (Low) - replenishment from the iteration-9 partial audit
 Partial re-audit (substring-on-structured-data sweep, silent-except sweep,
@@ -143,13 +153,20 @@ TODO sweep, doc-count accuracy) found no new High or Medium: no TODO/FIXME
 markers, no bare or silent excepts (the except Exception: pass hits are the
 guarded socket close), and the README "14 registered scanners" claim matches
 the registry. Two genuine Low items surfaced.
-- [ ] **L11 (todo, S)** CI does not guard the README test counts against drift,
+- [x] **L11 (done, S)** CI does not guard the README test counts against drift,
   which is exactly how they went stale (fixed by hand in L7). Add a CI step (or
   a small tools/check_readme_counts.py run in CI) that reads the "Ran N tests"
   from both suites and fails if README's badge/summary/comments disagree.
   Accept: deliberately editing a README count to a wrong value makes the new
   check fail locally; with correct counts it passes; the step runs in ci.yml.
-- [ ] **L12 (todo, S)** Defense-in-depth: the DKIM presence probe
+  Done: new tools/check_readme_counts.py counts both suites via unittest
+  loaders (no re-run) and asserts README's badge, summary, both suite comments,
+  and tree annotation all match; exits non-zero on drift. It immediately caught
+  L10's drift (scanner 272 -> 273); updated README to 273/31/304. ci.yml runs
+  it as a step after the builder suite (python-docx installed). Verified: passes
+  with correct counts (exit 0), a deliberately-wrong count fails (exit 1, README
+  restored). Scanner suite green at 273.
+- [x] **L12 (done, S)** Defense-in-depth: the DKIM presence probe
   (scan_dns_email.py:106) and the DMARC has_rua check (:92) test for "p=" /
   "rua=" as bare substrings of the whole record rather than parsed tags, the
   last of the L5-family substring-on-structured-data spots. Real-world risk is
@@ -157,6 +174,152 @@ the registry. Two genuine Low items surfaced.
   a live bug. Match on ";"-split tag boundaries. Accept: a test where "p="
   appears only inside a base64 blob (no DKIM tag) is not detected as DKIM, and
   rua detection keys on the parsed tag; scanner suite green.
+  Done: new _is_dkim_record(record) detects a DKIM key by a v=DKIM1/k/p tag at
+  ";"-boundaries; check_dkim probes through it. check_dmarc has_rua now checks
+  any ";"-split part starts with rua=. Two tests reproduce the substring false
+  positives (a google-site-verification value with "p=", a ruf= value
+  containing "rua=") and confirm real records still detect. Scanner 273 -> 275,
+  green; README resynced to 275/306 (the L11 CI guard flagged the drift).
+- [x] **L13 (done, S)** Discovered during L10: the pass/warn/fail tally loop
+  (tally = {...}; for c in checks.values(): ...) is duplicated across 13
+  scanners' _scan bodies. It was left out of L10 because scan_tls uniquely
+  emits no summary, so it could not fold into finalize without changing
+  scan_tls output. Add a common.summarize(checks) helper (identical logic:
+  count each check's verdict, default missing to info) and replace the inline
+  tally in the 13 scanners that set "summary". Do NOT add a summary to scan_tls.
+  Accept: common.summarize is the only tally implementation; grep shows no
+  scanner builds the {"pass":0,...} tally inline; each scanner's summary output
+  is unchanged on a canned run; both suites green.
+  Done: added common.summarize(checks) (default-missing-to-info form, the more
+  robust of the two inline variants) with a unit test. Replaced the inline
+  tally in all 13 scanners via a scripted edit that handled both variant forms
+  (12 used c["verdict"], scan_http_security used c.get("verdict","info")),
+  asserting one block per file. scan_tls untouched (no summary). grep confirms
+  no scanner builds the tally inline; a canned http_security scan gives the
+  identical summary {pass 7, warn 0, fail 1, info 2}. Scanner 275 -> 276,
+  builder 31, both green; README resynced to 276/307 (L11 guard flagged it).
+
+### Later (Low) - replenishment from the iteration-2 partial audit (2026-07-04)
+Open tasks fell to two after L11, so a partial audit ran. It found no new
+High/Medium; one genuine same-class doc-guard gap surfaced.
+- [x] **L14 (done, S)** README line 17 hard-codes "14 registered scanners, 10
+  scorecard categories" - drift-prone facts that L11's check does not cover.
+  They are currently accurate (verified against the registry: 14 tools, 10
+  distinct categories), but adding a scanner will silently stale them. Extend
+  check_readme_counts.py (or a sibling) to read the registry (host_tools +
+  page_tools, distinct categories) and assert README line 17 matches. Accept:
+  editing the "14"/"10" claim to a wrong value fails the check; correct values
+  pass; runs in the same CI step.
+  Done: check_readme_counts.py now imports the registry, computes len(host+page
+  tools) and distinct categories, and adds "N registered scanners" / "M
+  scorecard categories" to the checked needles. Verified: correct README passes
+  (14 scanners, 10 categories), rewriting "14 registered scanners" to 99 fails
+  naming that needle (README restored). Already runs in the CI step from L11.
+  Scanner suite green at 276.
+- [x] **L15 (done, S)** Replenishment from the iteration-3 partial audit: one
+  more L5-family spot. check_bimi (scan_dns_email.py:202) sets has_logo via
+  the bare substring "l=" in rec.lower() rather than a tag-boundary match, so
+  "l=" appearing inside another tag's value (e.g. an a= evidence URL) would
+  false-positive. Very low real risk (BIMI records are rare and short), pure
+  hardening. Match any ";"-split part starting with "l=". Accept: a test where
+  "l=" appears only inside another tag's value reports has_logo False, and a
+  real l= tag reports True; scanner suite green. (All other dns_email record
+  reads - SPF, DMARC p=, MTA-STS mode:, record-type via startswith(v=...) - were
+  checked in this audit and already parse at boundaries.)
+  Done: has_logo now checks any ";"-split tag starts with "l="; test confirms
+  an a=.../l=x.pem value is not read as a logo and a real l= tag is. Scanner
+  276 -> 277, green; README resynced to 277/308. This closes the
+  substring-on-structured-data family (L1, L4, L5, L12, L15).
+- [x] **L16 (done, S)** Replenishment from the iteration-4 partial audit:
+  tools/check_readme_counts.py (the L11 CI gate) has zero test coverage, unlike
+  the project's other tools/ utilities (crawler.py, triage.py are tested). The
+  builder's one broad except was checked and is fine (it surfaces the image
+  error into the docx, not a silent swallow). Extract a pure function
+  readme_mismatches(text, scanner, builder) -> list of mismatch strings and
+  unit-test it: a matching README yields [], a wrong count yields the specific
+  mismatch. Accept: a test drives the pure checker over in-memory README strings
+  (matching and mismatched); the CLI still works; scanner suite green.
+- [ ] **L20 (todo, S)** Replenishment from the iteration-8 partial audit. This
+  audit swept two more classes and found them clean: no mutable default
+  arguments anywhere in the suite, and discover_pages core functions are tested
+  (discover() itself is covered indirectly by the run_review integration test).
+  The project is deep in convergence - no new High/Medium and no substantive
+  Low. Remaining genuine item is an output-quality sweep in the same class as
+  L18 (which found a raw list repr in one note): grep the human-facing text
+  builders that L18 does not touch - scan_site's digest/summary markdown writer
+  and build_exec_report's finding/evidence notes - for f-strings that embed a
+  raw header/list/dict value, and normalize any found (or record that none
+  exist). Accept: every such site either renders a clean string or is confirmed
+  to only ever receive a string; a test covers any fix; scanner suite green.
+- [x] **L18 (done, S)** Replenishment from the iteration-6 partial audit (a
+  sweep of header-as-list handling in the non-http_security scanners, the L1
+  class). scan_performance was already list-safe in its parsing paths
+  (_cache_max_age and _asset_caching_check both join a list before string ops),
+  and content-length is guarded by str().isdigit(). The one gap:
+  _caching_check (scan_performance.py:154) embeds a duplicated Cache-Control
+  header straight into its info note and stored value, so an origin+CDN double
+  Cache-Control renders as a Python list repr ("Cache-Control: ['no-cache',
+  'no-store']."). Info-only, no crash or misgrade, but unpolished. Normalize via
+  common.header_value (the L1 helper). Accept: a test with a list-valued
+  cache-control yields a clean string in the note and stored cache_control;
+  scanner suite green.
+- [ ] **L21 (todo, S)** Replenishment from the iteration-9 partial audit, which
+  swept the last unchecked class - thread-safety in the fan-out scanners - and
+  found it clean: scan_links/scan_performance/scan_dns_email all use
+  pool.map(pure_worker, items), every .append() is in a serial pre-fan-out
+  function, and the only thread-shared state (common.http_fetch) has a lock.
+  With five defect classes now audited clean (substring-on-structured-data
+  closed, header-as-list, int/float parsing, mutable defaults, concurrency) and
+  three invariants CI-enforced (test counts, registry counts, pure-stdlib
+  charter), the Phase L improvement pass has converged. Record this in PLAN.md:
+  a short "Enforced invariants and audited-clean classes" section so future work
+  discovers the guards and does not re-audit closed classes. Accept: PLAN.md has
+  the section naming each CI guard (with its test/script) and each audited class
+  with its outcome; no code change; suites unaffected.
+- [x] **L19 (done, S)** Replenishment from the iteration-7 partial audit. This
+  audit swept two more classes and found the scanners clean: no unguarded
+  int()/float() on external data (all such calls are behind str().isdigit(),
+  a regex \d+ group, the _MONTHS map, or the stdlib-guaranteed-numeric
+  robots crawl_delay), and the builder accesses report data defensively (.get
+  with fallbacks; the one required data['slug'] raises a clear error by
+  design). Genuine gap: the L1/L4 header-as-list never-raise fix is locked in
+  only for the two scanners with direct tests; the contract test feeds
+  well-formed single-value headers, so a future host scanner reading a header
+  unsafely would not be caught. Add a contract-level test that runs every
+  host tool against a response whose security headers are duplicated
+  (list-valued) and asserts none raises and each returns a dict. Accept: the
+  new test exercises all registered host tools with list-valued headers; it
+  passes now; scanner suite green.
+- [x] **L17 (done, M)** Replenishment from the iteration-5 partial audit: guard
+  the pure-stdlib scanner charter (PLAN.md principle 2; README badge "scanner
+  dependencies zero"). Nothing enforces that every scan_*.py imports only the
+  standard library plus local modules, so a stray third-party import would
+  silently break the project's load-bearing invariant. The invariant currently
+  holds (verified: ast-parsed every scanner's imports against
+  sys.stdlib_module_names plus {common, registry, htmlmeta, sibling scanners} -
+  zero external). Add a check (a test in test_review_tools, or a tools/ script
+  run in CI) that does this parse and fails on any external import. Accept: the
+  check passes now; adding a fake "import requests" to any scanner makes it
+  fail; it runs offline in the suite or CI.
+  Done: TestScannerCharter.test_scanners_import_only_stdlib_and_local ast-parses
+  every scan_*.py and asserts each top-level import is in sys.stdlib_module_names
+  or a local .py stem; a companion test proves the guard is not vacuous (it
+  flags requests). Passes now; verified end to end that injecting "import
+  requests" into scan_seo.py fails the guard and names the offender (then
+  restored). Runs in the offline suite (so CI). Scanner 280 -> 282, green;
+  README resynced to 282/313.
+- [ ] **L22 (todo, S)** Replenishment from the iteration-10 partial audit, which
+  swept ReDoS risk and found the scanner regexes safe (negated char classes,
+  lazy-with-anchor, and simple \s*/\d+ quantifiers - no (X+)+/(X*)* nesting;
+  input is bounded by MAX_BODY_BYTES). That is the seventh class audited clean;
+  the Phase L pass is fully converged. Genuine DX task felt firsthand this run:
+  every added test forces a manual four-site README count edit. Give
+  check_readme_counts.py a --fix mode that rewrites the README counts (badge,
+  summary, both comments, tree, and the line-17 registry counts) to the
+  measured values, so contributors run one command instead of hand-editing.
+  Accept: with a drifted README, --fix rewrites it and a following plain run
+  exits 0; without --fix behaviour is unchanged; a test drives the rewrite over
+  an in-memory README string.
 
 ## Phase K - Quarterly trend layer follow-ups (final review backlog 2026-07-02)
 - [x] **K1 (done, S)** Order-independent quarter selection: trends.quarterly_points

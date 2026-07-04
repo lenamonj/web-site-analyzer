@@ -89,7 +89,7 @@ def check_dmarc(domain):
         part = part.strip().lower()
         if part.startswith("p="):
             policy = part.split("=", 1)[1]
-    has_rua = "rua=" in dmarc.lower()
+    has_rua = any(p.strip().lower().startswith("rua=") for p in dmarc.split(";"))
     if policy == "reject":
         v, note = "pass", "DMARC policy is reject."
     elif policy == "quarantine":
@@ -100,11 +100,25 @@ def check_dmarc(domain):
             "aggregate_reports": has_rua, "verdict": v, "note": note}
 
 
+def _is_dkim_record(record):
+    """A TXT record is a DKIM key record if it declares v=DKIM1 or carries a key
+    (k=) or public-key (p=) tag, matched at ';'-tag boundaries so a base64 blob
+    that merely contains 'p=' as a substring does not masquerade as one."""
+    for part in record.split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        key, val = part.split("=", 1)
+        key = key.strip().lower()
+        if key in ("p", "k") or (key == "v" and val.strip().lower() == "dkim1"):
+            return True
+    return False
+
+
 def check_dkim(domain):
     def probe(sel):
         records, _ = _txt_records(f"{sel}._domainkey.{domain}")
-        return any("dkim1" in r.lower() or "k=rsa" in r.lower() or "p=" in r.lower()
-                   for r in records)
+        return any(_is_dkim_record(r) for r in records)
 
     # Bounded fan-out over the selector list (14 serial DoH round trips
     # otherwise); executor.map preserves order so output stays deterministic.
@@ -185,7 +199,7 @@ def check_bimi(domain, has_mx):
     records, _ = _txt_records(f"default._bimi.{domain}")
     rec = next((r for r in records if r.lower().startswith("v=bimi1")), None)
     if rec:
-        has_logo = "l=" in rec.lower()
+        has_logo = any(p.strip().lower().startswith("l=") for p in rec.split(";"))
         return {"present": True, "record": rec, "verdict": "pass",
                 "note": "BIMI record published" + (" with a logo URL." if has_logo else " (no logo URL).")}
     return {"present": False, "verdict": "info", "note": "No BIMI record."}
@@ -259,9 +273,7 @@ def _scan(target):
         "bimi": check_bimi(domain, has_mx),
     }
     checks.update(check_domain_registration(domain))
-    tally = {"pass": 0, "warn": 0, "fail": 0, "info": 0}
-    for c in checks.values():
-        tally[c["verdict"]] = tally.get(c["verdict"], 0) + 1
+    tally = common.summarize(checks)
     return {
         "tool": "scan_dns_email",
         "host": host,
@@ -276,9 +288,7 @@ def scan(*args, **kwargs):
     """Public entry: run the scan and stamp the tool's own category and grade so
     the result is self-describing (see PLAN.md section 4)."""
     result = _scan(*args, **kwargs)
-    result["category"] = CATEGORY
-    result["grade"] = common.grade(common.verdicts_of(result))
-    return result
+    return common.finalize(result, CATEGORY)
 
 
 def main():

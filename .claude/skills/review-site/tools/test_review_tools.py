@@ -512,6 +512,31 @@ class TestScorecard(unittest.TestCase):
         self.assertEqual(common.verdicts_of({"verdict": "fail"}), ["fail"])
         self.assertEqual(common.verdicts_of({"ok": False}), [])
 
+    def test_summarize_counts_verdicts(self):
+        # The shared tally (L13): counts each check's verdict, missing -> info.
+        checks = {"a": {"verdict": "pass"}, "b": {"verdict": "pass"},
+                  "c": {"verdict": "warn"}, "d": {"verdict": "fail"},
+                  "e": {"verdict": "info"}, "f": {"note": "no verdict"}}
+        self.assertEqual(common.summarize(checks),
+                         {"pass": 2, "warn": 1, "fail": 1, "info": 2})
+        self.assertEqual(common.summarize({}),
+                         {"pass": 0, "warn": 0, "fail": 0, "info": 0})
+
+    def test_finalize_stamps_category_and_grade(self):
+        # The self-describing scan() wrapper is defined once in common.finalize
+        # (L10). It stamps the tool's category and its own rolled-up grade, and
+        # returns the same dict.
+        result = {"checks": {"a": {"verdict": "pass"}, "b": {"verdict": "fail"}}}
+        out = common.finalize(result, "security")
+        self.assertIs(out, result)
+        self.assertEqual(out["category"], "security")
+        self.assertEqual(out["grade"], common.grade(["pass", "fail"]))
+        # A hard-failure result with no checks still gets category and a
+        # Not-measured grade, matching the old inline wrapper.
+        fail = common.finalize({"ok": False, "error": "boom"}, "tls")
+        self.assertEqual(fail["category"], "tls")
+        self.assertEqual(fail["grade"]["band"], "Not measured")
+
     def test_build_scorecard_rolls_up(self):
         host = {"http_security": {"checks": {"a": {"verdict": "pass"}, "b": {"verdict": "fail"}}},
                 "tls": {"ok": True, "checks": {"c": {"verdict": "pass"}}},
@@ -524,6 +549,75 @@ class TestScorecard(unittest.TestCase):
         self.assertIn("overall", sc)
         # readability had only info verdicts, so it is "Not measured", not a false grade.
         self.assertEqual(sc["categories"]["readability"]["band"], "Not measured")
+
+
+class TestReadmeCountGuard(unittest.TestCase):
+    """The pure core of the README count guard (L16). The CLI/IO stay untested;
+    the comparison logic is covered here."""
+
+    GOOD = ("![Tests](tests-303%20passing) ... 303 tests total ... "
+            "# 272 tests ... # 31 tests ... (272 tests) ... "
+            "14 registered scanners, 10 scorecard categories, zero deps")
+
+    def test_matching_readme_has_no_mismatches(self):
+        import check_readme_counts as crc
+        self.assertEqual(crc.readme_mismatches(self.GOOD, 272, 31, 14, 10), [])
+
+    def test_wrong_scanner_count_is_reported(self):
+        import check_readme_counts as crc
+        problems = crc.readme_mismatches(self.GOOD, 999, 31, 14, 10)
+        self.assertTrue(problems)
+        self.assertTrue(any("999" in p or "1030" in p for p in problems))
+
+    def test_wrong_registry_count_is_reported(self):
+        import check_readme_counts as crc
+        problems = crc.readme_mismatches(self.GOOD, 272, 31, 99, 10)
+        self.assertTrue(any("99 registered scanners" in p for p in problems))
+
+
+class TestScannerCharter(unittest.TestCase):
+    """PLAN.md principle 2: scanners are pure standard library. This guards the
+    charter so a stray third-party import cannot silently break the "zero
+    dependencies" claim (L17)."""
+
+    @staticmethod
+    def _external_imports(path, allowed):
+        import ast
+        mods = set()
+        tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                mods.add(node.module.split(".")[0])
+        return sorted(m for m in mods if m not in allowed)
+
+    def _allowed(self):
+        import sys
+        tools_dir = Path(__file__).resolve().parent
+        local = {p.stem for p in tools_dir.glob("*.py")}
+        return set(sys.stdlib_module_names) | local, tools_dir
+
+    def test_scanners_import_only_stdlib_and_local(self):
+        allowed, tools_dir = self._allowed()
+        offenders = {}
+        for path in sorted(tools_dir.glob("scan_*.py")):
+            ext = self._external_imports(path, allowed)
+            if ext:
+                offenders[path.name] = ext
+        self.assertEqual(offenders, {},
+                         f"non-stdlib/non-local imports in scanners: {offenders}")
+
+    def test_guard_would_catch_a_third_party_import(self):
+        # Prove the guard is not vacuous: a scanner that imported a third-party
+        # package would be flagged.
+        allowed, tools_dir = self._allowed()
+        sample = next(tools_dir.glob("scan_*.py"))
+        import ast
+        tree = ast.parse("import requests\nimport common\n")
+        mods = {a.name.split(".")[0] for node in ast.walk(tree)
+                if isinstance(node, ast.Import) for a in node.names}
+        self.assertEqual(sorted(m for m in mods if m not in allowed), ["requests"])
 
 
 class TestSharedFetchAndCrossPage(unittest.TestCase):
@@ -634,6 +728,12 @@ class TestPerfCompressionCaching(unittest.TestCase):
     def test_caching_check(self):
         self.assertEqual(perf._caching_check({"cache-control": "max-age=3600"})["cache_control"], "max-age=3600")
         self.assertIsNone(perf._caching_check({})["cache_control"])
+        # A duplicated Cache-Control (folded to a list) must render as a clean
+        # string in the note and stored value, not a Python list repr (L18).
+        dup = perf._caching_check({"cache-control": ["no-store", "no-cache"]})
+        self.assertIsInstance(dup["cache_control"], str)
+        self.assertNotIn("[", dup["note"])
+        self.assertIn("Cache-Control:", dup["note"])
 
 
 class TestRegistry(unittest.TestCase):
@@ -795,6 +895,33 @@ class TestToolContract(unittest.TestCase):
             wrapped = site._safe_scan(boom, self.TARGET, tool_name=entry.tool_id)
             self.assertFalse(wrapped["ok"])
             self.assertIn("RuntimeError", wrapped["error"])
+
+    def test_no_tool_raises_on_duplicated_headers(self):
+        # A response that repeats its headers (origin plus CDN) folds each into a
+        # list. Every registered tool must tolerate that without raising - the
+        # L1/L4 header-as-list guarantee, locked in registry-wide (L19).
+        def folded_fetch(url, *a, **k):
+            res = _canned_fetch(url, *a, **k)
+            res["final_headers"] = {
+                "content-type": ["text/html; charset=utf-8", "text/html"],
+                "cache-control": ["max-age=3600", "no-cache"],
+                "strict-transport-security": ["max-age=63072000", "max-age=63072000"],
+                "content-security-policy": ["default-src 'self'", "default-src 'self'"],
+                "x-content-type-options": ["nosniff", "nosniff"],
+                "referrer-policy": ["no-referrer", "no-referrer"],
+                "x-frame-options": ["DENY", "DENY"],
+                "set-cookie": ["a=1; Secure; HttpOnly", "b=2; Secure; HttpOnly"],
+                "server": ["nginx/1.25.3", "nginx/1.25.3"],
+            }
+            return res
+        self._patch(folded_fetch, _canned_tls, _canned_doh)
+        for entry in reg.REGISTRY:
+            try:
+                result = entry.module.scan(self.TARGET)
+            except Exception as e:
+                self.fail(f"{entry.tool_id} raised on duplicated headers: "
+                          f"{type(e).__name__}: {e}")
+            self._assert_conformant(entry, result)
 
 
 class TestPrivacy(unittest.TestCase):
@@ -1731,6 +1858,32 @@ class TestDkimSelectorFamilies(unittest.TestCase):
         self.assertEqual(c["verdict"], "info")
         self.assertIn("absence is not proof", c["note"])
 
+    def test_dkim_detection_keys_on_tags_not_substrings(self):
+        # A non-DKIM TXT whose value merely contains "p=" as a substring must
+        # not be read as a DKIM key; a real p= tag still is (L12).
+        orig = dns._txt_records
+        try:
+            dns._txt_records = lambda name: (["google-site-verification=Ap=="], {})
+            self.assertEqual(dns.check_dkim("example.com")["verdict"], "info")
+            dns._txt_records = lambda name: (["v=DKIM1; k=rsa; p=MIGfMA0GCSq"], {})
+            self.assertEqual(dns.check_dkim("example.com")["verdict"], "pass")
+        finally:
+            dns._txt_records = orig
+
+    def test_dmarc_rua_keys_on_tag_boundary(self):
+        # "rua=" buried inside another tag's value is not aggregate reporting;
+        # a real rua= tag is (L12).
+        orig = dns._txt_records
+        try:
+            dns._txt_records = lambda name: (
+                ["v=DMARC1; p=reject; ruf=mailto:x@rua=example.com"], {})
+            self.assertFalse(dns.check_dmarc("example.com")["aggregate_reports"])
+            dns._txt_records = lambda name: (
+                ["v=DMARC1; p=reject; rua=mailto:agg@example.com"], {})
+            self.assertTrue(dns.check_dmarc("example.com")["aggregate_reports"])
+        finally:
+            dns._txt_records = orig
+
 
 class TestHttp2Alpn(unittest.TestCase):
     def _scan_with_alpn(self, alpn):
@@ -1827,6 +1980,16 @@ class TestEmailTransportPosture(unittest.TestCase):
                          {"default._bimi.acme.example": ["v=BIMI1; l=https://acme.example/logo.svg"]})
         self.assertEqual(bimi["verdict"], "pass")
         self.assertIn("logo", bimi["note"])
+
+    def test_bimi_logo_keys_on_tag_boundary(self):
+        # "l=" only inside another tag's value (here the a= evidence URL) must
+        # not be read as a logo tag (L15).
+        no_logo = self._run(dns.check_bimi,
+                            {"default._bimi.acme.example": ["v=BIMI1; a=https://acme.example/l=x.pem"]})
+        self.assertIn("no logo URL", no_logo["note"])
+        real = self._run(dns.check_bimi,
+                         {"default._bimi.acme.example": ["v=BIMI1; l=https://acme.example/logo.svg"]})
+        self.assertIn("with a logo URL", real["note"])
 
 
 class TestRobotsDisallowAllAndFragments(unittest.TestCase):

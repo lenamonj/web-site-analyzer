@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/github/license/lenamonj/web-site-analyzer)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/scanner%20dependencies-zero-2ea44f)
-![Tests](https://img.shields.io/badge/tests-303%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-314%20passing-2ea44f)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Scope](https://img.shields.io/badge/scope-passive%20%26%20external-orange)
 ![Rendered evidence](https://img.shields.io/badge/rendered%20evidence-headless%20Chrome%20DevTools-blueviolet)
@@ -225,11 +225,11 @@ Environment (via env or a git-ignored `.env` at the repo root): `CRUX_API_KEY` o
 
 ## Tests and CI
 
-Two offline suites, 303 tests total, no network, run in about a second:
+Two offline suites, 314 tests total, no network, run in about a second:
 
 ```
 cd .claude/skills/review-site/tools
-python -m unittest test_review_tools        # 272 tests: parsers, graders, tool contract, pipeline, capture
+python -m unittest test_review_tools        # 283 tests: parsers, graders, tool contract, pipeline, capture
 cd ..
 python -m unittest test_exec_report         # 31 tests: the docx builder (needs python-docx)
 ```
@@ -275,7 +275,7 @@ LICENSE                                    MIT
       scan_site.py                         Orchestrator + scorecard, writes the evidence JSON
       draft_report_data.py                 Drafts report data incl. executive summary and action plan
       run_review.py                        One command: discover, scan, capture, re-scan, draft
-      test_review_tools.py                 Offline scanner suite (272 tests)
+      test_review_tools.py                 Offline scanner suite (283 tests)
       CAPTURE.md                           Manual browser-capture reference (fallback path)
 planning/
   _evidence/                               Scan JSON, digests, ledgers, rendered snapshots (internal)
