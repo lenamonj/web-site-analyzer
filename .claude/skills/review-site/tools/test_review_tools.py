@@ -257,6 +257,62 @@ class TestSecurityChecks(unittest.TestCase):
         self.assertEqual(sec.check_disclosure({"server": "nginx/1.25.3"})["verdict"], "warn")
         self.assertEqual(sec.check_disclosure({"server": "cloudflare"})["verdict"], "info")
         self.assertEqual(sec.check_disclosure({})["verdict"], "pass")
+        # A duplicated Server banner (folded into a list) must still detect the
+        # version rather than iterate whole strings and miss it (L4).
+        dup = sec.check_disclosure({"server": ["nginx/1.25.3", "nginx/1.25.3"]})
+        self.assertEqual(dup["verdict"], "warn")
+        self.assertEqual(dup["banners"]["server"]["value"], "nginx/1.25.3")
+
+    def test_duplicate_headers(self):
+        # A header sent twice (origin plus CDN) is folded into a list by
+        # common._headers_to_dict. The checks must tolerate that without
+        # raising (L1). Identical duplicates, the common case, keep their
+        # verdict; a differing duplicate resolves last-wins.
+        self.assertEqual(
+            sec.check_hsts({"strict-transport-security": ["max-age=63072000", "max-age=63072000"]})["verdict"],
+            "pass")
+        self.assertEqual(
+            sec.check_simple_header(
+                {"x-content-type-options": ["nosniff", "nosniff"]},
+                "X-Content-Type-Options", "nosniff", "missing")["verdict"],
+            "pass")
+        self.assertEqual(
+            sec.check_referrer_policy({"referrer-policy": ["no-referrer", "no-referrer"]})["verdict"],
+            "pass")
+        self.assertEqual(
+            sec.check_referrer_policy({"referrer-policy": ["strict-origin", "unsafe-url"]})["verdict"],
+            "warn")
+        self.assertEqual(
+            sec.check_clickjacking({"x-frame-options": ["DENY", "DENY"]})["verdict"],
+            "pass")
+        self.assertEqual(
+            sec.check_clickjacking(
+                {"content-security-policy": ["frame-ancestors 'self'", "frame-ancestors 'self'"]})["verdict"],
+            "pass")
+
+    def test_scan_folded_headers_no_raise(self):
+        # End to end: a response with duplicated headers must not raise out of
+        # scan(); every check still returns a verdict (L1 never-raise contract).
+        folded = {
+            "ok": True, "error": None, "hops": [],
+            "final_url": "https://dup.example/", "final_status": 200,
+            "final_headers": {
+                "strict-transport-security": ["max-age=63072000", "max-age=63072000"],
+                "content-security-policy": ["default-src 'self'", "default-src 'self'"],
+                "x-content-type-options": ["nosniff", "nosniff"],
+                "referrer-policy": ["no-referrer", "no-referrer"],
+                "x-frame-options": ["DENY", "DENY"],
+            },
+        }
+        orig = common.http_fetch
+        common.http_fetch = lambda *a, **k: folded
+        try:
+            result = sec.scan("https://dup.example")
+        finally:
+            common.http_fetch = orig
+        self.assertIn("checks", result)
+        for name, check in result["checks"].items():
+            self.assertIn(check.get("verdict"), ("pass", "warn", "fail", "info"), name)
 
 
 class TestSeoChecks(unittest.TestCase):
@@ -393,6 +449,51 @@ class TestTlsAndDns(unittest.TestCase):
         self.assertEqual(dns.registrable_domain("www.contoso.com"), "contoso.com")
         self.assertEqual(dns.registrable_domain("mail.example.co.uk"), "example.co.uk")
         self.assertEqual(dns.registrable_domain("example.com"), "example.com")
+
+    def test_spf_all_mechanism_is_a_token_not_a_substring(self):
+        # The 'all' mechanism is a standalone term; a domain that merely
+        # contains "-all" (include:my-all.com) must not be read as a hard fail
+        # (L5).
+        orig = dns._txt_records
+        try:
+            dns._txt_records = lambda name: (["v=spf1 include:my-all.com ~all"], {})
+            soft = dns.check_spf("example.com")
+            self.assertIn("~all", soft["note"])
+            self.assertNotIn("-all", soft["note"])
+            dns._txt_records = lambda name: (["v=spf1 include:_spf.google.com -all"], {})
+            self.assertIn("-all (hard fail)", dns.check_spf("example.com")["note"])
+            dns._txt_records = lambda name: (["v=spf1 a mx ?all"], {})
+            self.assertEqual(dns.check_spf("example.com")["verdict"], "warn")
+            dns._txt_records = lambda name: (["v=spf1 include:my-all.com"], {})
+            self.assertIn("no explicit 'all'", dns.check_spf("example.com")["note"])
+        finally:
+            dns._txt_records = orig
+
+    def test_parse_not_after_locale_independent(self):
+        # OpenSSL always emits English month names; the cert-date parser must
+        # not depend on the process LC_TIME locale (L2). Core correctness first,
+        # then re-run under a forced non-English locale when one is installed.
+        import calendar
+        import locale
+        expected = calendar.timegm((2026, 8, 29, 21, 41, 26, 0, 0, 0))
+        epoch, days = tls._parse_not_after("Aug 29 21:41:26 2026 GMT")
+        self.assertEqual(epoch, expected)
+        # OpenSSL space-pads a single-digit day; whitespace must collapse.
+        epoch9, _ = tls._parse_not_after("Aug  9 21:41:26 2026 GMT")
+        self.assertEqual(epoch9, calendar.timegm((2026, 8, 9, 21, 41, 26, 0, 0, 0)))
+        orig = locale.setlocale(locale.LC_TIME)
+        for cand in ("French_France.1252", "fr_FR.UTF-8", "fr_FR",
+                     "German_Germany.1252", "de_DE.UTF-8"):
+            try:
+                locale.setlocale(locale.LC_TIME, cand)
+            except locale.Error:
+                continue
+            try:
+                self.assertEqual(
+                    tls._parse_not_after("Aug 29 21:41:26 2026 GMT")[0], expected)
+            finally:
+                locale.setlocale(locale.LC_TIME, orig)
+            break
 
 
 class TestScorecard(unittest.TestCase):
@@ -840,6 +941,35 @@ class TestFetchCache(unittest.TestCase):
         common.enable_fetch_cache()  # e.g. run_review enabled, then scan_site.run
         common.http_fetch("https://acme.example/")
         self.assertEqual(len(self.calls), 1)
+
+    def test_mid_body_read_error_closes_socket(self):
+        # A read that raises partway through the body (e.g. a timeout) must not
+        # leak the connection: resp.close() runs and http_fetch returns an error
+        # dict rather than raising (L6).
+        closed = []
+
+        class _RaisingResponse:
+            def __init__(self):
+                import email.message
+                self.headers = email.message.Message()
+                self.headers["Content-Type"] = "text/html"
+                self.status = 200
+
+            def read(self, n):
+                raise TimeoutError("read timed out mid-body")
+
+            def close(self):
+                closed.append(True)
+
+        class _FakeOpener:
+            def open(self, req, timeout=None):
+                return _RaisingResponse()
+
+        common._opener = lambda: _FakeOpener()
+        result = common.http_fetch("https://acme.example/")
+        self.assertFalse(result["ok"])
+        self.assertIn("TimeoutError", result["error"])
+        self.assertTrue(closed, "response was not closed on a mid-body read error")
 
     def test_scan_site_run_disables_the_cache_afterward(self):
         orig = (common.http_fetch, common.tls_info, common.doh_query, tls._probe_legacy)
@@ -2824,6 +2954,22 @@ class TestDomainRegistration(unittest.TestCase):
         self.assertTrue(parsed["ok"])
         self.assertEqual(parsed["expiration"], "2027-04-02T00:00:00Z")
         self.assertEqual(parsed["registration"], "2015-04-02T00:00:00Z")
+
+    def test_parse_rdap_non_dict_body_degrades(self):
+        # A third-party RDAP server can return valid JSON that is not an object
+        # (a stray null, array, or string). parse_rdap_domain must degrade to
+        # ok=False rather than raising AttributeError out of scan() (L3).
+        for body in (None, [], "x", 3):
+            result = common.parse_rdap_domain(body)
+            self.assertFalse(result["ok"], body)
+            self.assertIsNone(result["expiration"])
+            self.assertIsNone(result["registration"])
+        # A non-object element inside the events array must also be skipped,
+        # not crash the comprehension.
+        mixed = common.parse_rdap_domain(
+            {"events": ["bogus", {"eventAction": "expiration", "eventDate": "2030-01-01"}]})
+        self.assertTrue(mixed["ok"])
+        self.assertEqual(mixed["expiration"], "2030-01-01")
 
     def test_iso_days_returns_days_and_a_date(self):
         # A fixed far-future date is always positive; a fixed past date negative.

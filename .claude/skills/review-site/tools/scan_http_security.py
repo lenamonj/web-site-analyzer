@@ -42,7 +42,7 @@ def check_https_redirect(host):
 
 
 def check_hsts(headers):
-    val = headers.get("strict-transport-security")
+    val = common.header_value(headers, "strict-transport-security")
     if not val:
         return {"present": False, "value": None,
                 **_verdict("fail", "No HSTS header. Browsers may connect over HTTP.")}
@@ -68,7 +68,7 @@ def check_hsts(headers):
 
 
 def check_simple_header(headers, name, expected=None, fail_note="Header missing."):
-    val = headers.get(name.lower())
+    val = common.header_value(headers, name)
     if not val:
         return {"present": False, "value": None, **_verdict("fail", fail_note)}
     if expected and expected.lower() not in val.lower():
@@ -78,7 +78,7 @@ def check_simple_header(headers, name, expected=None, fail_note="Header missing.
 
 
 def check_referrer_policy(headers):
-    val = headers.get("referrer-policy")
+    val = common.header_value(headers, "referrer-policy")
     if not val:
         return {"present": False, "value": None, **_verdict("fail", "No Referrer-Policy set.")}
     if "unsafe-url" in val.lower():
@@ -88,8 +88,8 @@ def check_referrer_policy(headers):
 
 
 def check_clickjacking(headers):
-    xfo = headers.get("x-frame-options")
-    csp = headers.get("content-security-policy", "")
+    xfo = common.header_value(headers, "x-frame-options")
+    csp = common.header_value(headers, "content-security-policy", "")
     has_fa = "frame-ancestors" in csp.lower()
     if xfo or has_fa:
         src = "X-Frame-Options" if xfo else "CSP frame-ancestors"
@@ -218,7 +218,7 @@ def check_security_txt(base):
 def check_disclosure(headers):
     findings = {}
     for name in ("server", "x-powered-by", "x-aspnet-version", "x-generator"):
-        val = headers.get(name)
+        val = common.header_value(headers, name)
         if val:
             has_version = any(ch.isdigit() for ch in val)
             findings[name] = {"value": val, "reveals_version": has_version}

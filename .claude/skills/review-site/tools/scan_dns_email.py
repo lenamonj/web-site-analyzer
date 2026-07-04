@@ -63,11 +63,15 @@ def check_spf(domain):
         return {"present": False, "record": None,
                 "verdict": "fail", "note": "No SPF record. Sender spoofing is easier."}
     low = spf.lower()
-    if "-all" in low:
+    # The 'all' mechanism is a standalone space-separated term (normally last),
+    # not any occurrence of the substring; match it as a whole token so a domain
+    # like include:my-all.com is not misread as a -all hard fail.
+    all_mech = next((t for t in low.split() if t in ("-all", "~all", "?all", "+all", "all")), None)
+    if all_mech == "-all":
         v, note = "pass", "SPF ends in -all (hard fail)."
-    elif "~all" in low:
+    elif all_mech == "~all":
         v, note = "pass", "SPF ends in ~all (soft fail)."
-    elif "?all" in low or "+all" in low:
+    elif all_mech in ("?all", "+all", "all"):
         v, note = "warn", "SPF present but the 'all' qualifier is permissive."
     else:
         v, note = "warn", "SPF present but has no explicit 'all' mechanism."

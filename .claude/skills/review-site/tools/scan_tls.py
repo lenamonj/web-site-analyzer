@@ -45,9 +45,18 @@ def _host_matches(host, san_name):
     return host == san
 
 
+_MONTHS = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+           "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12}
+
+
 def _parse_not_after(not_after):
-    # Cert dates look like 'Aug 29 21:41:26 2026 GMT' and are UTC.
-    struct = time.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+    # Cert dates look like 'Aug 29 21:41:26 2026 GMT' and are UTC. OpenSSL always
+    # emits English month names, so map them explicitly; strptime's %b reads the
+    # process LC_TIME locale and raises on a non-English machine. split() also
+    # collapses the double space OpenSSL uses to pad a single-digit day.
+    mon, day, clock, year = not_after.split()[:4]
+    hh, mm, ss = clock.split(":")
+    struct = (int(year), _MONTHS[mon], int(day), int(hh), int(mm), int(ss), 0, 0, 0)
     epoch = calendar.timegm(struct)
     days_left = (epoch - time.time()) / 86400
     return epoch, round(days_left, 1)

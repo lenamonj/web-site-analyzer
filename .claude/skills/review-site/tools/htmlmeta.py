@@ -13,7 +13,6 @@ from html.parser import HTMLParser
 
 import common
 
-VOID_TAGS = {"meta", "link", "img", "input", "br", "hr", "source", "area", "base"}
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 LANDMARK_TAGS = {"header", "nav", "main", "footer", "aside", "section"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "template"}

@@ -25,5 +25,5 @@ jobs:
       - name: Report builder suite
         working-directory: .claude/skills/review-site
         run: |
-          pip install python-docx
+          pip install -r ../../../requirements.txt
           python -m unittest test_exec_report

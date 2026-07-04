@@ -87,6 +87,22 @@ def _headers_to_dict(msg):
     return out
 
 
+def header_value(headers, name, default=None):
+    """Return a single header value from a folded header dict.
+
+    _headers_to_dict folds a header sent more than once (origin plus CDN is the
+    common case) into a list. Return the last value in that case; identical
+    duplicates, which is what the overwhelming majority of real double-sends
+    are, collapse to the same string regardless. Absent header -> default.
+    """
+    val = headers.get(name.lower())
+    if val is None:
+        return default
+    if isinstance(val, list):
+        return val[-1] if val else default
+    return val
+
+
 def _decompress(raw, encoding):
     """Decode gzip or deflate bodies. Servers may compress even when not asked."""
     enc = (encoding or "").lower().strip()
@@ -202,16 +218,20 @@ def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want
 
             content_type = headers.get("Content-Type", "")
             content_encoding = headers.get("Content-Encoding", "")
-            if want_body and method != "HEAD":
-                raw = resp.read(MAX_BODY_BYTES)
-                body_bytes = len(raw)
-                decompressed = _decompress(raw, content_encoding)
-                uncompressed_bytes = len(decompressed)
-                body = _decode_body(decompressed, content_type)
             try:
-                resp.close()
-            except Exception:
-                pass
+                if want_body and method != "HEAD":
+                    raw = resp.read(MAX_BODY_BYTES)
+                    body_bytes = len(raw)
+                    decompressed = _decompress(raw, content_encoding)
+                    uncompressed_bytes = len(decompressed)
+                    body = _decode_body(decompressed, content_type)
+            finally:
+                # Close on every path so a read error mid-body does not leak the
+                # connection (it would otherwise skip straight to the outer except).
+                try:
+                    resp.close()
+                except Exception:
+                    pass
             break
 
         elapsed_ms = round((time.perf_counter() - started) * 1000)
@@ -327,9 +347,14 @@ def _rdap_base_for(tld, timeout=DEFAULT_TIMEOUT):
 
 def parse_rdap_domain(data):
     """Registration facts from an RDAP domain response (pure, so it is unit
-    tested offline). Reads the standard event actions."""
+    tested offline). Reads the standard event actions. A non-object body (a
+    stray null, array, or string from a third-party RDAP server) degrades to
+    ok=False rather than raising."""
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "RDAP response was not a JSON object",
+                "expiration": None, "registration": None}
     events = {e.get("eventAction"): e.get("eventDate")
-              for e in (data.get("events") or []) if e.get("eventAction")}
+              for e in (data.get("events") or []) if isinstance(e, dict) and e.get("eventAction")}
     return {"ok": True, "error": None,
             "expiration": events.get("expiration"),
             "registration": events.get("registration")}

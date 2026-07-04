@@ -1,0 +1,5 @@
+# The scanner suite (.claude/skills/review-site/tools/) is pure Python standard
+# library and needs nothing here. This file covers the Word report builder
+# (build_exec_report.py) and its test suite (test_exec_report.py), whose only
+# third-party dependency is python-docx.
+python-docx>=1.1,<2
