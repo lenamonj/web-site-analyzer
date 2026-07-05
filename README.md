@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/github/license/lenamonj/web-site-analyzer)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/scanner%20dependencies-zero-2ea44f)
-![Tests](https://img.shields.io/badge/tests-428%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-435%20passing-2ea44f)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Scope](https://img.shields.io/badge/scope-passive%20%26%20external-orange)
 ![Rendered evidence](https://img.shields.io/badge/rendered%20evidence-headless%20Chrome%20DevTools-blueviolet)
@@ -149,7 +149,7 @@ The rules that make the output trustworthy, enforced by code and tests rather th
 - **Inconclusive is not clean.** A client-rendered page without a snapshot keeps its inconclusive verdicts, stated as such.
 - **One scanner failing never aborts the run**, and a scanner that cannot reach its target reports that as its result instead of raising.
 - **Honest degradation everywhere.** Missing CrUX key, origin absent from the dataset, no browser installed, a page that never fires its load event: each has an explicit, tested code path that names the limitation.
-- **No silent truncation.** Capped lists (capture pages, findings) name what was dropped.
+- **No silent truncation.** The one capped list, the capture page set, names every page it dropped; findings are never capped and enumerate every affected page.
 
 ---
 
@@ -226,13 +226,13 @@ Environment (via env or a git-ignored `.env` at the repo root): `CRUX_API_KEY` o
 
 ## Tests and CI
 
-Three offline suites, no network, run in about a second - the scanner and builder suites are 428 tests total, and a report-charts suite adds 8 more:
+Three offline suites, no network, run in about a second - the scanner and builder suites are 435 tests total, and a report-charts suite adds 8 more:
 
 ```
 cd .claude/skills/review-site/tools
-python -m unittest test_review_tools        # 385 tests: parsers, graders, tool contract, pipeline, capture
+python -m unittest test_review_tools        # 388 tests: parsers, graders, tool contract, pipeline, capture
 cd ..
-python -m unittest test_exec_report         # 43 tests: the docx builder (needs python-docx)
+python -m unittest test_exec_report         # 47 tests: the docx builder (needs python-docx)
 python -m unittest test_report_charts       # 8 tests: the quarterly-trend chart renderer (needs matplotlib)
 ```
 
@@ -279,7 +279,7 @@ LICENSE                                    MIT
       scan_site.py                         Orchestrator + scorecard, writes the evidence JSON
       draft_report_data.py                 Drafts report data incl. executive summary and action plan
       run_review.py                        One command: discover, scan, capture, re-scan, draft
-      test_review_tools.py                 Offline scanner suite (385 tests)
+      test_review_tools.py                 Offline scanner suite (388 tests)
       CAPTURE.md                           Manual browser-capture reference (fallback path)
 planning/
   _evidence/                               Scan JSON, digests, ledgers, rendered snapshots (internal)

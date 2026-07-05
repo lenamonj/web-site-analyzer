@@ -5,6 +5,240 @@ highest-priority unblocked `todo`. Keep tasks small enough to finish and verify
 in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
+## Phase U - Ninth (full) convergence-audit findings (2026-07-05)
+Ran the certifying full convergence audit after T1-T5 landed (fresh battery green: scanner 387,
+builder 45, charts 8, README guard in sync, py_compile clean 31 files, no 3.11+ features). Four
+adversarial auditors; slice D (tests/docs/deps/security) was interrupted mid-run when the user
+stopped an accidental second /jeffy launch, but its checks are covered by this run's per-task
+mutation checks (each T1-T5 test was neuter-verified when written) plus the battery, so the gap is
+low-risk - a fresh slice D can re-run next convergence attempt. Slice A (scanners) clean; B and C
+surfaced defects, and AGAIN two are my own fixes one sibling short: the S4 container-coercion loop
+omitted `scope` (the 6th top-level container), and the T5 issues-coercion stopped at the `issues`
+field but not its `fail`/`warn` sub-lists. Every finding reproduced by me. One High, three Medium.
+Convergence NOT met. Ninth audit, and the class-completeness trap has now recurred in container
+coercion (S4->U1) and ledger coercion (T5->U2) - the lesson is not landing as a durable habit and I
+must enumerate siblings BEFORE filing a fix done, not after the next audit. Audit scores in JOURNAL.
+
+### Now (High)
+- [x] **U1 (done, S)** Builder raw-tracebacks on a non-dict top-level `scope` - the S4 container-
+  coercion loop covers assessment/scorecard/web_vitals/key_dates/progress but OMITS scope, the 6th
+  top-level container read via .get(). build_exec_report.py:278 (_scope_text does scope.get() on
+  data.get("scope")) and :562 (add_glance_tiles `scope = data.get("scope") or {}` then
+  scope.get("pages_reviewed") - the `or {}` guards None but not a truthy non-dict). Reproduced
+  (mine): {"site":"Acme","scope":"Homepage and top nav only"} -> AttributeError 'str' object has no
+  attribute 'get' at _scope_text, exit 1, no deliverable; a list scope crashes identically. HIGH:
+  writing scope as a prose sentence or a list of page URLs is a plausible hand-author shape, and it
+  kills the sole deliverable with an uncaught traceback. Class-complete verification done: an AST
+  enumeration of top-level fields assigned from data.get() and later .get()'d returns exactly
+  {assessment, key_dates, progress, scope, scorecard, web_vitals} - scope is the ONLY omitted one.
+  Fix: add "scope" to the coercion tuple at build_exec_report.py:902. Accept: a non-dict scope
+  (string OR list) produces a clean build (scope tile/line degrades to empty), not an AttributeError;
+  a valid scope dict still renders its method/locale/pages; a regression test added; builder green.
+  Done (iteration 7): added "scope" to the coercion tuple at build_exec_report.py:902 (now all six
+  AST-enumerated containers). Verified scope as string/list/scalar builds clean and a valid scope
+  dict still renders "Automated plus manual" + the pages tile. Added test_non_dict_scope_builds_and_
+  valid_scope_still_renders and added "scope" to the S4 container test's tuple (the class-complete
+  test). Mutation-checked (removing scope from the loop fails the new test). Builder 45 -> 46; scanner
+  387, charts 8 green; README synced at 433.
+
+### Next (Medium)
+- [x] **U2 (done, S)** diff_issues crashes on a corrupted ledger entry whose issues.fail or
+  issues.warn is a non-list - the T5 fix coerced the `issues` field to {} but stopped there; the
+  fail/warn SUB-lists (and their items) are unguarded. scan_site.py:130-131 (`flat = list(issues.
+  get("fail", [])) + list(issues.get("warn", []))` then `{(i["scan"]...): i for i in flat}`).
+  Reproduced (mine): issues.fail=None -> list(None) TypeError; issues.fail="garbage" or a dict ->
+  iterates chars/keys -> i["scan"] TypeError. Worse than pure ledger-trend corruption: this runs on
+  EVERY fresh run via scan_site.write_run_outputs -> attach_delta -> diff_issues on the last ledger
+  entry (Slice C confirmed the fresh-run crash path), and one externally-corrupted append-only line
+  then poisons every subsequent run with a raw traceback. Medium: append_history never writes a non-
+  list, so it needs external corruption or cross-version schema drift, same threat model as T3/T5.
+  Fix: guard the sub-lists and items like _dict guards the metric fields - `fail = issues.get("fail")
+  if isinstance(issues.get("fail"), list) else []` (same for warn), and skip flat items that are not
+  dicts with both "scan" and "check". Accept: diff_issues over an entry with issues.fail None/str/
+  dict, or a fail-list holding a non-dict item, does not crash (degrades to no diff for that side);
+  a well-formed issues dict still diffs correctly; attach_delta on such a ledger does not crash;
+  scanner suite green.
+  Done (iteration 8): keyed() now coerces fail/warn to [] when not a list and filters the
+  comprehension to items that are dicts with a string scan AND a string check (the latter also
+  prevents an unhashable-key crash). Verified fail/warn as None/str/dict/int and a good list holding
+  non-dict / bad-scan items all degrade to no-diff-for-that-side, a well-formed diff still computes
+  the correct verdict-agnostic new/resolved, and the fresh-run attach_delta path survives a corrupt
+  prev entry. Added test_diff_issues_survives_corrupt_fail_warn_sublists; mutation-checked. Scanner
+  387 -> 388, builder 46, charts 8 green; README synced at 434.
+- [x] **U3 (done, S)** Builder raw-tracebacks (TypeError: unhashable type) when a field used as a
+  dict-lookup KEY is a list/dict. build_exec_report.py:626 (VITALS_FILL.get(rating)), :999 (BAND_
+  FILL.get(band)), :548 (counts[sev] in _severity_breakdown), :1095 (SEVERITY_FILL.get(priority)).
+  Reproduced (mine): a list-valued scorecard band, finding severity, or action_plan priority each
+  crash the build (exit 1). Medium: a list-valued band/severity is less realistic than U1's scope
+  slip, but the builder's contract is robustness to wrong types without crashing, and these are
+  uncaught crashes of the deliverable. Fix: coerce to a hashable string before the lookup at each
+  site - e.g. `BAND_FILL.get(str(band) if not isinstance(band, str) else band, ...)`, or a small
+  `_key(x)` = x if isinstance(x, str) else str(x); key _severity_breakdown counts by the same. Accept:
+  a list/dict-valued rating/band/severity/priority renders with the default fill (or "not measured")
+  instead of crashing; string values are unchanged; a regression test added; builder green.
+  Done (iteration 9): added a `_hkey(x)` helper (x if isinstance(x, str) else str(x)) and applied it
+  at ALL nine field-as-lookup-key sites, not the four filed - a grep enumeration also found the
+  findings SORT key (SEVERITY_ORDER.get at :1042) and the trend DIRECTION_STYLE lookup (:441), which
+  the agent's four-site list missed. Verified list/dict-valued overall/band/severity/priority/rating/
+  direction all build clean, an all-at-once fuzz builds, and normal severities still sort High-before-
+  Low. Added test_unhashable_lookup_key_field_does_not_crash_the_build; mutation-checked (neutering
+  _hkey to identity fails it). Builder 46 -> 47; scanner 388, charts 8 green; README synced at 435.
+- [ ] **U4 (todo, S)** findings/recommendations/action_plan authored as a keyed OBJECT (a dict of
+  finding-dicts) silently drops every entry - a consequence of T1's "a lone dict is one item".
+  build_exec_report.py:499 (_as_rows). Reproduced (mine): _as_rows({"f1":{"finding":"No H1",...},
+  "f2":{"finding":"Cert expired",...}}, "finding") -> [{whole dict}] -> renders one blank Low row,
+  both real findings absent, KEY FINDINGS tile reads "1 Low". Violates the hard "never silently drop
+  content / name every subject" rule. Medium by that rule, but LOW realism: the draft and the
+  documented schema both emit a LIST; a keyed object is off-contract. Fix OR decline decision for the
+  fix iteration: disambiguate cleanly with "if the lone dict's values are ALL dicts, treat as
+  list(value.values()) (a keyed collection); else one finding" - a single finding's values are
+  strings, a collection's are dicts, so the signal is unambiguous. Accept (if fixed): a keyed object
+  of finding-dicts renders every finding (none dropped); a single finding-dict still renders as one
+  row; a plain list is unchanged; builder green. If declined: record that findings must be a list per
+  the schema, and that a keyed object is out of contract.
+- [ ] **U5 (todo, S)** add_trend_section crashes on a progress.trend DICT whose nested latest_delta/
+  pages_scanned is a non-dict or whose quarters is a non-list - the same `X or {}` idiom class fixed
+  in trends.py (_score/_delta_rows via _dict) and scan_site.diff_issues (U2), but the report builder's
+  trend RENDERER is a separate read of the trend structure that was never hardened. build_exec_report.
+  py add_trend_section: `delta = trend.get("latest_delta") or {}` then delta.get("scorecard"); `ps =
+  delta.get("pages_scanned") or {}`; `len(trend.get("quarters") or [])`. Reproduced (mine, iteration-8
+  U2 replenishment - the systematic descend-one-level check across all six containers):
+  {"progress":{"trend":{"latest_delta":"corrupt","quarters":"x"}}} -> AttributeError 'str' object has
+  no attribute 'get'. The T2 note deferred this as "unrealistic (trend is machine-generated)", but it
+  is the identical `or {}` defect class I have now fixed in three other sites, and the builder's
+  contract is robustness to imperfect hand-authored JSON without crashing; a hand-author who writes a
+  partial trend dict hits it. Medium (lowest realism of the U-series - needs a hand-authored trend
+  dict, not the persistent-ledger corruption of U2). Fix: guard the nested reads with the same
+  isinstance pattern (latest_delta/pages_scanned coerced to {} when not a dict; quarters treated as []
+  when not a list). Accept: a trend dict with a non-dict latest_delta/pages_scanned or a non-list
+  quarters builds clean (the malformed part degrades), a well-formed trend still renders its table and
+  charts; builder suite green.
+
+## Phase T - Eighth (full) convergence-audit findings (2026-07-05)
+Ran the certifying full convergence audit after the S1-S9 fixes landed (fresh battery green at
+scanner 385 + builder 43 + charts 8, README guard in sync, py_compile clean, no 3.11+ features;
+Slice D installed CPython 3.10.19 and ran all suites green). Four independent adversarial auditors,
+each told to scrutinize the just-changed S-fix code hardest. Slices A and C-security came back
+clean; B and the docs surfaced defects, THREE of which are my own Phase S fixes left INCOMPLETE:
+S3 fixed _as_rows for a bare STRING field but not a dict/scalar field; S4 coerced the top-level
+containers but not the nested progress.trend; S9 fixed the code and one README line but left a
+second README line stale. One pre-existing defect too (trends.quarter_of KeyError). Every finding
+reproduced by me before filing. One High, three Medium. Convergence NOT met. The lesson, an eighth
+time: a fix is not done until EVERY sibling form of its class is closed - the str case implied the
+dict/scalar case, the top-level container implied the nested one, the code change implied every doc
+that describes it. Audit scores in JOURNAL.md (Phase T).
+
+### Now (High)
+- [x] **T1 (done, S)** _as_rows crashes on a scalar field and SILENTLY DROPS + FABRICATES on a
+  single-dict field - the S3 fix closed only the bare-string case. build_exec_report.py:507-517.
+  `if isinstance(items, str): items = [items]` handles a str field, but a non-list value that is a
+  dict or a scalar still hits `for it in items or []`: (a) a truthy scalar (int/float/bool) is not
+  iterable -> TypeError, the whole build dies, no deliverable; (b) a single dict authored WITHOUT
+  the wrapping list is iterable over its KEYS, so `_as_rows({"severity":"High","area":"Security",
+  "finding":"No CSP","evidence":"https://x"}, "finding")` returns [{"finding":"severity"},
+  {"finding":"area"},{"finding":"finding"},{"finding":"evidence"}] - four bogus rows of key names
+  and the real finding (text + citing URL) is DROPPED. Reproduced (mine): findings=123 -> TypeError;
+  findings={one dict} -> renders 4 key-name rows, exit 0, real finding gone. HIGH: silently drops a
+  finding AND prints fabricated content into the CEO deliverable, violating both the no-drop and
+  no-fabricated-claim rules; writing one finding object without the [ ] is a routine hand-author
+  slip. Affects every _as_rows field: findings/recommendations/action_plan/evidence and nested
+  scorecard.rows/web_vitals.metrics/key_dates.items. Fix: at the top of _as_rows, `if items is None:
+  return []` then `if not isinstance(items, (list, tuple)): items = [items]`, so a lone dict/str/
+  scalar is ONE item routed through the existing per-item logic (dict->row, str->{text_key}, other
+  ->{}). Accept: _as_rows(123,"finding") does not crash; a single-dict findings field renders ONE
+  row with the real finding text and its URL (not the dict keys), dropping nothing; a list still
+  works; a regression test covering scalar + single-dict added; builder suite green.
+  Done (iteration 1): _as_rows now does `if items is None: return []` then `if not isinstance(items,
+  (list, tuple)): items = [items]`, so a lone dict/str/scalar is ONE item through the existing
+  per-item logic. Verified across None/scalar/bool/single-dict/string/list/mixed/tuple: no crash,
+  the single dict renders one row preserving all content, "No CSP on homepage" present end to end.
+  Added test_as_rows_handles_a_whole_field_of_any_non_list_type; mutation-checked (reverting to the
+  S3 str-only guard fails it). Builder 43 -> 44; scanner 385, charts 8 green; README synced at 429.
+
+### Next (Medium)
+- [x] **T2 (done, S)** Builder raw-tracebacks on a non-dict nested progress.trend - the S4 container
+  coercion loop coerced the five TOP-LEVEL containers but not the nested trend, which add_trend_
+  section reads with .get() throughout. build_exec_report.py (trend = progress.get("trend"); the
+  crash is at the first trend.get in add_trend_section). Reproduced (mine): {"progress":{"trend":
+  "oops"}} -> AttributeError 'str' object has no attribute 'get', exit 1. Medium: trend is normally
+  machine-generated by trends.build_trend, so a non-dict needs a hand-authored slip, but it is the
+  one nested container the coercion loop misses. Fix: right after `trend = progress.get("trend")`,
+  add `if not isinstance(trend, dict): trend = None` so a bad trend skips the section like a bad
+  top-level container. Accept: progress.trend as a string or list produces a clean build (trend
+  section skipped), not an AttributeError; a valid trend dict still renders its section; builder
+  suite green.
+  Done (iteration 2): added `if not isinstance(trend, dict): trend = None` right after `trend =
+  progress.get("trend")`, so a non-dict trend skips the section (and lets a real progress strip
+  render, since has_exec_summary then sees trend as absent). Considered hardening the deeper
+  add_trend_section reads (latest_delta / pages_scanned) too, but those only fire from a hand-
+  authored PARTIAL trend dict, which is not realistic (trend is machine-generated by build_trend),
+  so per "no unnecessary defensive programming" the realistic class is just a non-dict trend at this
+  one level - string/list/scalar all handled at once. Verified all four non-dict variants build
+  clean and a valid trend dict still renders "Progress this quarter". Added test_non_dict_nested_
+  progress_trend_skips_section_not_crash; mutation-checked. Builder 44 -> 45; scanner 385, charts 8
+  green; README synced at 430.
+- [x] **T3 (done, S)** trends.quarter_of raises an UNCAUGHT KeyError on a dict-valued timestamp in a
+  corrupted ledger line, crashing the whole trend layer. trends.py:35 (`except (TypeError,
+  ValueError)` does not catch KeyError). When a ledger line's measured_at_utc is a JSON object,
+  `ts[0:4]` is dict[slice(0,4)] -> KeyError, uncaught. read_history keeps the line (it is a valid
+  top-level dict), so it reaches quarter_of and aborts trend_from_ledger - which run_review calls
+  AFTER writing the scan JSON, archive, and history, so the orchestrator dies mid-pipeline with a
+  raw traceback and never writes the draft; the `trends` CLI raw-tracebacks too. Reproduced (mine):
+  quarter_of({"x":1}) -> KeyError slice(0, 4, None). Medium: the tool never WRITES a dict timestamp
+  (append_history writes a string), so it needs external ledger corruption, but it directly
+  contradicts the contract ("malformed lines are skipped", "None when unparseable", "robust to a
+  malformed ledger line, never crash"). Fix: `if not isinstance(ts, str): return None` at the top of
+  quarter_of (or add KeyError to the caught tuple). Accept: quarter_of({...}) returns None; a ledger
+  whose middle line has a dict measured_at_utc does not crash trend_from_ledger or `python trends.py
+  <slug>` (bad line skipped, valid lines still grouped); scanner suite green.
+  Done (iteration 3): added `if not isinstance(ts, str): return None` at the top of quarter_of, then
+  narrowed the except to ValueError (the str gate makes the TypeError branch dead). This handles
+  every non-string type at once (dict/list/int/None/float/bool), not just the dict KeyError. Verified
+  quarter_of over all types + malformed strings; the dict-ts ledger line is skipped and a two-quarter
+  trend still builds; the trends CLI on such a ledger exits 0 with NO traceback (probe cleaned up).
+  Added test_dict_timestamp_ledger_line_does_not_crash_the_trend_layer; mutation-checked. Scanner
+  385 -> 386, builder 45, charts 8 green; README synced at 431.
+- [x] **T5 (done, S)** build_trend crashes on a corrupted ledger entry whose metrics/bands/issues
+  is a non-dict - the T3 fix closed only the measured_at_utc field of a corrupt ledger line, but the
+  sibling sub-fields of the SAME threat model (external ledger corruption, a valid-JSON dict line
+  with a wrong-typed sub-field) remain. Reproduced (mine, iteration-3 replenishment): a two-entry
+  ledger where the second entry has metrics=[1,2] (or "str"/5), or bands=<non-dict>, or issues=<non-
+  dict>, makes build_trend raise AttributeError/TypeError. Sites: trends.py:69/73 (_score/_page_
+  metric `(entry.get("metrics") or {}).get(...)`), :81 (_series scores loop), :102-103 (_delta_rows
+  `prev/curr.get("bands") or {}`), and scan_site.diff_issues via trends.py:144 (the issues field).
+  The `or {}` idiom guards None but not a truthy non-dict. Medium: same severity and threat model as
+  T3 (Medium), which the project contract explicitly covers ("robust to a malformed ledger line,
+  never crash"); read_history already drops non-DICT lines, so this needs a valid dict line with a
+  wrong-typed sub-field. Fix (class-complete this time): coerce each entry sub-dict read to {} when
+  not a dict - a small `_dict(x)` = `x if isinstance(x, dict) else {}` helper applied at the metrics/
+  bands sites in trends.py, and harden scan_site.diff_issues to treat a non-dict issues as {}.
+  Accept: build_trend over a ledger whose second entry has a non-dict metrics, bands, OR issues does
+  not crash (that entry degrades - missing scores/pages -> None, no band delta, no issue diff - but
+  the valid entries still produce a trend); a well-formed ledger is unchanged; scanner suite green.
+  Done (iteration 4): added a `_dict(x)` helper in trends.py (x if isinstance(x, dict) else {}) and
+  applied it at BOTH nesting levels of _score/_page_metric/_series (metrics, then scores/pages) and
+  at _delta_rows bands; hardened scan_site.diff_issues to coerce a non-dict issues to {}. Verified
+  every non-dict metrics/bands/issues (str/list/int) and the deeper metrics.scores/pages non-dict all
+  build a trend, and a well-formed ledger still yields the real series [0.4, 0.7]. Added
+  test_non_dict_entry_subfield_does_not_crash_the_trend_layer; mutation-checked (reverting to `or {}`
+  fails it). Scanner 386 -> 387, builder 45, charts 8 green; README synced at 432.
+- [x] **T4 (done, XS)** README documents findings as a CAPPED list, contradicting the S9 fix (and
+  two sibling README lines and the test). README.md:152 `**No silent truncation.** Capped lists
+  (capture pages, findings) name what was dropped.` After S9, findings are NEVER capped: _page_list
+  enumerates every page, README:98 says "severe findings enumerate every affected URL with no
+  truncation", README:44 says "enumerate every affected page", and test_finding_evidence_names_
+  every_page_even_at_crawl_scale asserts it. Only capture pages are genuinely capped (DEFAULT_PAGE_
+  CAP=15, with a named dropped list). Reproduced (mine): the three README lines are mutually
+  contradictory as quoted. Medium (borderline, doc-honesty): the doc now overstates a limitation the
+  code does not have. Fix: remove ", findings" from the parenthetical so it reads "Capped lists
+  (capture pages) name what was dropped." Accept: README:152 no longer lists findings as capped;
+  check_readme_counts.py still exits 0; no remaining doc claims a findings cap.
+  Done (iteration 5): rewrote README:152 to "The one capped list, the capture page set, names every
+  page it dropped; findings are never capped and enumerate every affected page." Grepped every doc
+  (README/SKILL/CLAUDE/CAPTURE) for finding+cap/truncation claims: README:152 was the only stale
+  one; the other "capped" mentions (README:111/249, SKILL:49) are the capture page set and the 500-
+  page crawl cap, which ARE genuinely capped. Count guard exit 0; dash-clean; full battery green.
+
 ## Phase S - Seventh (full) convergence-audit findings (2026-07-05)
 After Q12-Q19 drained the backlog to empty (all suites green at 381 + 40 + 8, README guard in
 sync, py_compile clean, real CPython 3.10.19 verified green), the seventh full convergence audit

@@ -31,9 +31,16 @@ BAND_RANK = {"Poor": 0, "Weak": 1, "Adequate": 2, "Strong": 3}
 
 def quarter_of(ts):
     """'2026-07-02T15:37:23Z' -> '2026-Q3'; None when unparseable."""
+    # A non-string ts (a dict/list from a corrupted ledger line) makes ts[0:4] a
+    # slice-key lookup that raises KeyError/TypeError; gate on str up front so every
+    # non-string type returns None at once, then let the try/except cover a
+    # malformed string. read_history keeps any valid-JSON dict line, so this is the
+    # boundary that keeps one bad ledger line from crashing the whole trend layer.
+    if not isinstance(ts, str):
+        return None
     try:
         year, month = int(ts[0:4]), int(ts[5:7])
-    except (TypeError, ValueError):
+    except ValueError:
         return None
     if not 1 <= month <= 12:
         return None
@@ -58,12 +65,21 @@ def quarterly_points(entries):
     return sorted(by_quarter.items())
 
 
+def _dict(x):
+    """A ledger-entry sub-field expected to be a dict. A non-dict (from external
+    ledger corruption - read_history keeps a valid-JSON dict line even with a
+    wrong-typed sub-field) becomes {}, so a corrupt metrics/scores/pages/bands
+    degrades to 'missing' rather than crashing the trend layer. The plain `or {}`
+    idiom guarded None but not a truthy non-dict like a list."""
+    return x if isinstance(x, dict) else {}
+
+
 def _score(entry, name):
-    return ((entry.get("metrics") or {}).get("scores") or {}).get(name)
+    return _dict(_dict(entry.get("metrics")).get("scores")).get(name)
 
 
 def _page_metric(entry, name):
-    return ((entry.get("metrics") or {}).get("pages") or {}).get(name)
+    return _dict(_dict(entry.get("metrics")).get("pages")).get(name)
 
 
 def _series(points):
@@ -71,7 +87,7 @@ def _series(points):
     the headline); a page metric ships only if some quarter measured it."""
     cats = []
     for _, e in points:
-        for name in ((e.get("metrics") or {}).get("scores") or {}):
+        for name in _dict(_dict(e.get("metrics")).get("scores")):
             if name != "overall" and name not in cats:
                 cats.append(name)
     series = {"overall_score": [_score(e, "overall") for _, e in points]}
@@ -92,8 +108,8 @@ def _issue_name(issue):
 
 
 def _delta_rows(prev, curr):
-    prev_bands = prev.get("bands") or {}
-    curr_bands = curr.get("bands") or {}
+    prev_bands = _dict(prev.get("bands"))
+    curr_bands = _dict(curr.get("bands"))
     rows = []
     for name in curr_bands:
         if name == "overall":

@@ -121,9 +121,17 @@ def diff_issues(prev_result, result):
     likewise report one template defect on 40 pages as 40 new, inconsistent with
     the grouped-finding view the report shows."""
     def keyed(res):
-        issues = res.get("issues", {}) or {}
-        flat = list(issues.get("fail", [])) + list(issues.get("warn", []))
-        return {(i["scan"].partition(":")[0], i["check"]): i for i in flat}
+        # External ledger corruption can make issues, or its fail/warn sub-lists, or
+        # a list item, the wrong type; guard every level so a corrupt entry degrades
+        # to "no issues" rather than raising (this runs on every fresh run via
+        # attach_delta, so one bad append-only line would otherwise poison all runs).
+        issues = res.get("issues")
+        if not isinstance(issues, dict):
+            issues = {}
+        fail, warn = issues.get("fail"), issues.get("warn")
+        flat = (fail if isinstance(fail, list) else []) + (warn if isinstance(warn, list) else [])
+        return {(i["scan"].partition(":")[0], i["check"]): i for i in flat
+                if isinstance(i, dict) and isinstance(i.get("scan"), str) and isinstance(i.get("check"), str)}
     prev, curr = keyed(prev_result), keyed(result)
     return {
         "previous_measured_at": prev_result.get("measured_at_utc"),

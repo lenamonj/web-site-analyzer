@@ -2473,6 +2473,23 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         self.assertEqual([i["check"] for i in delta["new"]], ["hsts"])
         self.assertEqual([i["check"] for i in delta["resolved"]], ["headings"])
 
+    def test_diff_issues_survives_corrupt_fail_warn_sublists(self):
+        # U2: the T5 fix coerced a non-dict `issues` field but not its fail/warn
+        # sub-lists or their items. External ledger corruption (this runs on every
+        # fresh run via attach_delta) must degrade to "no issues", never crash.
+        good = {"issues": {"fail": [{"scan": "seo:https://x/", "check": "title"},
+                                    {"scan": "tls", "check": "expiry"}], "warn": []}}
+        for bad in (None, "garbage", {"k": "v"}, 5):
+            self.assertEqual(len(site.diff_issues(good, {"issues": {"fail": bad, "warn": []}})["resolved"]), 2)
+            self.assertEqual(len(site.diff_issues({"issues": {"fail": [], "warn": bad}}, good)["new"]), 2)
+        # a non-dict / malformed item inside a good list is skipped, the good ones kept
+        mixed = {"issues": {"fail": [{"scan": "seo:https://y/", "check": "title"},
+                                     "oops", 5, None, {"scan": 123, "check": "x"},
+                                     {"scan": "perf", "check": "weight"}], "warn": []}}
+        d = site.diff_issues(good, mixed)
+        self.assertEqual({(n["scan"], n["check"]) for n in d["new"]}, {("perf", "weight")})
+        self.assertEqual({(r["scan"], r["check"]) for r in d["resolved"]}, {("tls", "expiry")})
+
     def test_diff_issues_counts_defects_not_pages(self):
         # P21: one template defect appearing on many pages is ONE new issue, not
         # one per page, matching the grouped-finding view the report shows.
@@ -2859,6 +2876,52 @@ class TestFindingsHistory(unittest.TestCase):
             entries = site.read_history(path)
         self.assertEqual(len(entries), 2)  # only the two dict entries survive
         self.assertTrue(all(isinstance(e, dict) for e in entries))
+
+    def test_dict_timestamp_ledger_line_does_not_crash_the_trend_layer(self):
+        # T3: read_history keeps a valid-JSON DICT line even when its measured_at_utc
+        # is itself a dict (external ledger corruption), so quarter_of must gate on
+        # str - else ts[0:4] is a slice-key lookup that raises an uncaught KeyError,
+        # crashing trend_from_ledger (which run_review calls after writing outputs).
+        self.assertIsNone(trends_mod.quarter_of({"malformed": "object"}))
+        self.assertIsNone(trends_mod.quarter_of([1, 2, 3]))
+        self.assertIsNone(trends_mod.quarter_of(123))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "h.jsonl"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"measured_at_utc": "2026-01-15T10:00:00Z",
+                                    "bands": {"overall": "Weak"},
+                                    "metrics": {"scores": {"overall": 0.4}}}) + "\n")
+                f.write(json.dumps({"measured_at_utc": {"malformed": "object"},
+                                    "bands": {"overall": "Poor"}}) + "\n")  # dict ts, kept by read_history
+                f.write(json.dumps({"measured_at_utc": "2026-04-15T10:00:00Z",
+                                    "bands": {"overall": "Adequate"},
+                                    "metrics": {"scores": {"overall": 0.7}}}) + "\n")
+            trend = trends_mod.trend_from_ledger(path)   # must not raise a KeyError
+        # the dict-ts line was excluded; the two valid quarters still produce a trend
+        self.assertIsNotNone(trend)
+
+    def test_non_dict_entry_subfield_does_not_crash_the_trend_layer(self):
+        # T5: the T3 threat model (external ledger corruption) reaches beyond the
+        # timestamp - a corrupt-but-valid-dict entry with a non-dict metrics, bands,
+        # or issues (the `or {}` idiom guarded None, not a truthy non-dict) crashed
+        # build_trend via _score/_page_metric/_delta_rows/diff_issues. Each must now
+        # degrade to "missing", never crash, and the valid entries still trend.
+        good = {"measured_at_utc": "2026-01-15T10:00:00Z", "bands": {"overall": "Weak"},
+                "metrics": {"scores": {"overall": 0.4}, "pages": {"lcp_ms": 2500}}}
+        for field, bad in (("metrics", [1, 2]), ("metrics", "x"), ("metrics", 5),
+                           ("bands", [1, 2]), ("bands", "x"),
+                           ("issues", [1, 2]), ("issues", "x"),
+                           ("metrics", {"scores": [1, 2], "pages": "x"})):  # deeper level too
+            second = {"measured_at_utc": "2026-04-15T10:00:00Z",
+                      "bands": {"overall": "Adequate"},
+                      "metrics": {"scores": {"overall": 0.7}}, field: bad}
+            trend = trends_mod.build_trend([good, second])   # must not raise
+            self.assertIsNotNone(trend, f"{field}={bad!r}")
+        # a well-formed ledger still yields the real per-quarter score series
+        clean = trends_mod.build_trend([good, {"measured_at_utc": "2026-04-15T10:00:00Z",
+                                               "bands": {"overall": "Adequate"},
+                                               "metrics": {"scores": {"overall": 0.7}}}])
+        self.assertEqual((clean.get("series") or {}).get("overall_score"), [0.4, 0.7])
 
     def test_delta_prefers_ledger_over_stale_json(self):
         with tempfile.TemporaryDirectory() as tmp:

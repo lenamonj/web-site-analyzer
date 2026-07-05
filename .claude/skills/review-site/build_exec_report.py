@@ -325,7 +325,7 @@ def add_cover(document, data, section_titles):
         posture.paragraph_format.space_after = Pt(16)
         add_run(posture, "OVERALL POSTURE   ", size=9, bold=True,
                 color=MUTED_RGB, letter_spacing=24)
-        fill = BAND_FILL.get(overall, BAND_FILL["Not measured"])
+        fill = BAND_FILL.get(_hkey(overall), BAND_FILL["Not measured"])
         chip = add_run(posture, f"  {overall.upper()}  ", size=9, bold=True,
                        color=text_color_for_fill(fill), letter_spacing=24)
         _shade_run(chip, fill)
@@ -431,14 +431,14 @@ def add_trend_table(document, delta):
             for cell, band in ((cells[1], row.get("prev_band")),
                                (cells[2], row.get("band"))):
                 band = band or "Not measured"
-                _chip(cell, band, BAND_FILL.get(band, BAND_FILL["Not measured"]))
+                _chip(cell, band, BAND_FILL.get(_hkey(band), BAND_FILL["Not measured"]))
             p, c = row.get("prev_score"), row.get("score")
             change = (f"{c - p:+.2f}"
                       if isinstance(p, (int, float)) and isinstance(c, (int, float))
                       else "n/a")
             set_cell_text(cells[3], f"{_fmt_score(p)} to {_fmt_score(c)} ({change})",
                           size=8.5, color=MUTED_RGB)
-            label, fill = DIRECTION_STYLE.get(row.get("direction"),
+            label, fill = DIRECTION_STYLE.get(_hkey(row.get("direction")),
                                               DIRECTION_STYLE["held"])
             _chip(cells[4], label, fill)
         return write
@@ -501,13 +501,17 @@ def _as_rows(items, text_key):
     strings (recommendations/findings/action_plan are human-edited on top of the
     draft, and the sibling quick_wins IS a string list) still renders instead of
     crashing .get() on a non-dict. A bare string becomes {text_key: s} so its text
-    appears; a dict passes through; any other scalar becomes an empty row. A bare
-    string given for the WHOLE field (not a list) is treated as one item, never
-    iterated per character (a str is iterable)."""
-    if isinstance(items, str):
+    appears; a dict passes through; any other scalar becomes an empty row. A WHOLE
+    field given as a single value (not a list) is treated as ONE item, whatever its
+    type: a lone dict (one finding authored without the wrapping list) renders as
+    one row preserving its content, never iterated over its keys; a lone string is
+    not iterated per character; a lone scalar does not crash the build."""
+    if items is None:
+        return []
+    if not isinstance(items, (list, tuple)):
         items = [items]
     rows = []
-    for it in items or []:
+    for it in items:
         if isinstance(it, dict):
             rows.append(it)
         elif isinstance(it, str):
@@ -537,10 +541,17 @@ def _finite_number(x):
     return isinstance(x, (int, float)) and math.isfinite(x)
 
 
+def _hkey(x):
+    """A band/severity/rating value used as a color-lookup key. A non-string (a
+    hand-authored list/dict where a label was expected) is stringified so the
+    lookup falls through to its default instead of raising TypeError: unhashable."""
+    return x if isinstance(x, str) else str(x)
+
+
 def _severity_breakdown(findings):
     counts = {}
     for f in findings:
-        sev = f.get("severity", "Low")
+        sev = _hkey(f.get("severity", "Low"))
         counts[sev] = counts.get(sev, 0) + 1
     ordered = sorted(counts.items(), key=lambda kv: SEVERITY_ORDER.get(kv[0], 9))
     return " / ".join(f"{n} {sev}" for sev, n in ordered)
@@ -564,7 +575,7 @@ def add_glance_tiles(document, data):
                   "scan categories" if rows else "no scorecard supplied", ACCENT_RGB)
     tiles = [
         ("OVERALL POSTURE", overall, "measured scan verdicts",
-         RGBColor.from_string(BAND_FILL.get(overall, BAND_FILL["Not measured"]))),
+         RGBColor.from_string(BAND_FILL.get(_hkey(overall), BAND_FILL["Not measured"]))),
         ("KEY FINDINGS", str(len(findings)),
          _severity_breakdown(findings) or "none recorded", ACCENT_RGB),
         ("RECOMMENDATIONS", str(len(recs)),
@@ -619,7 +630,7 @@ def add_vitals_panel(document, web_vitals):
         p3 = cell.add_paragraph()
         p3.paragraph_format.space_after = Pt(0)
         rating = m.get("rating", "")
-        fill = VITALS_FILL.get(rating, BAND_FILL["Not measured"])
+        fill = VITALS_FILL.get(_hkey(rating), BAND_FILL["Not measured"])
         run = add_run(p3, f" {rating} ", size=7.5, bold=True, color=text_color_for_fill(fill))
         _shade_run(run, fill)
     set_col_widths(table, [Inches(7.0 / len(metrics))] * len(metrics))
@@ -763,7 +774,7 @@ def set_score_bar_cell(cell, score, band):
     para.paragraph_format.space_before = Pt(0)
     para.paragraph_format.space_after = Pt(0)
     filled = max(0, min(SCORE_BAR_SEGMENTS, round(score * SCORE_BAR_SEGMENTS)))
-    band_hex = BAND_FILL.get(band, BAND_FILL["Not measured"])
+    band_hex = BAND_FILL.get(_hkey(band), BAND_FILL["Not measured"])
     if filled:
         add_run(para, SCORE_BAR_BLOCK * filled, size=8,
                 color=RGBColor.from_string(band_hex), font=MONO_FONT)
@@ -895,7 +906,7 @@ def build(data, out_path, chart_dir=None):
     # Container fields a section reads with .get(): a non-dict (a list or scalar
     # from a hand-authored shape slip) would AttributeError mid-build. Coerce to
     # {} so the section is skipped cleanly, mirroring the list normalization above.
-    for _key in ("assessment", "scorecard", "web_vitals", "key_dates", "progress"):
+    for _key in ("assessment", "scorecard", "web_vitals", "key_dates", "progress", "scope"):
         if _key in data and not isinstance(data[_key], dict):
             data[_key] = {}
 
@@ -921,6 +932,12 @@ def build(data, out_path, chart_dir=None):
     web_vitals = data.get("web_vitals")
     progress = data.get("progress") or {}
     trend = progress.get("trend")
+    if not isinstance(trend, dict):
+        # A hand-authored non-dict trend (string/list/scalar) would AttributeError
+        # inside add_trend_section; treat it as no trend so the section is skipped,
+        # exactly as the S4 coercion does for the top-level containers. This also
+        # lets a real progress strip render (has_exec_summary sees trend as absent).
+        trend = None
     # The progress strip (progress without a full quarterly trend chart) belongs to
     # the Executive summary, so that section exists whenever the strip renders -
     # otherwise progress-only data floats a strip under the glance tiles with no
@@ -986,7 +1003,7 @@ def build(data, out_path, chart_dir=None):
             def write(cells):
                 set_cell_text(cells[0], row.get("category", ""), size=9, bold=True)
                 band = row.get("band", "Not measured")
-                _chip(cells[1], band, BAND_FILL.get(band, BAND_FILL["Not measured"]))
+                _chip(cells[1], band, BAND_FILL.get(_hkey(band), BAND_FILL["Not measured"]))
                 detail = str(row.get("detail") or "")
                 if has_scores:
                     score = row.get("score")
@@ -1022,7 +1039,7 @@ def build(data, out_path, chart_dir=None):
     # Key findings, most severe first
     findings = sorted(
         data.get("findings", []),
-        key=lambda f: SEVERITY_ORDER.get(f.get("severity", "Low"), 9),
+        key=lambda f: SEVERITY_ORDER.get(_hkey(f.get("severity", "Low")), 9),
     )
     if findings:
         section_heading(document, "Key findings hurting the site",
@@ -1031,7 +1048,7 @@ def build(data, out_path, chart_dir=None):
         def finding_row(row):
             def write(cells):
                 sev = row.get("severity", "Low")
-                _chip(cells[0], sev, SEVERITY_FILL.get(sev, SEVERITY_FILL["Low"]))
+                _chip(cells[0], sev, SEVERITY_FILL.get(_hkey(sev), SEVERITY_FILL["Low"]))
                 set_cell_text(cells[1], row.get("area", ""), size=9, bold=True)
                 set_cell_text(cells[2], row.get("finding", ""), size=9)
                 set_cell_text(cells[3], row.get("evidence", ""), size=7.5, color=MUTED_RGB)
@@ -1082,7 +1099,7 @@ def build(data, out_path, chart_dir=None):
                 set_cell_text(cells[0], str(n), size=10, bold=True,
                               color=ACCENT_RGB, align=WD_ALIGN_PARAGRAPH.CENTER)
                 pr = row.get("priority", "Medium")
-                _chip(cells[1], pr, SEVERITY_FILL.get(pr, SEVERITY_FILL["Low"]))
+                _chip(cells[1], pr, SEVERITY_FILL.get(_hkey(pr), SEVERITY_FILL["Low"]))
                 set_cell_text(cells[2], row.get("action", ""), size=9)
                 set_cell_text(cells[3], row.get("affects", ""), size=8.5, color=MUTED_RGB)
             return write

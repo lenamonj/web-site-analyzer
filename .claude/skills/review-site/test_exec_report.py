@@ -667,15 +667,103 @@ class TestBuildMainInputGuard(unittest.TestCase):
         self.assertIn("TLS is strong", text)
         self.assertIn("No HSTS", text)
 
+    def test_as_rows_handles_a_whole_field_of_any_non_list_type(self):
+        # T1: _as_rows must treat a WHOLE field that is not a list as ONE item,
+        # whatever its type - the S3 fix closed only the bare-string case. A lone
+        # dict (a finding authored without the wrapping list) must render as one row
+        # preserving its content, NOT be iterated over its keys (silent drop +
+        # fabricated key-name rows); a lone scalar must not crash the build.
+        self.assertEqual(ber._as_rows(None, "finding"), [])
+        self.assertEqual(ber._as_rows(123, "finding"), [{}])          # scalar: one empty row, no crash
+        one = ber._as_rows({"severity": "High", "area": "Security",
+                            "finding": "No CSP on homepage", "evidence": "https://x/"}, "finding")
+        self.assertEqual(one, [{"severity": "High", "area": "Security",
+                                "finding": "No CSP on homepage", "evidence": "https://x/"}])
+        # end to end: a single-dict findings field renders the REAL finding, drops nothing
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "findings": {"severity": "High", "area": "Security",
+                       "finding": "No CSP on homepage", "evidence": "https://x/"}}, out)
+            text = " ".join(c.text for t in Document(str(out)).tables
+                            for r in t.rows for c in r.cells)
+        self.assertIn("No CSP on homepage", text)
+        # a scalar findings field builds instead of crashing
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "findings": 123}, out)
+            self.assertTrue(out.is_file())
+
     def test_non_dict_container_field_skips_section_not_crash(self):
-        # S4: a container field (scorecard/web_vitals/key_dates/assessment/progress)
-        # given a list or scalar must skip its section cleanly, not AttributeError
-        # mid-build (the .get() dereferences were unguarded).
-        for key in ("scorecard", "web_vitals", "key_dates", "assessment", "progress"):
+        # S4: a container field given a list or scalar must skip its section cleanly,
+        # not AttributeError mid-build (the .get() dereferences were unguarded).
+        # U1: scope was the 6th top-level container the coercion loop omitted - an
+        # AST enumeration confirms these six are ALL the .get()-dereferenced ones.
+        for key in ("scorecard", "web_vitals", "key_dates", "assessment", "progress", "scope"):
             with tempfile.TemporaryDirectory() as td:
                 out = Path(td) / "o.docx"
                 ber.build({"site": "x", key: [{"a": "b"}]}, out)   # a list, not a dict
                 self.assertTrue(out.is_file(), key)
+
+    def test_non_dict_scope_builds_and_valid_scope_still_renders(self):
+        # U1: scope read via _scope_text and add_glance_tiles; a prose string or a
+        # list of page URLs (a plausible hand-author shape) must skip cleanly, and a
+        # valid scope dict must still render its method and pages-reviewed tile.
+        for bad in ("Homepage and top nav only", ["/a", "/b"], 5):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build({"site": "x", "scope": bad, "bottom_line": "x"}, out)
+                self.assertTrue(out.is_file(), repr(bad))
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "scope": {"method": "Automated plus manual",
+                                              "pages_reviewed": 7}, "bottom_line": "x"}, out)
+            text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        self.assertIn("Automated plus manual", text)
+
+    def test_unhashable_lookup_key_field_does_not_crash_the_build(self):
+        # U3: band/severity/rating/priority/overall/direction are used as color- and
+        # sort-lookup keys; a list/dict value (a hand-author slip) must render with the
+        # default instead of TypeError: unhashable. Covers every keyed site including
+        # the findings sort key (SEVERITY_ORDER) and the trend direction style.
+        hostile = {"site": "x",
+                   "scorecard": {"overall": ["W"], "rows": [{"category": "S", "band": {"k": 1}, "score": 0.4}]},
+                   "findings": [{"area": "A", "finding": "f", "severity": ["High"]}],
+                   "action_plan": [{"priority": {"k": 1}, "action": "a", "affects": "x"}],
+                   "web_vitals": {"metrics": [{"label": "L", "value": "2s", "rating": [1]}]}}
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build(hostile, out)                      # every unhashable key at once
+            self.assertTrue(out.is_file())
+        # regression: normal string severities still sort most-severe first
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "findings": [{"area": "A", "finding": "low1", "severity": "Low"},
+                                                 {"area": "B", "finding": "high1", "severity": "High"}]}, out)
+            cells = [c.text for tb in Document(str(out)).tables for r in tb.rows for c in r.cells]
+        hi = next(i for i, c in enumerate(cells) if "high1" in c)
+        lo = next(i for i, c in enumerate(cells) if "low1" in c)
+        self.assertLess(hi, lo)
+
+    def test_non_dict_nested_progress_trend_skips_section_not_crash(self):
+        # T2: the S4 coercion covered the top-level containers but not the nested
+        # progress.trend, which add_trend_section reads with .get(). A non-dict trend
+        # (string/list/scalar) must skip the Progress section, not AttributeError.
+        for bad in ("oops", [1, 2, 3], 123, True):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build({"site": "x", "progress": {"trend": bad, "posture": "improving"}}, out)
+                self.assertTrue(out.is_file(), repr(bad))
+        # a valid trend dict still renders its Progress this quarter section
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "slug": "x", "progress": {"trend": {
+                "latest_delta": {"scorecard": [{"category": "Security", "prev": "Weak",
+                                                "current": "Adequate"}],
+                                 "resolved_findings": 2, "new_findings": 1,
+                                 "prev_quarter": "2026 Q1", "quarter": "2026 Q2"},
+                "quarters": ["2026 Q1", "2026 Q2"]}}}, out)
+            text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        self.assertIn("Progress this quarter", text)
 
     def test_non_finite_score_renders_not_measured_not_crash(self):
         # S5: a NaN or +/-Infinity score (json.loads accepts both, so one can
