@@ -74,6 +74,24 @@ def _dict(x):
     return x if isinstance(x, dict) else {}
 
 
+def _sanitize_entry(e):
+    """The single boundary for the ledger-corruption class. read_history keeps any
+    valid-JSON dict line, so a corrupted line can be a well-typed container holding a
+    malformed VALUE. T3/T5/U2 closed the container/field TYPES (timestamp, sub-dicts,
+    issue sub-lists); this closes the VALUES a trend read consumes as a hashable key,
+    so no downstream read crashes on a corrupt value. Applied to every entry at the
+    top of build_trend. The only value used as a dict-lookup key is a band label
+    (BAND_RANK.get in _delta_rows); a non-string band value (an unhashable list/dict)
+    is coerced to None so the lookup misses cleanly. Nested issue notes live past the
+    diff_issues filter and are made type-safe in _issue_name instead."""
+    if not isinstance(e, dict):
+        return {}
+    out = dict(e)
+    out["bands"] = {k: (v if isinstance(v, str) else None)
+                    for k, v in _dict(e.get("bands")).items()}
+    return out
+
+
 def _score(entry, name):
     return _dict(_dict(entry.get("metrics")).get("scores")).get(name)
 
@@ -101,10 +119,16 @@ def _series(points):
 
 
 def _issue_name(issue):
-    check = issue.get("check") or ""
-    note = (issue.get("note") or "").strip()
+    # check/note/scan come from a diffed ledger issue; diff_issues guarantees scan
+    # and check are strings, but a corrupt note can be a non-string (a list), which
+    # would crash .strip(). Coerce to "" so a resolved-issue name degrades rather
+    # than crashing the trend layer (the value-level sibling of the band-value class).
+    check = issue.get("check") if isinstance(issue.get("check"), str) else ""
+    raw_note = issue.get("note")
+    note = raw_note.strip() if isinstance(raw_note, str) else ""
+    scan = issue.get("scan") if isinstance(issue.get("scan"), str) else ""
     body = f"{check}: {note}" if check and note else (check or note)
-    return f"[{issue.get('scan', '')}] {body}".strip()
+    return f"[{scan}] {body}".strip()
 
 
 def _delta_rows(prev, curr):
@@ -145,6 +169,7 @@ def _delta_rows(prev, curr):
 def build_trend(entries):
     """The report-ready trend block, or None with fewer than two quarterly
     points (a single point has no trend to show)."""
+    entries = [_sanitize_entry(e) for e in entries]
     points = quarterly_points(entries)
     if len(points) < 2:
         return None

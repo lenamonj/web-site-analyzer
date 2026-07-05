@@ -33,6 +33,44 @@ report builders. Design precedes implementation.
 - Keep it simple. No speculative features, no defensive scaffolding for cases
   that cannot occur. One well-designed way to do each thing.
 
+## 2a. Operating envelope (input surfaces and trust classes)
+Severity in every audit is judged against this envelope, not against imagined
+callers. The eight prior full audits (phases M-U) reasoned this way implicitly;
+this table makes it explicit so severity stays consistent. Trust classes:
+adversarial (untrusted party can reach it; full rubric incl. hostile input),
+user-error (the owner hand-authors it; a wrong value earns a clear failure or
+graceful degradation, exotic shapes beyond that are Low), machine-generated (the
+pipeline produces it; the generator's real output is the contract, off-contract
+variants are Low, Declined by default), state-at-rest (the run writes and reads
+it back; external corruption is out of envelope, Low/Medium at most).
+
+Surfaces:
+- Scanned-site responses (HTTP bodies/headers, TLS handshake, DNS/DoH, robots.txt,
+  sitemaps, RDAP, CrUX API JSON): adversarial - the target is an untrusted third
+  party, BUT the consequence ceiling is a crash, hang, or mis-grade of one passive
+  read-only scan (no target writes, no code execution, no data loss). Hardened per
+  section 38 (ReDoS-clean, header-as-list, finite timeouts, body caps, token-
+  boundary parsing).
+- exec_report_data.json: user-error - the owner hand-authors it on top of the
+  machine draft (CLAUDE.md contract). A plausible shape slip must degrade cleanly
+  or fail clearly (the U6 normalize() boundary); shapes beyond a realistic slip are
+  Low. The no-silent-drop / name-every-subject rule applies even here.
+- State files the run writes then reads (<slug>_scan.json, <slug>_history.jsonl,
+  <slug>_crawl_state.json, rendered manifest.json/metrics.json when machine-written):
+  state-at-rest - the writer never emits a malformed shape, so a finding needs
+  external corruption or cross-version drift; Medium at most (how T3/T5/U2 scored).
+- CLI arguments and TARGET.txt (target url, --crawl N, --pages, --no-browser):
+  user-error - a bad value earns a clear failure message.
+- Environment and .env (GOOGLE_API_KEY, REVIEW_BROWSER): user-error - secrets are
+  never logged, printed, or returned in any result dict.
+- Rendered snapshot handoff authored by the agent per CAPTURE.md: machine-generated
+  contract - off-contract hand-mangled variants are Low, Declined by default.
+
+Binding rules: a finding exercised only by out-of-envelope input is Low at most;
+only the user widens the envelope; where robustness to a surface is genuinely
+wanted, the remedy is one validation boundary where that input enters (e.g. U6),
+never scattered per-site guards.
+
 ## 3. Current architecture (as-built)
 Repo layout that matters to the analyzer:
 

@@ -548,6 +548,86 @@ def _hkey(x):
     return x if isinstance(x, str) else str(x)
 
 
+# The six top-level fields every section reads with .get(); a non-dict slip
+# would AttributeError mid-build, so normalize() coerces each to {}.
+TOP_CONTAINERS = ("assessment", "scorecard", "web_vitals", "key_dates",
+                  "progress", "scope")
+# List fields and the nested (parent, child) list fields; a keyed OBJECT of
+# item-dicts is a collection to flatten, never one bogus row.
+LIST_FIELDS = ("findings", "recommendations", "action_plan", "evidence")
+NESTED_LIST_FIELDS = (("scorecard", "rows"), ("web_vitals", "metrics"),
+                      ("key_dates", "items"))
+
+
+def _as_collection(value):
+    """A list field authored as a keyed OBJECT (e.g. {"f1": {...}, "f2": {...}}, or
+    a mixed {"f1": {...}, "note": "..."}) is a keyed collection: return its values as
+    a list so every item renders instead of the whole object collapsing to one bogus
+    row (the no-silent-drop rule). The signal is ANY value being a dict: a keyed
+    collection's values are item records (dicts), so a stray non-dict entry (a comment
+    key, a bare-string sibling) still marks it a collection and its dict items survive
+    - _as_rows then renders each value (dict -> row, string -> a visible text row),
+    nothing dropped. A lone item dict has only scalar field values (severity, area,
+    finding, evidence), so no value is a dict and it passes through for _as_rows to
+    render as one row. An empty object means no items (not one blank row): it becomes
+    []. Any non-dict value passes through unchanged."""
+    if isinstance(value, dict):
+        if not value:
+            return []
+        if any(isinstance(v, dict) for v in value.values()):
+            return list(value.values())
+    return value
+
+
+def _normalize_trend(trend):
+    """The trend structure is the one container nested two levels deep. Coerce
+    every shape-dependent read add_trend_section / add_trend_table make (latest_delta
+    dict, its pages_scanned dict and scorecard row-list, and quarters list) so a
+    partial hand-authored trend degrades instead of hitting a truthy non-dict/list."""
+    if "latest_delta" in trend and not isinstance(trend["latest_delta"], dict):
+        trend["latest_delta"] = {}
+    ld = trend.get("latest_delta")
+    if isinstance(ld, dict):
+        if "pages_scanned" in ld and not isinstance(ld["pages_scanned"], dict):
+            ld["pages_scanned"] = {}
+        if "scorecard" in ld:
+            # Mirror the top-level scorecard.rows treatment: flatten a keyed object,
+            # then per-item coerce via _as_rows so a non-dict row (a corrupt hand-
+            # authored trend) becomes a dict and add_trend_table's row.get() never
+            # crashes; a non-list scorecard degrades to no rows.
+            sc = _as_collection(ld["scorecard"])
+            ld["scorecard"] = _as_rows(sc, "category") if isinstance(sc, list) else []
+    if "quarters" in trend and not isinstance(trend["quarters"], list):
+        trend["quarters"] = []
+
+
+def normalize(data):
+    """The single input boundary for a hand-authored exec_report_data dict. It
+    coerces the fields whose SHAPE (container vs list vs keyed collection) a
+    consumer depends on, once and up front, so malformed input degrades cleanly
+    instead of crashing or silently dropping content. This replaces the scattered
+    container/trend guards; per-ITEM coercion (a bare string, a scalar) still
+    belongs to _as_rows/_as_str_list, and per-value hashing to _hkey. Mutates and
+    returns data."""
+    for key in TOP_CONTAINERS:
+        if key in data and not isinstance(data[key], dict):
+            data[key] = {}
+    for key in LIST_FIELDS:
+        if key in data:
+            data[key] = _as_collection(data[key])
+    for parent, child in NESTED_LIST_FIELDS:
+        section = data.get(parent)
+        if isinstance(section, dict) and child in section:
+            section[child] = _as_collection(section[child])
+    progress = data.get("progress")
+    if isinstance(progress, dict) and "trend" in progress:
+        if isinstance(progress["trend"], dict):
+            _normalize_trend(progress["trend"])
+        else:
+            progress["trend"] = {}
+    return data
+
+
 def _severity_breakdown(findings):
     counts = {}
     for f in findings:
@@ -886,9 +966,15 @@ def build(data, out_path, chart_dir=None):
     document = Document()
     chart_dir = Path(chart_dir) if chart_dir else Path(out_path).parent
 
-    # Normalize the human-authored list fields once, up front, so every consumer
-    # (the glance tiles' severity breakdown, the section-title logic, and the
-    # tables) sees dicts and a hand-authored string list never crashes the build.
+    # One input boundary: coerce every field whose SHAPE a consumer depends on
+    # (the six top-level containers, the list/keyed-collection fields, and the
+    # nested trend) before any read, so malformed hand-authored data degrades
+    # cleanly instead of crashing or dropping content.
+    normalize(data)
+
+    # Per-item coercion of the list fields: a hand-authored string list (or a lone
+    # dict/scalar item) becomes rows so every consumer (the glance tiles' severity
+    # breakdown, the section-title logic, and the tables) sees dicts.
     data["findings"] = _as_rows(data.get("findings"), "finding")
     data["recommendations"] = _as_rows(data.get("recommendations"), "recommendation")
     data["action_plan"] = _as_rows(data.get("action_plan"), "action")
@@ -903,12 +989,6 @@ def build(data, out_path, chart_dir=None):
     if isinstance(data.get("scorecard"), dict):
         data["scorecard"]["rows"] = _as_rows(data["scorecard"].get("rows"), "category")
     data["quick_wins"] = _as_str_list(data.get("quick_wins"))
-    # Container fields a section reads with .get(): a non-dict (a list or scalar
-    # from a hand-authored shape slip) would AttributeError mid-build. Coerce to
-    # {} so the section is skipped cleanly, mirroring the list normalization above.
-    for _key in ("assessment", "scorecard", "web_vitals", "key_dates", "progress", "scope"):
-        if _key in data and not isinstance(data[_key], dict):
-            data[_key] = {}
 
     normal = document.styles["Normal"]
     normal.font.name = BODY_FONT
@@ -931,13 +1011,10 @@ def build(data, out_path, chart_dir=None):
     scorecard = data.get("scorecard")
     web_vitals = data.get("web_vitals")
     progress = data.get("progress") or {}
+    # normalize() guaranteed progress is a dict and any trend is a dict-or-{};
+    # an empty {} trend is falsy, so a hand-authored non-dict trend skips the
+    # Progress section and still lets a real progress strip render.
     trend = progress.get("trend")
-    if not isinstance(trend, dict):
-        # A hand-authored non-dict trend (string/list/scalar) would AttributeError
-        # inside add_trend_section; treat it as no trend so the section is skipped,
-        # exactly as the S4 coercion does for the top-level containers. This also
-        # lets a real progress strip render (has_exec_summary sees trend as absent).
-        trend = None
     # The progress strip (progress without a full quarterly trend chart) belongs to
     # the Executive summary, so that section exists whenever the strip renders -
     # otherwise progress-only data floats a strip under the glance tiles with no

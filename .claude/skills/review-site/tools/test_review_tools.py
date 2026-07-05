@@ -2923,6 +2923,47 @@ class TestFindingsHistory(unittest.TestCase):
                                                "metrics": {"scores": {"overall": 0.7}}}])
         self.assertEqual((clean.get("series") or {}).get("overall_score"), [0.4, 0.7])
 
+    def test_corrupt_ledger_value_inside_a_valid_container_does_not_crash(self):
+        # V1 (structural, _sanitize_entry boundary): T3/T5/U2 closed the ledger
+        # container/field TYPES; this closes the VALUES a trend read consumes as a
+        # key. A well-typed bands dict whose VALUE is unhashable (list/dict) crashed
+        # BAND_RANK.get in _delta_rows, and a resolved issue whose note is a list
+        # crashed _issue_name .strip(); both are external state-at-rest corruption
+        # the contract says must never crash the trend layer.
+        # No scores, so _delta_rows falls to the BAND_RANK.get(band) branch - the
+        # actual crash path (a scored, differing category takes the score branch and
+        # never looks the band up as a key, so scores must be absent to exercise V1).
+        base = {"measured_at_utc": "2026-01-15T10:00:00Z", "bands": {"seo": "Weak"},
+                "metrics": {}, "issues": {"fail": [], "warn": []}}
+        for bad_band in ([1, 2], {"x": 1}):
+            second = {"measured_at_utc": "2026-04-15T10:00:00Z",
+                      "bands": {"seo": bad_band}, "metrics": {},
+                      "issues": {"fail": [], "warn": []}}
+            trend = trends_mod.build_trend([base, second])          # must not raise
+            self.assertIsNotNone(trend, f"bad_band={bad_band!r}")
+            row = next(r for r in trend["latest_delta"]["scorecard"] if r["category"] == "seo")
+            self.assertIsNone(row["band"])                          # corrupt band -> None, missed cleanly
+            self.assertEqual(row["direction"], "held")              # unhashable band -> no rank -> held
+        # a resolved issue carrying a non-string note must not crash _issue_name
+        note_prev = {"measured_at_utc": "2026-01-15T10:00:00Z", "bands": {"seo": "Weak"},
+                     "metrics": {}, "issues": {"fail": [{"scan": "scan_seo:https://x/",
+                     "check": "h1", "note": ["a", "b"], "verdict": "fail"}], "warn": []}}
+        note_curr = {"measured_at_utc": "2026-04-15T10:00:00Z", "bands": {"seo": "Strong"},
+                     "metrics": {}, "issues": {"fail": [], "warn": []}}
+        trend = trends_mod.build_trend([note_prev, note_curr])      # must not raise
+        self.assertEqual(trend["latest_delta"]["resolved_findings"], 1)
+        # regression: a fully well-formed ledger still names the resolved finding
+        good_prev = {"measured_at_utc": "2026-01-15T10:00:00Z", "bands": {"seo": "Weak"},
+                     "metrics": {"scores": {"seo": 0.4}}, "issues": {"fail": [{"scan":
+                     "scan_seo:https://x/", "check": "h1", "note": "No H1", "verdict": "fail"}],
+                     "warn": []}}
+        good_curr = {"measured_at_utc": "2026-04-15T10:00:00Z", "bands": {"seo": "Strong"},
+                     "metrics": {"scores": {"seo": 0.9}}, "issues": {"fail": [], "warn": []}}
+        t = trends_mod.build_trend([good_prev, good_curr])
+        self.assertEqual(t["latest_delta"]["resolved_examples"], ["[scan_seo:https://x/] h1: No H1"])
+        seo = next(r for r in t["latest_delta"]["scorecard"] if r["category"] == "seo")
+        self.assertEqual(seo["direction"], "improved")
+
     def test_delta_prefers_ledger_over_stale_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             json_path = Path(tmp) / "x_scan.json"

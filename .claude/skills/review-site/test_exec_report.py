@@ -765,6 +765,132 @@ class TestBuildMainInputGuard(unittest.TestCase):
             text = " ".join(p.text for p in Document(str(out)).paragraphs)
         self.assertIn("Progress this quarter", text)
 
+    def test_keyed_object_of_item_dicts_renders_every_item_not_one_bogus_row(self):
+        # U4 (structural, via normalize()): findings/recommendations/action_plan
+        # authored as a keyed OBJECT of item-dicts ({"f1": {...}, "f2": {...}}) is a
+        # keyed collection - normalize() flattens it to its VALUES so EVERY item
+        # renders (the no-silent-drop rule), instead of _as_rows iterating the
+        # object's keys into one blank Low row and dropping every real finding.
+        self.assertEqual(
+            ber._as_collection({"f1": {"finding": "No H1"}, "f2": {"finding": "Cert expired"}}),
+            [{"finding": "No H1"}, {"finding": "Cert expired"}])
+        # a lone item dict has STRING values, not dict values, so it is not a
+        # collection and passes through for _as_rows to render as one row (T1).
+        self.assertEqual(ber._as_collection({"finding": "No H1", "severity": "High"}),
+                         {"finding": "No H1", "severity": "High"})
+        data = {"site": "x",
+                "findings": {"a": {"area": "SEO", "finding": "No H1 on homepage", "severity": "High"},
+                             "b": {"area": "TLS", "finding": "Certificate expired", "severity": "High"}},
+                "recommendations": {"r1": {"recommendation": "Add a single H1"},
+                                    "r2": {"recommendation": "Renew the certificate"}}}
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build(data, out)
+            text = " ".join(c.text for t in Document(str(out)).tables for r in t.rows for c in r.cells)
+        for expected in ("No H1 on homepage", "Certificate expired",
+                         "Add a single H1", "Renew the certificate"):
+            self.assertIn(expected, text)          # nothing dropped
+        # a single finding dict (no wrapping list, string values) still renders as
+        # ONE row preserving its content - the T1 behavior must not regress.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "findings": {"area": "Security", "finding": "No CSP on homepage",
+                                                 "severity": "High"}}, out)
+            text = " ".join(c.text for t in Document(str(out)).tables for r in t.rows for c in r.cells)
+        self.assertIn("No CSP on homepage", text)
+
+    def test_mixed_keyed_object_flattens_and_drops_nothing(self):
+        # V2: a keyed object whose values are NOT all dicts (item dicts plus a stray
+        # comment/annotation key, or a bare-string sibling) is still a keyed
+        # collection. _as_collection keys on ANY value being a dict, so the object is
+        # flattened to its values - every dict item survives (the hard no-silent-drop
+        # rule) and a non-dict entry renders as a visible text row rather than
+        # collapsing the whole object into one bogus row that drops the real findings.
+        self.assertEqual(
+            ber._as_collection({"f1": {"finding": "A"}, "f2": {"finding": "B"}, "note": "c"}),
+            [{"finding": "A"}, {"finding": "B"}, "c"])
+        # an empty dict is no items -> [] (W1); an all-scalar lone record is still
+        # NOT a collection and passes through unchanged
+        self.assertEqual(ber._as_collection({}), [])
+        self.assertEqual(ber._as_collection({"severity": "High", "finding": "f"}),
+                         {"severity": "High", "finding": "f"})
+        data = {"site": "x", "findings": {
+            "f1": {"area": "SEO", "finding": "Missing title tag", "severity": "High"},
+            "f2": {"area": "A11y", "finding": "Low contrast text", "severity": "Low"},
+            "note": "double-check f2 before sending"}}
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build(data, out)
+            text = " ".join(c.text for t in Document(str(out)).tables for r in t.rows for c in r.cells)
+        self.assertIn("Missing title tag", text)                 # real finding kept
+        self.assertIn("Low contrast text", text)                 # real finding kept
+        self.assertIn("double-check f2 before sending", text)    # comment visible, not silently dropped
+
+    def test_empty_object_list_field_skips_section_like_empty_list(self):
+        # W1: a list field authored as an empty OBJECT ({}) must skip its section
+        # exactly like [], not render one spurious blank row. _as_collection returns
+        # [] for an empty dict (an empty object is no items), so _as_rows yields no
+        # rows and the section is omitted.
+        self.assertEqual(ber._as_collection({}), [])
+        for empty in ({}, []):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build({"site": "x", "findings": empty}, out)
+                headings = [p.text.lower() for p in Document(str(out)).paragraphs]
+            self.assertFalse(any("findings hurting" in h for h in headings), repr(empty))
+        # nested empty-object list fields skip their sections too (no blank row)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "scorecard": {"overall": "Weak", "rows": {}},
+                       "web_vitals": {"metrics": {}}, "key_dates": {"items": {}}}, out)
+            headings = [p.text.lower() for p in Document(str(out)).paragraphs]
+        for absent in ("measured posture", "core web vitals", "key dates"):
+            self.assertFalse(any(absent in h for h in headings), absent)
+        # a non-empty finding still renders its section (guard against over-skipping)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "findings": [{"area": "A", "finding": "real one",
+                                                  "severity": "High"}]}, out)
+            headings = [p.text.lower() for p in Document(str(out)).paragraphs]
+        self.assertTrue(any("findings hurting" in h for h in headings))
+
+    def test_partial_trend_dict_with_bad_nested_subfields_builds_clean(self):
+        # U5 (structural, via normalize()): add_trend_section / add_trend_table read
+        # trend.latest_delta, latest_delta.pages_scanned, latest_delta.scorecard, and
+        # trend.quarters; a truthy non-dict/non-list (a partial hand-authored trend)
+        # would crash. normalize() coerces every one so the section degrades cleanly.
+        for bad_trend in ({"latest_delta": "corrupt", "quarters": "x"},
+                          {"latest_delta": {"scorecard": "nope", "pages_scanned": "no"},
+                           "quarters": 5},
+                          {"latest_delta": [1, 2], "quarters": {"a": 1}}):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build({"site": "x", "slug": "x", "progress": {"trend": bad_trend}}, out)
+                self.assertTrue(out.is_file(), repr(bad_trend))
+
+    def test_trend_scorecard_with_non_dict_rows_builds_clean(self):
+        # V3: U5 coerced the trend scorecard CONTAINER to a list but not its ITEMS, so
+        # a non-dict row (str/None) crashed add_trend_table's row.get(). _normalize_trend
+        # now routes the scorecard through _as_rows (like the top-level scorecard.rows),
+        # so a corrupt row degrades to a dict and the build never crashes.
+        for bad_scorecard in (["SEO improved", {"category": "TLS", "prev_band": "Weak", "band": "Strong"}],
+                              [None, {"category": "TLS"}],
+                              [123, "x"]):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build({"site": "x", "slug": "x", "progress": {"trend": {
+                    "quarters": ["Q1", "Q2"], "latest_delta": {"scorecard": bad_scorecard}}}}, out)
+                self.assertTrue(out.is_file(), repr(bad_scorecard))
+        # a valid trend scorecard still renders its QoQ row
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "slug": "x", "progress": {"trend": {
+                "quarters": ["2026 Q1", "2026 Q2"], "latest_delta": {
+                    "scorecard": [{"category": "Security", "prev_band": "Weak", "band": "Adequate"}],
+                    "prev_quarter": "2026 Q1", "quarter": "2026 Q2"}}}}, out)
+            text = " ".join(c.text for t in Document(str(out)).tables for r in t.rows for c in r.cells)
+        self.assertIn("Security", text)
+
     def test_non_finite_score_renders_not_measured_not_crash(self):
         # S5: a NaN or +/-Infinity score (json.loads accepts both, so one can
         # round-trip in from upstream) must render "not measured" instead of

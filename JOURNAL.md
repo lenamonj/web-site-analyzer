@@ -5,368 +5,6 @@ changed, why, what was verified, and the single most useful next step.
 
 ---
 
-## 2026-07-05 - JOURNAL rotation
-
-Rotated at >500 lines: moved the oldest 5 entries (2026-07-05 - Q9: a clear message, not a raw traceback, on invalid JSON input through 2026-07-05 - Phase R: second full convergence audit (NOT converged - 1 High, 6 Medium)) to JOURNAL-archive.md, kept the last 10 in JOURNAL.md. History is preserved, not rewritten. Standing after the Phase S audit: 1 High (S1), 4 Medium (S2-S5), 4 Low (S6-S9) open; NOT converged.
-
-## Iteration 15 - S1: kill the fabricated verdict at the shared tag_attrs_re factory (High)
-
-**Task:** S1, the only High from the Phase S audit and the last iteration in the budget. The shared
-`tag_attrs_re` factory (common.py:42) ended the tag name with `\b`, which matches at the
-name->hyphen joint, so every consumer parsed a hyphenated custom element as its bare-tag prefix and
-fabricated a verdict for a tag that was not present.
-
-**Files changed:** common.py (tag_attrs_re: `r"<%s\b%s>"` -> `r"<%s(?![-\w])%s>"`, with a docstring
-naming the class and the sibling leaf regexes it mirrors). test_review_tools.py (added
-test_shared_tag_attrs_re_ignores_hyphenated_custom_elements). README.md (count resync 381->382).
-BACKLOG.md (S1 done), JOURNAL.md (this entry).
-
-**Verification:** factory returns [] for <form-field>, <img-comparison-slider>, <script-loader>,
-<a-scene>, <link-preview>, <iframe-embed>; still matches <form>, <form >, <form\n>, <form attr=x>.
-Consumer level: check_form_actions on a <form-field>-only page -> "info" (honest "no forms", not the
-fabricated "fail"); a real insecure <form> still -> "fail"; check_image_dimensions on
-<img-comparison-slider>*3 -> "info" (no images, not the fabricated "warn"); a real dimensionless
-<img> still -> "warn" with the right count. New test is a FACTORY-level guard so no present-or-future
-consumer reinherits the class; mutation check: reverting to `\b` fails it. Full battery: scanner 382
-(was 381), builder 40, charts 8 all green; README guard exit 0 at 422; py_compile clean.
-
-**Learnings:** the fix that closes a leaf-by-leaf defect class for good is to fix the SHARED FACTORY
-and test AT the factory, not at one consumer - a consumer-level test would have protected only
-scan_page_security or scan_design while the other four consumers stayed exposed. This is the
-counterpart to the Phase S finding: the class stayed open for seven audits because it was fixed at
-the leaves and tested at the leaves, so the factory was never in any test's blast radius. Now it is.
-
-**Next:** BUDGET EXHAUSTED - this was iteration 15 of 15, the hard stop. S1 (the one High) is fixed
-and verified. Open at budget end: 4 Medium (S2 HEAD-5xx broken-link, S3 bare-string-to-list-field
-per-char corruption, S4 non-dict-container traceback, S5 NaN/Inf-score traceback) and 4 Low
-(S6-S9), all filed with reproductions and acceptance checks in BACKLOG Phase S ready for the next
-run. NOT converged: the Definition of done requires a full audit pass finding zero High AND zero
-Medium, and four reproduced Medium remain. No promise. To finish the job, a future run should clear
-S2-S5, then re-run the certifying full audit; and per the S1 learning, when it fixes the next class
-it should fix the shared helper and test there, not leaf by leaf.
-
-## Manual pass (not jeffy) - clear Phase S S2-S9 (2026-07-05)
-
-**Task:** the user asked to clear the remaining Phase S findings directly, outside the jeffy loop
-(which had ended at its budget), and to leave the changes uncommitted for their review. Fixed all
-four Medium (S2-S5) and four Low (S6-S9) in one pass, each with a regression test.
-
-**Files changed:**
-- scan_links.py (S2): GET-retry guard widened from `status in (405, 501, None)` to `status is None
-  or status == 405 or (500 <= status < 600)`, so a HEAD-5xx/GET-ok link is not a fabricated break.
-- build_exec_report.py (S3/S4/S5): added `import math`; a `_as_str_list` helper and a bare-string
-  guard IN `_as_rows` (S3 was broader than filed - `_as_rows` iterated a bare-string field per
-  character, so findings/recommendations/action_plan/evidence shared the corruption); a container
-  coercion loop that turns a non-dict scorecard/web_vitals/key_dates/assessment/progress into {}
-  (S4); a `_finite_number` helper gating both score checks so NaN/Inf render "not measured" (S5).
-- scan_dns_email.py (S6): check_mta_sts/check_tls_rpt/check_bimi now read the ok flag and say
-  "presence could not be determined" on a failed lookup instead of asserting absence.
-- scan_http_security.py (S7): added `_csp_policies`; check_clickjacking now treats framing as
-  protected if ANY separately-enforced CSP policy restricts frame-ancestors (the browser
-  intersection), not first-header-wins.
-- test_review_tools.py (S8): the stdlib-only charter guard globs every non-test tools/*.py now,
-  with a coverage assertion naming the eight orchestration files it previously skipped.
-- draft_report_data.py (S9): DECISION - the "name every subject" rule is absolute; dropped
-  LIST_ALL_PAGES and the "+N more" branch, `_page_list` enumerates every page.
-- Regression tests added: S2 (link fallback), S3/S4/S5 (builder), S6 (dns lookup failure), S7
-  (clickjacking intersection); S8 coverage assertion in the guard test; S9 test rewritten to assert
-  full enumeration. README.md count resync. BACKLOG.md, JOURNAL.md.
-
-**Verification:** every fix reproduced-then-fixed with a direct call before the test, then the full
-battery: scanner 382 -> 385, builder 40 -> 43, charts 8, all green; README guard in sync at 428
-(exit 0); py_compile clean; no em/en dashes. The one pre-existing test that codified the S9
-truncation was updated (behavior changed by the rule decision, not a silent break).
-
-**Learnings:** S3 is the clearest repeat of the project's signature lesson - the finding named
-quick_wins/strengths/weaknesses, but the SAME per-character bug lived in the shared `_as_rows`
-helper feeding four other fields; fixing only the named spots would have left the helper as a latent
-corruptor. The rule holds across data-shape bugs, not just regex bugs: find the shared helper and
-fix it there. Also, S9 shows a "Low" filed as a decision is cheap to resolve when the user has a
-standing rule - the memory ("findings name every subject") settled it without a round trip.
-
-**Next:** all Phase S findings (S1-S9) are closed and the backlog is empty. Changes are UNCOMMITTED
-for the user's review (they will commit and push). Convergence is not yet FORMALLY established: a
-fresh certifying full audit has not run since these fixes landed, and the DoD requires that single
-clean pass. The honest next step, whenever the user wants it, is one more full convergence audit -
-if it comes back zero High / zero Medium, the promise holds.
-
-## Iteration 1 (jeffy N=1) - Phase T: eighth FULL convergence audit (backlog empty)
-
-**Task:** backlog empty after S1-S9, so this /jeffy 1 iteration is the certifying full convergence
-audit. It did NOT converge.
-
-**Method / fresh evidence:** fresh battery first - scanner 385, builder 43, charts 8 all OK on
-py3.13; README guard in sync; py_compile clean (31 files); a static scan found no 3.11+ features.
-Then four independent adversarial auditors (A scanners, B report pipeline, C orchestration/trend,
-D tests/docs/deps/compat/security), each told to scrutinize the just-landed S1-S9 fix code hardest
-because new code is where new defects hide. I reproduced every High/Medium candidate myself.
-
-**Files changed:** BACKLOG.md (new Phase T section, T1-T4), JOURNAL.md. No source changed - an
-empty-backlog iteration audits and files, it does not fix.
-
-**Findings (all reproduced by me):**
-- T1 HIGH - _as_rows: the S3 fix closed only the bare-STRING field case. A scalar field
-  (findings=123) is not iterable -> TypeError kills the build; a single dict field (one finding
-  object without the [ ]) iterates its KEYS -> renders four bogus "severity/area/finding/evidence"
-  rows and DROPS the real finding. My repro: both, exit-0 silent drop for the dict case.
-- T2 MEDIUM - add_trend_section: the S4 coercion covered the five top-level containers but not the
-  nested progress.trend. My repro: {"progress":{"trend":"oops"}} -> AttributeError, exit 1.
-- T3 MEDIUM - trends.quarter_of: `except (TypeError, ValueError)` misses KeyError, so a dict-valued
-  measured_at_utc in a corrupt ledger line crashes the trend layer (orchestrator mid-pipeline +
-  the trends CLI raw traceback). My repro: quarter_of({"x":1}) -> KeyError slice(0,4,None).
-  Pre-existing, not from an S-fix.
-- T4 MEDIUM(borderline) - README:152 lists findings as a capped list, contradicting the S9 fix,
-  README:98/44, and the test. My repro: the three README lines are mutually contradictory.
-
-**Audit scores (rescored this pass, highest finding severity per dimension):**
-- Correctness / UX of the deliverable: HIGH (T1 silent drop + fabricated content in the report).
-- Error handling: MEDIUM (T2, T3 raw tracebacks where a clean skip/None is the contract).
-- Documentation: MEDIUM (T4 doc contradicts code and its own siblings).
-- Testing: NONE - Slice D neuter-proved ALL NINE new S-tests genuinely fail when their target is
-  reverted (zero vacuous), and found no tautologies; the T1/T2 gaps are missing COVERAGE captured
-  by those findings, not unsound tests.
-- Security: NONE (no eval/exec/pickle/shell; slug scrub blocks traversal; redirects bounded; CrUX
-  key never reaches output - re-reproduced).
-- Dependency hygiene: NONE (stdlib-only by full AST scan; pins sane; 3.10.19 ran all suites green).
-- Performance / Architecture / Developer experience / Observability: NONE found this pass.
-- Overall: HIGH. NOT CONVERGED (1 High, 3 Medium).
-
-**Learnings:** the class-completeness trap sprang an eighth time, and this pass makes its shape
-undeniable - THREE of the four findings are my own Phase S fixes left one sibling short: S3 fixed
-`str` but not the dict/scalar it implied; S4 coerced top-level containers but not the nested one
-they implied; S9 fixed the code and ONE doc line but not the second that describes the same thing.
-The durable rule, now proven across regex, data-shape, and doc classes alike: when you fix a case,
-enumerate its siblings (every input type, every nesting level, every doc line that states the
-behavior) and close them in the same change, or the audit will find the one you skipped. This is
-also exactly why the DoD forbids self-certification: I fixed S1-S9 and believed them complete, and
-an independent fresh-eyes audit falsified that within one iteration.
-
-**Next:** /jeffy 1 budget is exhausted (this was the single iteration). T1-T4 are filed with
-reproductions and acceptance checks. NOT converged: 1 High (T1), 3 Medium (T2-T4) open. No promise.
-To finish: clear T1-T4 (all small, well-scoped), then re-run the certifying full audit; and fix
-each as a CLASS (all sibling input types / nesting levels / doc lines at once), not the one case
-the repro happened to hit.
-
-## Iteration 1 (jeffy N=10) - T1: _as_rows whole-field coercion for any non-list type (High)
-
-**Task:** T1, the only High from the Phase T audit - _as_rows crashed on a scalar field and silently
-dropped + fabricated on a single-dict field, because the S3 fix closed only the bare-string case.
-
-**Files changed:** build_exec_report.py (_as_rows: `if items is None: return []` then `if not
-isinstance(items, (list, tuple)): items = [items]`, replacing the str-only guard). test_exec_report.py
-(test_as_rows_handles_a_whole_field_of_any_non_list_type). README.md (builder count 43->44 resync).
-BACKLOG.md, JOURNAL.md.
-
-**Verification:** _as_rows over None->[], scalar/bool->[{}] (no crash), single dict->one row with all
-content preserved (never key-iterated), string->{text_key}, list/mixed/tuple unchanged. End to end a
-single-dict findings field renders "No CSP on homepage" (real finding kept), and a scalar findings
-field builds instead of crashing. Fixed AS A CLASS per the Phase T lesson: every non-list input type
-at once, not just the dict case the repro hit. Mutation check: reverting to the S3 str-only guard
-fails the new test. Full battery green - builder 43 -> 44, scanner 385, charts 8; README guard exit 0
-at 429.
-
-**Learnings:** the class-complete form was simpler than the S3 patch it replaced - one `not
-isinstance(..., (list, tuple))` covers str, dict, and every scalar, versus the special-cased `str`
-guard that looked complete but left three input types exposed. Narrow fixes are often more code than
-the general one; enumerating the class up front is both safer and smaller.
-
-**Next:** T2 (add_trend_section crash on a non-dict nested progress.trend, Medium). Zero High now; 3
-Medium remain (T2, T3, T4). Not converged. No promise.
-
-## 2026-07-05 - JOURNAL rotation
-
-Rotated at >500 lines: moved the oldest 5 entries (2026-07-05 - Q12: complete _as_rows across every builder-consumed list field through 2026-07-05 - Q16: gate on is_file and catch OSError in the two JSON mains) to JOURNAL-archive.md, kept the last 10. History preserved, not rewritten. Standing after Phase T iteration 1: T1 (High) done; 3 Medium (T2-T4) open; NOT converged.
-
-## Iteration 2 (jeffy N=10) - T2: coerce a non-dict nested progress.trend (Medium)
-
-**Task:** T2. The S4 container coercion covered the five top-level containers but not the nested
-progress.trend, which add_trend_section reads with .get(); a non-dict trend raw-tracebacked.
-
-**Files changed:** build_exec_report.py (`if not isinstance(trend, dict): trend = None` right after
-`trend = progress.get("trend")`). test_exec_report.py (test_non_dict_nested_progress_trend_skips_
-section_not_crash). README.md (builder 44->45 resync). BACKLOG.md, JOURNAL.md.
-
-**Verification:** all four non-dict trend variants (string, list, number, bool) build clean with the
-Progress section skipped; a valid trend dict still renders "Progress this quarter" with its resolved-
-findings content; has_exec_summary now correctly treats a bad trend as absent so a real progress
-strip still shows. Mutation check: removing the coercion fails the new test. Full battery green -
-builder 44 -> 45, scanner 385, charts 8; README guard exit 0 at 430.
-
-**Learnings:** class-completeness is bounded by REALISM, not by syntax. T1's class was every non-list
-input TYPE at one level, all equally plausible hand-author slips. T2's realistic class is every non-
-dict TYPE of progress.trend at one level - also handled at once by the isinstance guard. I explicitly
-did NOT harden the deeper add_trend_section reads (latest_delta/pages_scanned), because those only
-fire from a hand-authored partial trend dict, which is not a realistic input (trend is machine-
-generated); the rubric's "no speculative findings / no unnecessary defensive programming" says stop
-at the realistic boundary. Over-fixing is its own failure mode.
-
-**Next:** T3 (trends.quarter_of raises KeyError on a dict-valued ledger timestamp, Medium). Zero High;
-2 Medium remain (T3, T4). Not converged. No promise.
-
-## Iteration 3 (jeffy N=10) - T3: gate quarter_of on str; replenishment finds T5 (Medium)
-
-**Task:** T3. trends.quarter_of caught only (TypeError, ValueError), so a dict-valued measured_at_utc
-in a corrupted ledger line raised an uncaught KeyError (ts[0:4] is a slice-key lookup), crashing
-trend_from_ledger and the trends CLI.
-
-**Files changed:** trends.py (quarter_of: `if not isinstance(ts, str): return None` up front, then
-except narrowed to ValueError since the str gate makes TypeError dead). test_review_tools.py
-(test_dict_timestamp_ledger_line_does_not_crash_the_trend_layer). README.md (scanner 385->386
-resync). BACKLOG.md (T3 done, T5 filed), JOURNAL.md.
-
-**Verification:** quarter_of returns None for dict/list/int/None/float/bool and every malformed
-string, the right quarter for a valid stamp; a ledger with a dict-ts middle line skips it and still
-builds a two-quarter trend; the trends CLI on such a ledger exits 0 with no traceback (probe cleaned
-up). Mutation check: reverting to the except-only guard fails the new test. Full battery green -
-scanner 385 -> 386, builder 45, charts 8; README guard exit 0 at 431.
-
-**Replenishment (partial audit of the least-recently-scored surface - my new T1-T3 code) - ONE new
-finding (T5, filed):** swept the builder's field-iteration sites for T1-class siblings: every top-
-level hand-authorable list field is normalized (findings/recs/action_plan/evidence + nested rows/
-metrics/items via _as_rows now class-complete; quick_wins/strengths/weaknesses via _as_str_list;
-containers coerced to {}; progress.trend to None), and the only remaining bare-field loops (451/493)
-are on machine-generated trend delta - the unrealistic deep-nesting I bounded out of T2. Clean there.
-But probing the T3 THREAT MODEL (external ledger corruption) beyond the timestamp found that a
-corrupted entry with a non-dict metrics, bands, OR issues crashes build_trend (the `or {}` idiom
-guards None, not a truthy non-dict) - the exact class-completeness sibling T3 left open. Reproduced
-all three; filed T5 (Medium, same threat model and severity as T3) ahead of T4 (a crash outranks a
-doc line).
-
-**Learnings:** the replenishment did its actual job this time - it caught the T3 class one field wide
-before the next full audit could. T3 as filed named the timestamp; the class is "any wrong-typed
-sub-field of a corrupt-but-valid-dict ledger entry crashes the trend layer." The lesson holds: a
-finding scoped to one field implies its siblings under the same threat model. I filed rather than
-batched (one task per iteration), so T5 fixes the metrics/bands/issues trio class-complete next.
-
-**Next:** T5 (build_trend crash on a non-dict metrics/bands/issues, Medium) - the top open item now.
-Zero High; 2 Medium remain (T5, T4). Not converged. No promise.
-
-## Iteration 4 (jeffy N=10) - T5: class-complete coercion of ledger-entry sub-dicts (Medium)
-
-**Task:** T5 (found by iteration 3's replenishment). A corrupt-but-valid-dict ledger entry with a
-non-dict metrics/bands/issues crashed build_trend - the `or {}` idiom guarded None but not a truthy
-non-dict like a list.
-
-**Files changed:** trends.py (added a `_dict(x)` helper = x if isinstance(x, dict) else {}; applied
-at both nesting levels of _score/_page_metric/_series - metrics then scores/pages - and at
-_delta_rows bands). scan_site.py (diff_issues coerces a non-dict issues to {}). test_review_tools.py
-(test_non_dict_entry_subfield_does_not_crash_the_trend_layer). README.md (scanner 386->387 resync).
-BACKLOG.md (T5 done), JOURNAL.md.
-
-**Verification:** every non-dict metrics/bands/issues (str/list/int) and the deeper metrics.scores/
-pages non-dict all build a trend; a well-formed ledger still yields the real overall series
-[0.4, 0.7]. Mutation check: reverting the coercions to `or {}` fails the new test. Full battery
-green - scanner 386 -> 387, builder 45, charts 8; README guard exit 0 at 432.
-
-**Replenishment (partial audit - the trend layer I just touched) - clean, no new finding:** fuzzed
-build_trend against every entry field (measured_at_utc/bands/metrics/issues/pages_scanned/target/an
-unknown key) crossed with every bad type (str/list/int/float/bool/None/dict) - ZERO crashes. The
-only remaining `or {}` token in trends.py is inside the _dict docstring, not a live idiom.
-pages_scanned is stored, never dereferenced, so any type is safe. The T3/T5 ledger-corruption class
-is now complete at the realistic (entry-sub-field) level; the deeper item-level corruption (a dict
-issues whose fail-list holds a non-dict) is beyond the realistic boundary, consistent with the T2
-decision, so I did not add speculative guards.
-
-**Learnings:** the fix was smaller for being class-complete - one `_dict` helper replaced five
-scattered `or {}` half-guards and closed metrics/bands/issues plus their inner scores/pages in one
-pass, and a type-x-field fuzz proved completeness in seconds rather than trusting a hand list. Fuzz-
-to-confirm is the cheap complement to fix-the-class: enumerate the inputs, assert no crash, done.
-
-**Next:** T4 (README:152 lists findings as a capped list, contradicting the S9 fix - XS doc fix),
-the last Phase T item. When it clears the backlog empties and the certifying full audit re-runs.
-Zero High; 1 Medium (T4) remains. Not converged. No promise.
-
-## Iteration 5 (jeffy N=10) - T4: README no longer lists findings as a capped list (Medium/doc)
-
-**Task:** T4. README:152 listed findings among "capped lists", stale after the S9 fix made findings
-enumerate every affected page - it contradicted README:98/44 and the S9 test.
-
-**Files changed:** README.md (line 152 rewritten to "The one capped list, the capture page set,
-names every page it dropped; findings are never capped and enumerate every affected page.").
-BACKLOG.md (T4 done), JOURNAL.md.
-
-**Verification:** grepped every doc (README/SKILL/CLAUDE/CAPTURE) for finding+cap/truncation - 152
-was the only stale line; the other "capped" mentions (README:111/249, SKILL:49) are the capture page
-set and the 500-page crawl cap, both genuinely capped, so the class was one line. check_readme_
-counts.py exit 0; README dash-clean; full battery green (scanner 387, builder 45, charts 8).
-
-**Replenishment (integration audit of the cumulative T1-S5 builder robustness) - clean, no new
-finding:** built ONE maximally-hostile-but-plausible hand-authored report exercising every builder
-hazard at once - findings as a single dict (T1), recommendations/evidence as bare strings (T1),
-quick_wins as a string (S3), web_vitals as a list and key_dates as a scalar (S4), progress.trend as
-a string (T2), and a NaN score (S5). It built with exit 0, the real finding "No CSP on homepage" was
-preserved (not dropped), the quick win and recommendation rendered as single items, and the NaN row
-showed "not measured". No single unit test covers all hazards together, so this integration check is
-the meaningful "did the five fixes compose" evidence. They do.
-
-**Learnings:** an integration replenishment (all hazards in one input) is a stronger convergence
-signal than the sum of unit tests, because robustness fixes can interact - e.g. the S4 container
-coercion runs before the T1 _as_rows normalization, and only an all-at-once input proves the order
-is right. Worth doing once a class of fixes is complete, before the certifying audit.
-
-**Next:** BACKLOG.md now has ZERO open tasks - every Phase T finding (T1-T5) is closed. The next
-iteration runs the certifying FULL convergence audit per the Method: a single fresh-evidence pass
-that rescores every dimension. Only if it finds zero High and zero Medium does the DoD hold and the
-promise fire. Standing: zero High, zero Medium, zero Low open. Not yet converged - the certifying
-audit has not run since T1-T5 landed. No promise this turn.
-
-## 2026-07-05 - JOURNAL rotation
-
-Rotated at >500 lines: moved the oldest 5 entries (2026-07-05 - JOURNAL rotation through Iteration 14 - Phase S: seventh FULL convergence audit (backlog was empty)) to JOURNAL-archive.md, kept the last 10. History preserved, not rewritten. Standing after Phase T iteration 5: T1-T5 all done, backlog empty; the certifying full convergence audit runs next. NOT converged yet.
-
-## Iteration 6 (jeffy N=10) - Phase U: ninth FULL convergence audit (backlog empty)
-
-**Task:** backlog empty after T1-T5, so this iteration is the certifying full convergence audit. It
-did NOT converge.
-
-**Method / fresh evidence:** fresh battery green (scanner 387, builder 45, charts 8; README guard in
-sync; py_compile clean 31 files; no 3.11+ features). Four adversarial auditors, each told to
-scrutinize the T1-T5 fix code hardest. Slice D (tests/docs/deps/security) was interrupted mid-run
-when the user stopped an accidental second /jeffy launch; its checks are covered by this run's per-
-task mutation checks (T1/T2/T3/T5 tests were each neuter-verified when written) plus the battery, so
-the gap is low-risk. I reproduced every High/Medium candidate myself.
-
-**Files changed:** BACKLOG.md (Phase U, U1-U4), JOURNAL.md. No source changed - an empty-backlog
-iteration audits and files, it does not fix.
-
-**Findings (all reproduced by me):**
-- U1 HIGH - the S4 container-coercion loop covers 5 top-level containers but OMITS scope, the 6th.
-  My repro: {"scope":"Homepage and top nav"} -> AttributeError at _scope_text, no deliverable. AST-
-  enumerated that scope is the ONLY omitted container (the class is now closed by adding one key).
-- U2 MEDIUM - the T5 issues coercion stopped at the `issues` field; issues.fail/warn as a non-list
-  crashes diff_issues, and it runs on EVERY fresh run via attach_delta (Slice C), so one corrupt
-  append-only line poisons all future runs. My repro: issues.fail None/str/dict all crash.
-- U3 MEDIUM - a list/dict value used as a dict-lookup key (band/severity/rating/priority) raises
-  TypeError unhashable. My repro: list-valued band/severity/priority each crash the build.
-- U4 MEDIUM (low realism) - findings authored as a keyed OBJECT (dict of finding-dicts) silently
-  drops every entry via T1's "lone dict = one item". My repro: two findings -> one blank row.
-
-**Audit scores (rescored, highest finding severity per dimension):**
-- Correctness / UX of the deliverable: HIGH (U1 crash kills the report on a plausible scope shape;
-  U4 silent drop).
-- Error handling: MEDIUM (U2, U3 raw tracebacks where a clean degrade is the contract).
-- Testing: NONE reproduced (the T1-T5 tests are non-vacuous by their write-time mutation checks;
-  slice D's independent vacuity sweep did not complete but nothing contradicts that).
-- Security / Dependency hygiene / Documentation: not independently re-scored this pass (slice D
-  interrupted); the battery + T4 grep + prior 3.10.19 run leave no known issue, but I am NOT
-  claiming these dimensions certified this iteration - a clean slice D is owed before convergence.
-- Performance / Architecture / DevEx / Observability: NONE found.
-- Overall: HIGH. NOT CONVERGED (1 High, 3 Medium).
-
-**Learnings:** ninth audit, and the class-completeness trap recurred TWICE more - S4's container
-coercion missed scope (U1) and T5's ledger coercion missed the fail/warn sub-lists (U2). The habit
-is still not landing: I keep declaring a coercion "class-complete" after handling the level the repro
-hit, and the audit keeps finding the adjacent level. New concrete rule for coercion fixes: when I add
-an isinstance/`_dict` guard, immediately (a) AST-enumerate every peer read at the SAME level (U1's
-six containers) and (b) descend one level into each guarded container and guard its sub-fields too
-(U2's fail/warn). Do both in the same change and prove with a fuzz, or the next audit files the
-sibling. Also: I must not call slices "covered" loosely - slice D genuinely did not run, so I did not
-claim its dimensions certified.
-
-**Next:** U1 (scope coercion, High) - the top open item. Zero Low; 1 High, 3 Medium open. When U1-U4
-clear, re-run the certifying full audit WITH a complete slice D. Not converged. No promise. ~4
-iterations of budget remain.
-
 ## Iteration 7 (jeffy N=10) - U1: coerce a non-dict top-level scope (High)
 
 **Task:** U1. The S4 container-coercion loop covered five top-level containers but omitted scope, the
@@ -459,3 +97,303 @@ U5. See the reply to the user.
 
 **Next:** PAUSED for a user scope decision on the input-robustness meta-class (structural fix vs.
 decline-as-Low). U4, U5 open. Zero High; 2 Medium open. Not converged. No promise.
+
+## Iteration 1 (jeffy N=15) - U6: structural normalization boundary closes the malformed-input meta-class (user-approved)
+
+**Task:** U6 (structural, replacing instance-patches U4 and U5 per the three-strike rule). Iteration 9
+of the prior run paused and put the scope decision to the user: U2/U3/U4/U5 are one meta-class (the
+docx builder / trend layer crashes or mis-renders on malformed hand-authored exec_report_data.json),
+and patching each site is whack-a-mole. This run relaunched without an answer, so I re-put the decision
+via AskUserQuestion. User chose the STRUCTURAL boundary over decline-as-Low or keep-patching.
+
+**Files changed:** build_exec_report.py (new `normalize(data)` called first in build(); helpers
+`_as_collection` and `_normalize_trend`; module constants TOP_CONTAINERS/LIST_FIELDS/NESTED_LIST_FIELDS;
+retired the scattered S4 container-coercion loop and the T2 nested-trend guard, which normalize()
+subsumes). test_exec_report.py (test_keyed_object_of_item_dicts_renders_every_item_not_one_bogus_row for
+U4; test_partial_trend_dict_with_bad_nested_subfields_builds_clean for U5). README.md (badge/summary/
+builder comment 435->437, 47->49). BACKLOG.md (U4/U5 marked done via U6; U6 recorded with the class
+closure and the user decision). JOURNAL.md.
+
+**What normalize() does (the single boundary):** coerces the six top-level containers to {} when non-
+dict; flattens a list field authored as a keyed OBJECT of item-dicts to list(values) so EVERY item
+renders (the no-silent-drop rule - this is U4's real fix, not a drop-and-carry-on); and coerces the
+nested trend (latest_delta/pages_scanned to {}, scorecard/quarters to [] - class-complete, scorecard
+added though U5 named only three fields, because add_trend_table iterates it as a row-list). Per-ITEM
+coercion stays in _as_rows/_as_str_list and per-value hashing in _hkey (local, not whack-a-mole).
+
+**Verification:** builder 47 -> 49 green; scanner 388, charts 8 green; README guard exit 0 at 437;
+compileall clean; dash-clean on all changed files. Mutation check: neutering _as_collection to identity
+fails the U4 test (keyed object stays a dict, both findings dropped); neutering _normalize_trend to a
+no-op fails the U5 test (str latest_delta -> AttributeError in add_trend_section). Both confirmed
+non-vacuous. Accept criteria for U4 and U5 both met (keyed-object renders every item + lone dict still
+one row; partial trend builds clean + valid trend still renders).
+
+**Learnings:** the iteration-9 meta-class read was right and the user confirmed the structural call. The
+boundary is genuinely simpler than the guard pile it replaces (removed two in-build coercion blocks,
+added one named function with a clear contract: normalize owns field-shape, _as_rows owns item-shape).
+The class-complete habit paid off again - latest_delta.scorecard was a shape-dependent read the U5
+finding did not name; enumerating add_trend_section/add_trend_table's reads before declaring done caught
+it. This closes the malformed-exec_report_data meta-class at a boundary; a future audit should not
+re-file a per-site .get()/lookup crash on that file - the fix is normalize(), and only a shape-dependent
+read that normalize() does not cover is a new finding.
+
+**Next:** zero open tasks remain. The next iteration must run the certifying FULL convergence audit
+(the Definition-of-done gate): rescore every applicable dimension against the rubric with fresh
+evidence, hardest on the just-changed normalize() code. Not converged yet - the audit has not run since
+these changes. No promise this iteration.
+
+## 2026-07-05 - JOURNAL rotation
+
+Rotated at >500 lines: moved the oldest 6 entries (the 2026-07-05 rotation marker through Iteration 1 (jeffy N=10) - T1) to JOURNAL-archive.md, kept the last 10 here. History preserved, not rewritten. Standing: the malformed-input meta-class is closed by the U6 normalize() boundary; zero open tasks; the certifying full convergence audit has NOT run since the U6 changes, so NOT converged.
+
+## Iteration 2 (jeffy N=15) - Phase V: tenth FULL convergence audit (backlog empty)
+
+**Task:** Backlog had zero open tasks after U6, so this iteration is the certifying full convergence
+audit. Ratchet: no Converged line exists, so it does not apply. Filled the Operating envelope
+(PLAN.md section 2a) first - it was absent; the text documents the trust classes the eight prior
+audits already reasoned by (scanned-site responses adversarial-but-bounded, exec_report_data.json
+user-error, state files state-at-rest, CLI/env user-error).
+
+**Method:** four independent adversarial auditors (the established project practice) over slices
+A scanners, B report builder (hardest on the new normalize()), C orchestrator/trends/history,
+D tests/docs/deps/security. Every in-envelope finding reproduced by me before filing.
+
+**Files changed:** PLAN.md (section 2a Operating envelope). BACKLOG.md (Phase V section: V1 Medium,
+V2/V3 Low, three-strike note). JOURNAL.md.
+
+**Baseline (fresh, green):** scanner 388, builder 49, charts 8, README guard exit 0 at 437,
+compileall clean, Python 3.13.8.
+
+**Findings - 1 Medium, 2 Low. NOT CONVERGED.**
+- V1 (Medium, in-envelope, structural): trends._delta_rows BAND_RANK.get crashes TypeError:
+  unhashable on a ledger entry whose bands dict has a non-hashable VALUE (list/dict). State-at-rest,
+  in-contract ("malformed ledger lines never crash the trend layer"), same class/score as T3/T5/U2.
+  4th instance of that root cause -> three-strike -> filed as ONE structural entry-sanitization
+  boundary at read_history, mirroring U6. Reproduced via build_trend and trend_from_ledger; poisons
+  draft_report_data.main.
+- V2 (Low, in-envelope-but-unrealistic-shape): _as_collection silently drops content on a MIXED keyed
+  object (all-values-dict guard too strict). Two auditors split Medium/Low; the envelope decides Low
+  (a mixed keyed object is beyond a realistic slip), but filed (not declined) because the hard
+  no-silent-drop rule forbids the behavior and the fix is cheap. Reproduced.
+- V3 (Low): trend latest_delta.scorecard items not per-item coerced -> non-dict row crashes
+  add_trend_table; the item-level completion of U5's container-level trend fix.
+
+**Audit scores by dimension (highest finding severity each):** architecture None; code quality Low
+(V2/V3); security None (secrets/.env/sales ignored, no key leak); testing None (recent paths covered;
+guard non-vacuous); error handling Medium (V1 ledger crash); performance None; documentation None
+(dashes/counts/caps/CrUX wording all clean; envelope added); dependency hygiene None (requirements
+pinned, stdlib guard holds); correctness Low (V2 silent drop). Overall highest: Medium. Zero High.
+
+**Learnings:** the U6 boundary and the T3/T5/U2 trends guards each closed CONTAINER-shape robustness
+but not always the VALUES inside a well-formed container - V1 (band value as key), V2 (mixed keyed
+object), V3 (trend row item) are all "container coerced, contents not." V1 crossed the three-strike
+threshold in the trends layer, so it is filed as a structural boundary rather than a fifth guard. V2/V3
+are the builder analog but only Low, so no re-escalation yet; the Phase V note records the escalation
+trigger if the builder keeps leaking item-level gaps after V2/V3.
+
+**Next:** convergence NOT met (1 Medium). Execute V1 (structural ledger-entry sanitization boundary),
+then V2, V3, then a fresh certifying full audit. No promise this iteration.
+
+## Iteration 3 (jeffy N=15) - V1: structural ledger-entry sanitization boundary (Medium, three-strike)
+
+**Task:** V1, the top open item. The trends/ledger layer crashed (TypeError: unhashable) on a
+corrupted-but-valid-JSON ledger entry whose bands dict mapped a category to a non-hashable VALUE
+(list/dict) used as a BAND_RANK lookup key. 4th instance of "trends crashes on a corrupt ledger entry"
+(T3/T5/U2), so filed and fixed as ONE structural boundary, not a fifth per-read guard.
+
+**Files changed:** trends.py (new `_sanitize_entry(e)` coercing each bands value to str-or-None,
+applied to every entry at the top of build_trend; _issue_name made type-safe for a non-string check/
+note/scan). test_review_tools.py (test_corrupt_ledger_value_inside_a_valid_container_does_not_crash).
+README.md (scanner 388->389, total 437->438, badge + file-tree). BACKLOG.md (V1 done), JOURNAL.md.
+
+**Verification:** reproduced V1 (band value list/dict -> unhashable crash) AND a SIBLING the four
+auditors all missed - a resolved issue with a list `note` crashes _issue_name .strip() (AttributeError);
+band-KEY int and score-VALUE list are safe (verified, not filed). After the fix both crash sites build
+clean and a well-formed ledger still yields series [0.4, 0.9], seo improved, resolved finding named.
+Mutation check: neutering _sanitize_entry to identity + reverting _issue_name reproduces the exact
+TypeError: unhashable (test errors). The test forces the band-rank branch by omitting scores - an early
+version passed vacuously because differing scores short-circuit _delta_rows before the band lookup;
+caught by the mutation check and fixed. Full battery green: scanner 389, builder 49, charts 8, README
+guard exit 0 at 438, compileall clean, dash-clean.
+
+**Learnings:** the three-strike structural call paid off concretely - a per-site BAND_RANK patch would
+have shipped while leaving the _issue_name note crash for the next audit (the four auditors, including
+the trends slice, did not find it; I only found it by enumerating every value read at the boundary). The
+boundary + one same-module value guard closes both. Also relearned the vacuous-test trap: a robustness
+test must drive the actual crash path, not a sibling branch that short-circuits it; the mutation check is
+what exposes a vacuous assertion.
+
+**Next:** V2 (mixed keyed-object silent drop, Low) then V3 (trend scorecard item coercion, Low), then a
+fresh certifying full audit. 2 open (V2, V3); both Low; the Phase V full audit this run already scored
+every dimension, so no non-speculative replenishment finding exists to add. Zero High, zero open Medium.
+Not converged (V2/V3 Low remain and the certifying audit must re-run clean on the changed code). No
+promise.
+
+## Iteration 4 (jeffy N=15) - V2: _as_collection flattens a mixed keyed object (Low, no-silent-drop)
+
+**Task:** V2, top open item. A list field authored as a keyed object whose values were NOT all dicts
+(item dicts plus a stray comment key, or a bare-string sibling) fell through _as_collection's all-dict
+guard, then _as_rows collapsed the whole object into one bogus row - silently dropping every real
+finding and showing a wrong count in the deliverable.
+
+**Files changed:** build_exec_report.py (_as_collection: "ALL values dicts" -> "ANY value is a dict";
+dropped the redundant `value and` guard). test_exec_report.py (test_mixed_keyed_object_flattens_and_
+drops_nothing). README.md (builder 49->50, total 438->439, badge). BACKLOG.md (V2 done), JOURNAL.md.
+
+**Verification:** a mixed keyed object now flattens to list(values) - both dict findings render and the
+stray note renders as a visible text row, nothing dropped. A lone finding dict (all scalar values) is
+still one row (U4/T1 preserved); an all-dict keyed object still flattens (U4); empty dict passes through.
+Mutation check: reverting to the all-dict guard fails the new test (mixed object not flattened). Full
+battery green: builder 49 -> 50, scanner 389, charts 8, README guard exit 0 at 439, compileall clean,
+dash-clean.
+
+**Learnings:** the "any value is a dict" signal is the right disambiguation - a keyed collection's values
+are records (dicts), a lone record's values are scalars per the schema, so it separates the two cleanly
+while honoring the no-silent-drop rule (a stray comment becomes visible content, never a dropped finding).
+
+**Next:** V3 (trend latest_delta.scorecard items not per-item coerced, Low), then a fresh certifying full
+audit. 1 open (V3). No non-speculative replenishment finding to add (Phase V scored every dimension this
+run). Zero High, zero open Medium; V3 (Low) remains and the certifying audit must re-run clean on the
+V1/V2 changes, so not converged. No promise.
+
+## Iteration 5 (jeffy N=15) - V3: per-item coercion of the trend scorecard rows (Low)
+
+**Task:** V3, the last open item. U5/normalize() coerced the trend latest_delta.scorecard CONTAINER to a
+list but not its ITEMS, so a non-dict row (str/None) crashed add_trend_table's row.get() on a hand-
+authored partial trend.
+
+**Files changed:** build_exec_report.py (_normalize_trend: scorecard now runs through _as_collection then
+_as_rows(sc, "category") when a list, else [], mirroring the top-level scorecard.rows treatment).
+test_exec_report.py (test_trend_scorecard_with_non_dict_rows_builds_clean). README.md (builder 50->51,
+total 439->440, badge). BACKLOG.md (V3 done), JOURNAL.md.
+
+**Verification:** str/None/scalar rows, a keyed-object scorecard, and a non-list scorecard all build
+clean; a valid trend still renders its "Security" QoQ row. Mutation check: reverting to container-only
+coercion crashes with the exact 'str' object has no attribute 'get'. Full battery green: builder 50 ->
+51, scanner 389, charts 8, README guard exit 0 at 440, compileall clean, dash-clean.
+
+**Learnings:** V3 closes the item-level completion of the U6 builder boundary that V2 started; the trend
+scorecard is now treated identically to the top-level scorecard.rows (one consistent _as_collection +
+_as_rows path). The Phase V three-strike-watch note asked whether the builder would keep leaking item-
+level gaps; V2 and V3 were the two remaining and are now closed, so the boundary coerces both container
+shape AND item shape everywhere it reads a list of records.
+
+**Next:** all V-series findings closed (V1 Medium, V2/V3 Low). Zero open tasks. The next iteration must
+run the certifying FULL convergence audit on the V1/V2/V3-changed code (trends.py sanitizer, _as_collection,
+_normalize_trend) - if it rescores every dimension at zero High and zero Medium in-envelope with fresh
+evidence, that satisfies the Definition of done. Not converged yet (the certifying audit has not run since
+these changes). No promise this iteration.
+
+## Iteration 6 (jeffy N=15) - Phase W: certifying re-audit of V1/V2/V3 (zero High/Medium; 1 Low filed)
+
+**Task:** Backlog empty after V3, so this is the certifying full audit, focused on the code changed since
+Phase V (all localized: trends.py sanitizer/_issue_name, build_exec_report.py normalize/_as_collection/
+_normalize_trend). Ratchet N/A (no Converged line).
+
+**Method:** git diff --name-only HEAD confirmed only the changed code + state/doc files differ since the
+last commit, so the scanner slice and all Phase V slice-A/D clean ground is unchanged with fresh git
+evidence; re-confirmed docs/dashes/deps clean inline (no new imports in either changed file, requirements
+unchanged). Two independent adversarial auditors hammered the changed code for regressions and residual
+gaps; I verified F1 empirically before filing.
+
+**Files changed:** PLAN.md unchanged this iteration; BACKLOG.md (Phase W: W1 filed, F2/F3/F4 declined);
+JOURNAL.md. No source changed (audit iteration).
+
+**Verification / auditor verdict:** BOTH fixes complete and regression-free. Auditor 1 (trends): the V1
+sanitizer + _issue_name closes the COMPLETE set of trend value-level crash sites (24 corruption cases
+across every value read survive; well-formed ledgers still produce correct series/directions/resolved
+names; _sanitize_entry does not mutate shared state or drop fields). Auditor 2 (builder): V2 CANNOT mis-
+render draft_report_data's own output (no draft item type has a dict-valued field, verified across all six
+item types); V3 preserves valid-trend rendering. Battery green: scanner 389, builder 51, charts 8, README
+guard exit 0 at 440, compileall clean, dash-clean.
+
+**Audit scores by dimension (Phase W):** architecture None; code quality Low (F1/W1 cosmetic blank row);
+security None (git: no scanner/crux/env change); testing None (changed paths covered + mutation-checked);
+error handling None (V1 closed the ledger-crash class; auditor confirmed complete); performance None;
+documentation None (dashes/counts/deps clean, README synced); dependency hygiene None; correctness Low
+(W1 cosmetic; F2/F3/F4 out-of-realistic-envelope, Declined). Overall: ZERO High, ZERO Medium. One worth-
+fixing Low (W1). Three Declined (F2/F3/F4) with envelope-based reasons.
+
+**Learnings:** the re-audit confirmed the three-strike structural calls held (V1 sanitizer is complete;
+the auditor's independent 24-case sweep found no sibling I missed). The one new item, W1, is an empty-{}
+list field rendering a blank row - I verified it empirically because the auditor's old-vs-new reasoning
+about the {} path looked internally inconsistent; the behavior (blank row on {}, correct skip on []) is
+real regardless. Declined F2/F3/F4 strictly by the Operating envelope (machine-generated / beyond-realistic-
+slip), not to reach convergence - convergence is already met on severity (zero High/Medium); W1 is a
+worth-fixing Low so it is filed, not deferred-as-Declined.
+
+**Next:** fix W1 (empty dict -> [] in _as_collection), then a final micro-re-audit confirming zero
+High/Medium with W1 closed, then convergence. Zero High, zero Medium; W1 (Low) open. Not converged. No
+promise this iteration.
+
+## 2026-07-05 - JOURNAL rotation
+
+Rotated at >500 lines: moved the oldest 6 entries (Iteration 2 (N=10) T2 through Iteration 6 (N=10) Phase U audit) to JOURNAL-archive.md, kept the last 10 here. History preserved, not rewritten. Standing: V1/V2/V3 landed and the Phase W certifying re-audit found zero High and zero Medium; one worth-fixing Low (W1) is open, three Lows Declined; not yet converged pending W1 and a final clean re-audit.
+
+## Relaunch iteration 1 (jeffy N=6) - W1: empty-object list field skips its section (Low)
+
+**Task:** W1, the last open finding from the Phase W re-audit. A list field authored as an empty object
+({}) rendered a spurious blank row instead of skipping, because _as_collection returned {} for an empty
+dict and _as_rows then wrapped the bare {} as one blank item.
+
+**Files changed:** build_exec_report.py (_as_collection returns [] for an empty dict, before the any-dict-
+value check). test_exec_report.py (test_empty_object_list_field_skips_section_like_empty_list; updated the
+V2 test's _as_collection({}) assertion from {} to []). README.md (builder 51->52, total 440->441, badge).
+BACKLOG.md (W1 done), JOURNAL.md.
+
+**Verification:** findings={} now skips the section exactly like findings=[]; nested scorecard.rows/web_
+vitals.metrics/key_dates.items = {} skip their sections; a real finding still renders; mixed/all-dict/lone-
+dict cases unchanged. Mutation check: removing the empty-dict branch fails the new test ({} != []). Full
+battery green: builder 51 -> 52, scanner 389, charts 8, README guard exit 0 at 441, compileall clean, dash-
+clean. (One expected fallout: my own V2 test hard-coded the old _as_collection({}) == {} behavior; updated
+it to [] since W1 intentionally changes that.)
+
+**Learnings:** W1 completes the empty/degenerate-shape handling of the builder boundary - {} for a list
+field now behaves like [] (no items) rather than one blank record, matching author intent. The loop
+relaunched with an explicit instruction to run the final audit INLINE, since the prior run exhausted its
+15-iteration budget on holding-turns spent waiting for background audit subagents (each turn-end ticks the
+ralph counter).
+
+**Next:** all W-series resolved (W1 fixed; F2/F3/F4 Declined). Zero open tasks. The next iteration runs the
+final certifying re-audit INLINE on the W1 change (and confirms the V-series still clean); if it rescores
+zero High and zero Medium with fresh evidence, the Definition of done is satisfied and it converges. Zero
+High, zero Medium, zero open findings. No promise this iteration (the final audit has not yet run on the
+W1 change).
+
+## Relaunch iteration 2 (jeffy N=6) - CONVERGENCE: certifying full-audit pass, zero High/zero Medium
+
+**Task:** Backlog empty after W1, so this is the final certifying full-audit pass (run INLINE, no
+background agents, so waiting does not consume iterations). Ratchet N/A (no Converged line with a hash).
+
+**Method / evidence:** git diff --name-only HEAD shows only the U6/V-series/W1 code (build_exec_report.py,
+trends.py) and their tests changed since the last commit; everything else (all scan_*.py, common.py,
+htmlmeta.py, registry.py, scan_site.py, report_charts.py, crawler.py, capture_rendered.py, run_review.py,
+etc.) is UNCHANGED, so the Phase V slice-A (scanners) and slice-D (docs/deps/secrets) clean scores hold
+with fresh git evidence. Full battery green: scanner 389, builder 52, charts 8, README guard exit 0 at
+441, compileall clean, dash-clean. Inline adversarial re-verification of the changed code: every list/
+nested-list field authored as {} builds clean (W1); the V-series all still hold post-W1 (V2 mixed keyed
+object keeps its findings, V1 unhashable band value does not crash); a full realistic report renders its
+bottom line, scorecard, findings, and recommendations sections.
+
+**Closing scores by dimension (all zero High, zero Medium in-envelope):** architecture None; code quality
+None (W1 was the last cosmetic Low, fixed); security None (scanners/crux/env unchanged; .env and sales/
+ignored and untracked); testing None (every changed path covered and mutation-checked; 441+8 tests green);
+error handling None (V1 sanitizer closed the trends ledger-crash class, independently confirmed complete);
+performance None; documentation None (dashes/counts/deps clean, README synced); dependency hygiene None
+(requirements pinned, no new imports, stdlib guard holds); correctness None (W1 fixed; F2/F3/F4 Declined by
+the Operating envelope). Observability n/a. Zero open findings; F2/F3/F4 Declined (out of realistic
+envelope), not deferred.
+
+**Convergence:** the Definition of done (PLAN.md section 38: a single full-audit pass rescoring every
+applicable dimension at zero High and zero Medium in-envelope with fresh evidence) is genuinely and
+verifiably true this iteration. This project's PLAN does not require a commit hash, and no autonomous
+commit was made (harness/skill git rules), so the working tree is green and uncommitted for the user's
+review, and a future run should re-audit rather than ratchet.
+
+**Learnings:** the whole U6 -> V1/V2/V3 -> W1 arc closed one meta-class (the builder/trend layer crashing
+or mis-rendering on malformed hand-authored/state-at-rest input) at two boundaries (normalize() for the
+builder, _sanitize_entry for the ledger), which is materially simpler and more complete than the scattered
+per-site guards it replaced. The relaunch ran the final audit inline after the first run exhausted its
+budget on background-agent wait-turns.
+
+**Next:** converged. Nothing open. Outputting the promise.

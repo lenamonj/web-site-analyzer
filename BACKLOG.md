@@ -5,6 +5,169 @@ highest-priority unblocked `todo`. Keep tasks small enough to finish and verify
 in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
+## Phase W - Eleventh (certifying re-audit of V1/V2/V3) findings (2026-07-05)
+Ran the certifying re-audit after V1/V2/V3 landed. Fresh battery green (scanner 389, builder 51, charts 8,
+README guard exit 0 at 440, compileall clean). git diff --name-only HEAD confirms only the changed code
+(trends.py, build_exec_report.py + their tests) and the state/doc files changed since the last commit, so
+the scanner slice and everything Phase V (slices A and D) scored clean is UNCHANGED with fresh git
+evidence; docs/dashes/deps re-confirmed clean inline (no new imports in either changed file, requirements
+unchanged). Two independent adversarial auditors hammered the changed code for regressions and residual
+gaps. VERDICT: both fixes complete and regression-free; the V1 sanitizer closes the complete set of trend
+value-level crash sites (24 corruption cases survive); V2 cannot mis-render draft_report_data's own output
+(no draft item type has a dict-valued field, verified). ZERO High, ZERO Medium. Four Low: one worth fixing
+(W1), three declined as out-of-realistic-envelope. Audit scores in JOURNAL.md (Phase W). Convergence
+severity criteria (zero High/Medium) MET; W1 (a worth-fixing Low, not deferrable as Declined) is the last
+item before a clean convergence.
+
+### Next (Low)
+- [x] **W1 (done, XS)** A list or nested-list field authored as an empty OBJECT ({}) renders a spurious
+  blank row instead of skipping its section. build_exec_report.py _as_collection (approx :573). Reproduced
+  (mine, empirically): findings={} -> the "Key findings hurting the site" section renders with a table of
+  one blank row (area/finding/evidence empty, Low chip), whereas findings=[] correctly skips the section
+  entirely. Cause: _as_collection returns {} for an empty dict (any() over no values is False), then
+  _as_rows wraps the bare {} as one item -> [{}] -> one blank row. LOW: cosmetic (a blank row, no crash, no
+  real content dropped), but writing {} to mean "none" for a documented list field is a plausible hand-
+  author slip and the blank row is visible in the CEO deliverable. Same for scorecard.rows/web_vitals.
+  metrics/key_dates.items = {}. Fix: in _as_collection, return [] for an empty dict (an empty object is no
+  items, not one blank record); non-empty keyed collections and lone dicts are unchanged. Accept: findings/
+  recommendations/action_plan/evidence and the nested scorecard.rows/web_vitals.metrics/key_dates.items
+  authored as {} skip their section exactly like []; a non-empty keyed collection still flattens; a lone
+  finding dict still renders one row; a regression test added and mutation-checked; builder suite green.
+  Done (relaunch iteration 1): _as_collection now returns [] for an empty dict (before the any-dict-value
+  check). Verified findings={} skips the section exactly like findings=[]; nested scorecard.rows/web_
+  vitals.metrics/key_dates.items = {} skip their sections; a real finding still renders; mixed/all-dict/
+  lone-dict cases unchanged. Added test_empty_object_list_field_skips_section_like_empty_list; mutation-
+  checked (removing the empty-dict branch fails it). Updated the V2 test's _as_collection({}) assertion
+  from {} to [] (the intended new behavior). Builder 51 -> 52, scanner 389, charts 8 green; README synced
+  at 441.
+
+### Declined (Phase W - out of realistic envelope, recorded so a later audit does not re-file)
+- F2 (Low): a LONE item dict that contains a nested-dict field (e.g. findings={"area":"SEO","finding":"x",
+  "evidence":{"page":"/x"}}) mis-flattens under V2's "any dict value" rule into bogus rows. DECLINED: no
+  item type in the documented schema or draft_report_data output has a dict-valued field (finding/rec/
+  action_plan/scorecard-row/web_vitals-metric/key_dates-item are all scalar-valued), so this needs doubly-
+  unrealistic hand-authoring; content survives as garbled rows, not a silent drop or crash. The "any dict
+  value" rule is correct for the real schema.
+- F3 (Low): a trend latest_delta.scorecard authored as a BARE row dict (not wrapped in a list) degrades to
+  [] (row dropped) rather than rendering as one row like the top-level scorecard.rows path. DECLINED: the
+  trend scorecard is machine-built by trends.build_trend as a list of dicts; a bare dict there needs a hand-
+  edit of the deep machine-generated trend block. Safe degradation (no crash), beyond a realistic slip.
+- F4 (Low, pre-existing, not V3 scope): progress.trend.latest_delta.resolved_examples authored as a non-
+  iterable scalar (int/float/bool) crashes `for item in <scalar>` in add_trend_section. DECLINED: resolved_
+  examples is machine-generated as a list of strings; a scalar is a wildly off-contract hand-edit of a deep
+  machine field (a string value iterates harmlessly, only int/float/bool crashes), which the Operating
+  envelope (PLAN 2a) classes as machine-generated off-contract -> Low, Declined by default. Not introduced
+  by V1/V2/V3.
+
+## Phase V - Tenth (full) convergence-audit findings (2026-07-05)
+Ran the certifying full convergence audit after the U6 structural normalization boundary landed (fresh
+battery green: scanner 388, builder 49, charts 8, README guard exit 0 at 437, compileall clean, Python
+3.13.8). Filled the Operating envelope in PLAN.md section 2a first (it was absent; documents how the
+eight prior audits already reasoned). Four independent adversarial auditors over slices A (scanners),
+B (report builder, hardest on the new normalize()), C (orchestrator/trends/history), D (tests/docs/deps/
+security). Slices A and D came back clean (A: two out-of-envelope non-findings neutralized by _safe_scan;
+D: docs/counts/deps/secrets all verified clean). B and C surfaced defects; every in-envelope finding was
+reproduced by me before filing. ONE Medium (V1), two Low (V2, V3). Convergence NOT met. The Medium is the
+4th instance of one root cause - the trends/ledger layer crashing on a corrupted-but-valid-JSON ledger
+entry (T3 timestamp, T5 sub-dict type, U2 sublists, now V1 value-as-key) - so per the three-strike rule it
+is filed as ONE structural boundary, not a fifth per-read guard, mirroring the user-approved U6 move for
+the builder. Audit scores in JOURNAL.md (Phase V).
+
+### Now (Medium)
+- [x] **V1 (done, structural, S)** The trends/ledger layer crashes with TypeError: unhashable type on a
+  corrupted-but-valid-JSON ledger entry whose `bands` dict maps a category to a non-hashable VALUE (a
+  list or object). trends.py `_delta_rows` at the two `BAND_RANK.get(prev_band)` / `BAND_RANK.get(band)`
+  lookups (approx trends.py:122). The band-rank branch is reached whenever the paired scores are absent
+  or equal (the common case for a bands-only entry). Reproduced (mine): a two-entry ledger where the
+  second entry is `{"measured_at_utc":"2026-04-15T10:00:00Z","bands":{"security":["Weak"]},"metrics":{},
+  "issues":{}}` -> trends.build_trend(entries) raises `TypeError: unhashable type: 'list'`; also via
+  trends.trend_from_ledger(path) on a two-line JSONL, and it poisons draft_report_data.main (which calls
+  trend_from_ledger) so one corrupt band value breaks the draft/report step of every subsequent run for
+  that site. IN-ENVELOPE Medium: state-at-rest (<slug>_history.jsonl); read_history keeps the line (valid
+  JSON dict); PLAN section 2a scores state-at-rest corruption Medium at most AND the contract explicitly
+  promises "malformed ledger lines are skipped, never crash the trend layer" - so this is an in-contract
+  Medium, same class/score as T3/T5/U2. NEW instance not covered by T5 (T5 tested a wrong-TYPE bands
+  field, where _dict returns {} and the loop never runs; this is a well-formed bands dict with an
+  unhashable VALUE). THREE-STRIKE: T3/T5/U2 are the three prior instances of "trends layer crashes on a
+  corrupt ledger entry", so instance-patching ends here. Fix (structural, single boundary): sanitize a
+  ledger entry once where it enters the trends computation - a `_sanitize_entry(entry)` applied in
+  read_history (or trend_from_ledger) that coerces the entry to the shapes the trends layer reads
+  (measured_at_utc str-or-drop; metrics/bands/issues dicts via the existing _dict; and, the value level
+  this class exposes, band values to str-or-None and metric values to number-or-None), so NO downstream
+  trends read can hit a malformed sub-value. Enumerate every trends read that uses a ledger value as a
+  dict-lookup key or in typed arithmetic and confirm the boundary covers all of them (band-value-as-key
+  is the only unhashable-key site; scores are already isinstance-guarded). Accept: build_trend AND
+  trend_from_ledger over a ledger whose entry has a bands value that is a list or dict (and, as
+  regression, the T3 dict-timestamp / T5 non-dict-subfield / U2 non-list-sublist shapes) do not crash and
+  degrade that entry cleanly; a well-formed ledger still yields the correct series and delta rows; the
+  fix is at ONE boundary, not scattered per-read guards; a regression test added and mutation-checked
+  (neutering the sanitizer reintroduces the crash); scanner suite green; README count resynced.
+  Done (iteration 3): added `_sanitize_entry(e)` in trends.py (coerces each bands VALUE to str-or-None)
+  applied to every entry at the top of build_trend, and made _issue_name type-safe for a non-string
+  check/note/scan. Enumerated the trends value reads: band-value-as-key (BAND_RANK.get) was the filed
+  crash, and I REPRODUCED a sibling the auditors missed - a resolved issue with a list `note` crashes
+  _issue_name .strip() (AttributeError); band-KEY int and score-VALUE list are safe (verified). Both
+  crash sites now closed at the trends boundary. Verified band value list/dict and list-note both build
+  clean and a well-formed ledger still yields series [0.4, 0.9], seo improved, resolved finding named.
+  Added test_corrupt_ledger_value_inside_a_valid_container_does_not_crash (forces the band-rank branch by
+  omitting scores, so it exercises the real crash path); mutation-checked (neutering _sanitize_entry +
+  _issue_name reintroduces TypeError: unhashable). Scanner 388 -> 389, builder 49, charts 8 green; README
+  synced at 438.
+
+### Next (Low)
+- [x] **V2 (done, S)** _as_collection silently drops content on a MIXED keyed object - a list field
+  authored as a keyed object whose values are NOT all dicts (a dict finding plus a stray non-dict key,
+  e.g. a `"note"`/`"_comment"` annotation, or a bare-string sibling) fails the `all(isinstance(v, dict))`
+  guard, so _as_collection returns it unchanged and _as_rows then collapses the WHOLE object into one
+  blank row, dropping every real finding and showing a wrong KEY FINDINGS count. build_exec_report.py
+  _as_collection (approx :562). Reproduced (mine): findings={"f1":{...},"f2":{...},"note":"..."} -> both
+  findings absent from the rendered docx, one blank Low row. LOW (two auditors split Medium/Low; the
+  envelope decides): a keyed object of findings is already off the documented list schema and a mixed one
+  compounds that, so it is beyond a realistic hand-author slip = Low per PLAN section 2a. Filed rather
+  than declined ONLY because the hard no-silent-drop / name-every-subject rule forbids the BEHAVIOR
+  (silent drop of findings in the CEO deliverable) whatever the trigger, and the fix is cheap. Fix: change
+  _as_collection's disambiguation from "ALL values are dicts" to "ANY value is a dict -> it is a keyed
+  collection, flatten to list(values)"; then _as_rows coerces each value (dict->row, str->{text_key},
+  scalar->{}), so nothing is dropped and a stray comment renders as a visible text row rather than
+  vanishing. A lone finding dict (string values, no dict value) still classifies as one item -> one row
+  (U4 preserved). Accept: a mixed keyed object of findings renders EVERY dict finding (none dropped); a
+  lone finding dict still renders as one row; an all-dict keyed object is unchanged; a regression test
+  added and mutation-checked; builder suite green.
+  Done (iteration 4): changed _as_collection's disambiguation from "ALL values are dicts" to "ANY value
+  is a dict" (and dropped the now-redundant `value and` guard, since any() over an empty dict is already
+  False). A mixed keyed object {f1:dict, f2:dict, note:str} now flattens to list(values): both findings
+  render and the stray note renders as a visible text row (nothing silently dropped). A lone finding dict
+  (all scalar values) is still not a collection -> one row (U4/T1 preserved); an all-dict keyed object
+  still flattens (U4). Verified end to end and via direct _as_collection calls. Added
+  test_mixed_keyed_object_flattens_and_drops_nothing; mutation-checked (reverting to the all-dict guard
+  fails it). Builder 49 -> 50, scanner 389, charts 8 green; README synced at 439.
+- [x] **V3 (done, XS)** trend latest_delta.scorecard ITEMS are not per-item coerced, so a non-dict row
+  crashes add_trend_table - the U5/normalize() work coerces the trend scorecard CONTAINER to a list but,
+  unlike the top-level list fields, never routes its items through _as_rows, so a `str`/`None` row hits
+  `row.get(...)`. build_exec_report.py _normalize_trend (approx :585) vs add_trend_table (approx :428).
+  Reproduced (Slice B): progress.trend.latest_delta.scorecard=["SEO improved", {"category":"TLS",...}] ->
+  `AttributeError: 'str' object has no attribute 'get'`. LOW: the trend scorecard is machine-generated by
+  trends.build_trend (always a list of dicts), so a non-dict row needs a hand-edit of the deeply-nested
+  trend block; but by the same precedent that justified fixing U5 (the builder must not crash on hand-
+  authored trend JSON) this is the item-level completion of that container-level fix. Fix: route the
+  trend scorecard rows through _as_rows in _normalize_trend (or coerce non-dict rows to {} there). Accept:
+  a trend whose latest_delta.scorecard holds a non-dict row builds clean (that row degrades to empty); a
+  valid trend still renders its QoQ table and (>=3 quarters) charts; a regression test added and mutation-
+  checked; builder suite green.
+  Done (iteration 5): _normalize_trend now runs latest_delta.scorecard through _as_collection then
+  _as_rows(sc, "category") when it is a list (else []), mirroring the top-level scorecard.rows treatment,
+  so a non-dict row is coerced to a dict and add_trend_table's row.get() never crashes. Verified str/None/
+  scalar rows, a keyed-object scorecard, and a non-list scorecard all build clean, and a valid trend still
+  renders its "Security" QoQ row. Added test_trend_scorecard_with_non_dict_rows_builds_clean; mutation-
+  checked (reverting to container-only coercion crashes with 'str' object has no attribute 'get'). Builder
+  50 -> 51, scanner 389, charts 8 green; README synced at 440.
+
+Note (three-strike watch): V2 and V3 are both item-level completions of the U6 builder boundary
+(normalize() coerces container shape but not always item shape). Two Lows do not warrant re-escalation.
+But if a FUTURE audit finds yet another builder item-level coercion gap after V2/V3 land, that is the
+signal to put a Proposed decision to the user: validate-and-reject the exec_report_data schema at the
+boundary vs. keep coercing ever deeper.
+
 ## Phase U - Ninth (full) convergence-audit findings (2026-07-05)
 Ran the certifying full convergence audit after T1-T5 landed (fresh battery green: scanner 387,
 builder 45, charts 8, README guard in sync, py_compile clean 31 files, no 3.11+ features). Four
@@ -83,7 +246,7 @@ must enumerate siblings BEFORE filing a fix done, not after the next audit. Audi
   direction all build clean, an all-at-once fuzz builds, and normal severities still sort High-before-
   Low. Added test_unhashable_lookup_key_field_does_not_crash_the_build; mutation-checked (neutering
   _hkey to identity fails it). Builder 46 -> 47; scanner 388, charts 8 green; README synced at 435.
-- [ ] **U4 (todo, S)** findings/recommendations/action_plan authored as a keyed OBJECT (a dict of
+- [x] **U4 (done via U6 structural boundary, S)** findings/recommendations/action_plan authored as a keyed OBJECT (a dict of
   finding-dicts) silently drops every entry - a consequence of T1's "a lone dict is one item".
   build_exec_report.py:499 (_as_rows). Reproduced (mine): _as_rows({"f1":{"finding":"No H1",...},
   "f2":{"finding":"Cert expired",...}}, "finding") -> [{whole dict}] -> renders one blank Low row,
@@ -96,7 +259,7 @@ must enumerate siblings BEFORE filing a fix done, not after the next audit. Audi
   of finding-dicts renders every finding (none dropped); a single finding-dict still renders as one
   row; a plain list is unchanged; builder green. If declined: record that findings must be a list per
   the schema, and that a keyed object is out of contract.
-- [ ] **U5 (todo, S)** add_trend_section crashes on a progress.trend DICT whose nested latest_delta/
+- [x] **U5 (done via U6 structural boundary, S)** add_trend_section crashes on a progress.trend DICT whose nested latest_delta/
   pages_scanned is a non-dict or whose quarters is a non-list - the same `X or {}` idiom class fixed
   in trends.py (_score/_delta_rows via _dict) and scan_site.diff_issues (U2), but the report builder's
   trend RENDERER is a separate read of the trend structure that was never hardened. build_exec_report.
@@ -113,6 +276,31 @@ must enumerate siblings BEFORE filing a fix done, not after the next audit. Audi
   when not a list). Accept: a trend dict with a non-dict latest_delta/pages_scanned or a non-list
   quarters builds clean (the malformed part degrades), a well-formed trend still renders its table and
   charts; builder suite green.
+
+### Structural closure (replaces instance-patching per the three-strike rule)
+- [x] **U6 (done, structural, user-approved)** THREE-STRIKE: U2/U3/U4/U5 are all one meta-class - the
+  docx builder / trend layer crashes or mis-renders on malformed hand-authored exec_report_data.json.
+  Instance-patching each .get()/lookup site is whack-a-mole (against the "no unnecessary defensive
+  programming / simplify" standard). Iteration 9 paused and put the scope decision to the user
+  (structural boundary vs. decline-as-Low vs. keep patching). User chose the STRUCTURAL boundary
+  (2026-07-05). Fix: added a single `normalize(data)` boundary called first in build_exec_report.build()
+  that coerces every field whose SHAPE a consumer depends on - the six top-level containers to {} when
+  non-dict, the nested trend (latest_delta/pages_scanned to {}, scorecard/quarters to [] via the same
+  helper), and (the no-silent-drop fix for U4) a list field authored as a keyed OBJECT of item-dicts
+  flattened to list(values) via a new `_as_collection` helper. Retired the scattered S4 container-
+  coercion loop and the T2 nested-trend guard, which normalize() now subsumes. Per-ITEM coercion stays
+  in _as_rows/_as_str_list and per-value hashing in _hkey (genuinely local, not whack-a-mole). Class-
+  complete: latest_delta.scorecard was added to the boundary though U5 named only latest_delta/pages_
+  scanned/quarters (add_trend_table iterates it as a row-list). Accept met: keyed-object findings render
+  EVERY item (none dropped) and a lone finding dict still renders one row; a partial trend dict with a
+  non-dict latest_delta/pages_scanned/scorecard or non-list quarters builds clean; a valid trend still
+  renders its table and (>=3 quarters) charts. Tests: test_keyed_object_of_item_dicts_renders_every_
+  item_not_one_bogus_row and test_partial_trend_dict_with_bad_nested_subfields_builds_clean; both
+  mutation-checked (neutering _as_collection to identity and _normalize_trend to a no-op fails them).
+  Builder 47 -> 49; scanner 388, charts 8 green; README synced at 437. This closes the malformed-input
+  meta-class at a boundary - future audits should not re-file a per-site .get()/lookup crash on
+  exec_report_data.json; the fix is normalize(), and a NEW class only if a shape-dependent read is added
+  that normalize() does not cover.
 
 ## Phase T - Eighth (full) convergence-audit findings (2026-07-05)
 Ran the certifying full convergence audit after the S1-S9 fixes landed (fresh battery green at
@@ -3759,3 +3947,15 @@ _Phase G complete: G1 through G6 all done, suite green._
 - [x] **A0 (done)** Bootstrap Ralph control files. Created PLAN.md, BACKLOG.md,
   JOURNAL.md seeded from repo state; initialized git; verified 51 unit tests
   pass. See JOURNAL.md 2026-07-01.
+
+## Converged
+Converged: 2026-07-05 (committed and pushed to origin/main at the user's explicit request; the anchoring
+commit hash is on the "Converged: <hash>" line appended below after the convergence commit, so a future
+/jeffy run may ratchet on it).
+Evidence (relaunch iteration 2, the certifying full-audit pass): scanner 389, builder 52, charts 8 all
+green; README count guard exit 0 at 441; compileall clean; dash-clean. Every dimension rescored at zero
+High, zero Medium in-envelope: architecture/security/performance/documentation/dependency-hygiene/testing
+None (unchanged since the Phase V/W clean scores, confirmed by git diff --name-only HEAD showing only the
+U6/V-series/W1 code + tests changed, plus a fresh battery); error handling None (V1 sanitizer closed the
+ledger-crash class, independently confirmed complete); correctness/code-quality None (W1 fixed; F2/F3/F4
+Declined by the Operating envelope as machine-generated / beyond-realistic-slip). Zero open findings.
