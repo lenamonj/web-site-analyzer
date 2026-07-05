@@ -52,6 +52,8 @@ SETTLE_MS = 1500
 PAGE_DELAY_S = 1.0
 MAX_SNAPSHOT_CHARS = 5_000_000
 MAX_WS_MESSAGE = 32 * 1024 * 1024
+MAX_DEVTOOLS_BYTES = 2 * 1024 * 1024  # cap the DevTools HTTP JSON read so no
+#                                       remote-JSON read in the project is unbounded
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 # The measurement snippets, verbatim from tools/CAPTURE.md (sections 26/27).
@@ -85,21 +87,27 @@ CONTRAST_JS = r"""
   };
   const bgOf = el => {
     for (let e = el; e; e = e.parentElement) {
-      const bg = getComputedStyle(e).backgroundColor;
+      const cs = getComputedStyle(e);
+      // A background image or gradient is painted above any background-color and
+      // has no single color to measure, so the effective background is unknown.
+      if (cs.backgroundImage && cs.backgroundImage !== 'none') return null;
+      const bg = cs.backgroundColor;
       if (bg && !bg.includes('rgba(0, 0, 0, 0)')) return bg;
     }
     return 'rgb(255, 255, 255)';
   };
-  const out = {checked: 0, violations: []};
+  const out = {checked: 0, inconclusive: 0, violations: []};
   for (const el of document.querySelectorAll('body *')) {
     if (!el.innerText || !el.innerText.trim() || el.children.length) continue;
     const cs = getComputedStyle(el);
     if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+    const bg = bgOf(el);
+    if (bg === null) { out.inconclusive++; continue; }  // over an image: not measurable, do not fabricate
     out.checked++;
     const size = parseFloat(cs.fontSize);
     const bold = parseInt(cs.fontWeight, 10) >= 700;
     const required = (size >= 24 || (size >= 18.66 && bold)) ? 3 : 4.5;
-    const l1 = lum(cs.color), l2 = lum(bgOf(el));
+    const l1 = lum(cs.color), l2 = lum(bg);
     const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
     if (ratio < required) out.violations.push({
       sample: el.innerText.trim().slice(0, 40),
@@ -327,7 +335,7 @@ def _devtools_json(port, path, method="PUT"):
     url = f"http://127.0.0.1:{port}{path}"
     try:
         with urlrequest.urlopen(urlrequest.Request(url, method=method), timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return json.loads(resp.read(MAX_DEVTOOLS_BYTES).decode("utf-8"))
     except urlerror.HTTPError as e:
         if method == "PUT":
             return _devtools_json(port, path, method="GET")
@@ -634,6 +642,9 @@ def main():
         print(f"No scan found at {scan_path}; run scan_site.py or run_review.py first.")
         sys.exit(1)
     scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    if not isinstance(scan, dict):
+        print(f"Scan JSON must be a JSON object, got {type(scan).__name__}: {scan_path}")
+        sys.exit(1)
 
     plan = plan_from_scan(scan, cap=cap)
     print(f"Capture plan: {len(plan['pages'])} page(s), "

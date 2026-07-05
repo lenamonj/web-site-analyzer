@@ -71,8 +71,14 @@ def _og_checks(og):
 
 
 def _robots_meta_check(robots):
-    if robots and "noindex" in robots.lower():
-        return {"value": robots, "verdict": "fail", "note": "Page meta robots contains noindex."}
+    # Match comma-separated directives as tokens, not substrings: "none" is
+    # Google's shorthand for "noindex, nofollow" (the page is excluded from
+    # search), and a token split avoids matching "none"/"noindex" inside an
+    # unrelated word.
+    directives = {d.strip() for d in (robots or "").lower().split(",")}
+    if "noindex" in directives or "none" in directives:
+        return {"value": robots, "verdict": "fail",
+                "note": f"Page meta robots excludes this page from search ({robots})."}
     return {"value": robots, "verdict": "pass" if robots else "info",
             "note": "No noindex on this page." if not robots else f"Robots meta: {robots}."}
 

@@ -36,6 +36,9 @@ def _accessible_name(control, labels_for):
         return "aria-labelledby"
     if control["title"]:
         return "title"
+    # An image input's accessible name is its alt text, not a <label>.
+    if control.get("type") == "image" and control.get("alt"):
+        return "alt"
     return None
 
 

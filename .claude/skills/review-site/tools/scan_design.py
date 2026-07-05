@@ -63,7 +63,7 @@ def check_favicon(parsed, base):
     if res.get("final_status") == 200:
         return {"verdict": "pass", "declared": 0,
                 "note": "No icon link declared, but the default /favicon.ico exists."}
-    if res.get("final_status") is None:
+    if not res["ok"]:  # fetch did not complete (no response, or a failed redirect)
         return {"verdict": "info", "declared": 0,
                 "note": "No icon link declared; /favicon.ico could not be checked."}
     return {"verdict": "warn", "declared": 0,

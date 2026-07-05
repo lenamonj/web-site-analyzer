@@ -33,10 +33,25 @@ SCOPE = "page"
 # The attribute region tolerates '>' inside quoted values, and the attribute
 # name is anchored so data-src / data-href lazy-load attributes (which the
 # browser does not fetch) are not reported as mixed content.
-MIXED_RE = re.compile(r"<(script|img|iframe|link|source|audio|video)\b"
+# <link> is handled separately (below) because whether an http href is mixed
+# content depends on its rel: only a subresource-loading rel counts.
+MIXED_RE = re.compile(r"<(script|img|iframe|source|audio|video)\b"
                       r"(?:[^>\"']|\"[^\"]*\"|'[^']*')*?"
                       r"(?<![-\w])(?:src|href)\s*=\s*[\"'](http://[^\"']+)", re.I)
-ACTIVE_TAGS = {"script", "iframe", "link"}
+ACTIVE_TAGS = {"script", "iframe"}
+
+LINK_TAG_RE = common.tag_attrs_re("link")
+ATTR_HTTP_HREF_RE = re.compile(r"""(?<![-\w])href\s*=\s*["'](http://[^"']+)""", re.I)
+ATTR_REL_RE = re.compile(r"""(?<![-\w])rel\s*=\s*["']([^"']*)""", re.I)
+ATTR_AS_RE = re.compile(r"""(?<![-\w])as\s*=\s*["']([^"']*)""", re.I)
+# <link> rels that actually fetch a subresource over the wire. A non-loading rel
+# (canonical, alternate, preconnect, dns-prefetch, prev/next, me, ...) is a URL
+# reference or a connection hint, never mixed content.
+SUBRESOURCE_LINK_RELS = {"stylesheet", "icon", "shortcut", "apple-touch-icon",
+                         "mask-icon", "preload", "modulepreload", "prefetch"}
+# A preload/prefetch is active mixed content only when it loads executable or
+# render-blocking content; stylesheet is always active.
+ACTIVE_LINK_AS = {"script", "style", "worker", "font"}
 
 
 def _candidate_links(anchors, base):
@@ -104,6 +119,24 @@ def _mixed_content(html, is_https):
             continue
         seen.add(key)
         found.append({"tag": tag.lower(), "url": url, "active": tag.lower() in ACTIVE_TAGS})
+    for attrs in LINK_TAG_RE.findall(html):
+        href = ATTR_HTTP_HREF_RE.search(attrs)
+        if not href:
+            continue
+        rel_m = ATTR_REL_RE.search(attrs)
+        rels = set(rel_m.group(1).lower().split()) if rel_m else set()
+        if not rels & SUBRESOURCE_LINK_RELS:
+            continue  # canonical/alternate/preconnect/dns-prefetch: not a fetch
+        url = href.group(1)
+        key = ("link", url)
+        if key in seen:
+            continue
+        seen.add(key)
+        as_m = ATTR_AS_RE.search(attrs)
+        as_val = as_m.group(1).lower() if as_m else ""
+        active = "stylesheet" in rels or (
+            rels & {"preload", "modulepreload", "prefetch"} and as_val in ACTIVE_LINK_AS)
+        found.append({"tag": "link", "url": url, "active": active})
     if not found:
         return {"count": 0, "items": [], "verdict": "pass",
                 "note": "No insecure http resources referenced."}

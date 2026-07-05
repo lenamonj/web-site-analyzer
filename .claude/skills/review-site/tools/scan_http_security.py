@@ -32,8 +32,22 @@ def check_https_redirect(host):
     if not res["ok"] and not res["hops"]:
         return {"reachable_over_http": False, "detail": res["error"],
                 **_verdict("info", "Host did not answer on plain HTTP.")}
-    final_scheme = urlparse(res["final_url"]).scheme
     chain = [f'{h["status"]} {h["url"]}' for h in res["hops"]]
+    if not res["ok"]:
+        # A hop was recorded but the fetch did not complete: the last hop is a
+        # 3xx whose target failed at connect, and final_url is the pre-redirect
+        # http URL. Never grade a fail off that - if the redirect points at https
+        # the upgrade is present, otherwise it could not be verified this run.
+        last = res["hops"][-1]
+        target = urljoin(last["url"], common.header_value(last["headers"], "location", ""))
+        if urlparse(target).scheme == "https":
+            return {"reachable_over_http": True, "redirect_chain": chain,
+                    **_verdict("pass", "Plain HTTP redirects to HTTPS (the redirect "
+                                       "target was not reachable this run).")}
+        return {"reachable_over_http": True, "redirect_chain": chain,
+                **_verdict("info", "Plain HTTP responded but the redirect could not "
+                                   "be followed to verify an HTTPS upgrade.")}
+    final_scheme = urlparse(res["final_url"]).scheme
     if final_scheme == "https":
         return {"reachable_over_http": True, "redirect_chain": chain, "final_url": res["final_url"],
                 **_verdict("pass", "Plain HTTP redirects to HTTPS.")}
@@ -89,15 +103,29 @@ def check_referrer_policy(headers):
 
 def check_clickjacking(headers):
     xfo = common.header_value(headers, "x-frame-options")
+    # Only DENY and SAMEORIGIN actually protect: ALLOW-FROM is deprecated and
+    # ignored by Chrome/Edge/Safari, and any unknown value is ignored too, so
+    # matching mere presence would pass a page that browsers leave framable.
+    xfo_protects = (xfo or "").strip().lower() in ("deny", "sameorigin")
     # Repeated CSP headers are combined (every policy enforced), not last-wins,
     # so parse the raw value - which may be a list - via _parse_csp and match the
     # frame-ancestors directive by name rather than taking header_value's last.
     raw_csp = headers.get("content-security-policy")
-    has_fa = bool(raw_csp) and "frame-ancestors" in _parse_csp(raw_csp)
-    if xfo or has_fa:
-        src = "X-Frame-Options" if xfo else "CSP frame-ancestors"
-        return {"x_frame_options": xfo, "csp_frame_ancestors": has_fa,
+    fa = _parse_csp(raw_csp).get("frame-ancestors") if raw_csp else None
+    # frame-ancestors protects unless it allows every origin (a bare '*'); an
+    # empty source list is 'none' (deny all), which protects.
+    fa_protects = fa is not None and "*" not in fa
+    if xfo_protects or fa_protects:
+        src = "X-Frame-Options" if xfo_protects else "CSP frame-ancestors"
+        return {"x_frame_options": xfo, "csp_frame_ancestors": fa_protects,
                 **_verdict("pass", f"Clickjacking protection via {src}.")}
+    if xfo or fa is not None:
+        # A directive is present but ineffective, which is worse than absent: the
+        # site looks protected but browsers still allow framing.
+        return {"x_frame_options": xfo, "csp_frame_ancestors": fa is not None,
+                **_verdict("fail", "Framing directive present but ineffective: X-Frame-Options "
+                           "must be DENY or SAMEORIGIN (ALLOW-FROM and unknown values are ignored), "
+                           "and CSP frame-ancestors must not allow all origins (*).")}
     return {"x_frame_options": None, "csp_frame_ancestors": False,
             **_verdict("fail", "No X-Frame-Options and no CSP frame-ancestors. Clickjacking exposure.")}
 
@@ -141,10 +169,24 @@ def check_csp(headers):
         problems.append("no script-src and no default-src fallback, so scripts are unrestricted")
     else:
         sources = directives[script_directive]
-        wild = [s for s in sources if s in ("*", "http:", "https:")]
-        if wild:
-            problems.append(f"{script_directive} allows any origin ({', '.join(wild)})")
-        weak = [t for t in ("unsafe-inline", "unsafe-eval") if t in sources]
+        strict_dynamic = "strict-dynamic" in sources
+        nonce_or_hash = any(s.startswith(("nonce-", "sha256-", "sha384-", "sha512-"))
+                            for s in sources)
+        # With 'strict-dynamic', supporting browsers ignore host/scheme allowlists
+        # entirely (trust propagates through nonces/hashes), so a wildcard origin
+        # is a legacy fallback, not an active hole.
+        if not strict_dynamic:
+            wild = [s for s in sources if s in ("*", "http:", "https:")]
+            if wild:
+                problems.append(f"{script_directive} allows any origin ({', '.join(wild)})")
+        # 'unsafe-inline' is ignored when a nonce/hash or 'strict-dynamic' is present,
+        # so only flag it otherwise. 'unsafe-eval' is unaffected by both and is always
+        # a real weakness.
+        weak = []
+        if "unsafe-inline" in sources and not (strict_dynamic or nonce_or_hash):
+            weak.append("unsafe-inline")
+        if "unsafe-eval" in sources:
+            weak.append("unsafe-eval")
         if weak:
             problems.append(f"{script_directive} permits {', '.join(weak)}")
 

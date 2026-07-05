@@ -33,8 +33,11 @@ NOT_CAPTURED = ("No browser-captured metrics for this page; run the browser "
                 "pass per SKILL.md to measure it.")
 
 
-def load_metrics(url):
-    """The captured metrics entry for this exact url, or None."""
+def load_metrics(url, min_capture_utc=None):
+    """The captured metrics entry for this exact url, or None. min_capture_utc,
+    when given (a pipeline run's start stamp), rejects an entry captured before
+    this run, so a prior run's stale evidence is never graded as a current
+    measurement (P23); None (standalone / manual capture) accepts any entry."""
     slug = common.slug_of(url)
     path = common.evidence_dir() / "rendered" / slug / "metrics.json"
     if not path.is_file():
@@ -45,7 +48,10 @@ def load_metrics(url):
         return None
     if not isinstance(data, dict):  # corrupt metrics.json: not measured, not a crash
         return None
-    return (data.get("pages") or {}).get(common.normalize_url(url))
+    entry = (data.get("pages") or {}).get(common.normalize_url(url))
+    if entry and min_capture_utc and (entry.get("captured_at_utc") or "") < min_capture_utc:
+        return None  # captured before this run started: stale, not a current measurement
+    return entry
 
 
 def _threshold_check(value, bounds, unit, name):
@@ -69,24 +75,31 @@ def check_contrast(contrast):
     if not contrast:
         return {"verdict": "info", "note": NOT_CAPTURED}
     checked = contrast.get("checked", 0)
+    inconclusive = contrast.get("inconclusive", 0)
     violations = contrast.get("violations") or []
+    # Elements over a background image or gradient have no measurable background,
+    # so they are skipped rather than graded against an assumed white (which
+    # fabricated a violation); surface the count so the omission is visible.
+    skipped = (f" ({inconclusive} skipped: background is an image or gradient)"
+               if inconclusive else "")
     if violations:
         examples = "; ".join(
             f"{v.get('sample', '?')} ({v.get('ratio')}:1, needs {v.get('required')}:1)"
             for v in violations[:MAX_EXAMPLES])
         return {"verdict": "fail", "checked": checked, "violations": len(violations),
-                "examples": violations[:MAX_EXAMPLES],
+                "inconclusive": inconclusive, "examples": violations[:MAX_EXAMPLES],
                 "note": (f"{len(violations)} of {checked} sampled text elements fail "
-                         f"WCAG 1.4.3 contrast: {examples}.")}
+                         f"WCAG 1.4.3 contrast: {examples}.{skipped}")}
     if checked:
         return {"verdict": "pass", "checked": checked, "violations": 0,
-                "note": f"All {checked} sampled text elements meet WCAG 1.4.3 contrast."}
+                "inconclusive": inconclusive,
+                "note": f"All {checked} sampled text elements meet WCAG 1.4.3 contrast.{skipped}"}
     return {"verdict": "info", "note": "Contrast was not sampled in the capture."}
 
 
 def _scan(url, page=None):
     url = common.normalize_url(url)
-    metrics = load_metrics(url)
+    metrics = load_metrics(url, (page or {}).get("min_capture_utc"))
     if metrics is None:
         checks = {name: {"verdict": "info", "note": NOT_CAPTURED}
                   for name in ("lcp", "cls", "tbt", "contrast")}

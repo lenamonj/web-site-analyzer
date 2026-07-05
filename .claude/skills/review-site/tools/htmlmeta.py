@@ -14,6 +14,13 @@ from html.parser import HTMLParser
 import common
 
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+# Block-level elements that cannot legally sit inside a heading (headings hold
+# phrasing content only). If one opens while a heading is still open, the heading
+# is malformed and a browser closes it here, so we flush it too - otherwise its
+# text is lost or the following body is swallowed into it, dropping a real H1.
+HEADING_BREAKERS = {"p", "div", "section", "article", "main", "header", "footer",
+                    "aside", "nav", "ul", "ol", "li", "table", "form", "figure",
+                    "blockquote", "pre", "address", "dl", "hr", "fieldset"}
 LANDMARK_TAGS = {"header", "nav", "main", "footer", "aside", "section"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "template"}
 GENERIC_LINK_TEXT = {
@@ -58,6 +65,7 @@ class _Extractor(HTMLParser):
         self._jsonld_buf = []
         self._cur_button = None
         self._button_buf = []
+        self._button_img_alt = None
 
     def _end_title(self):
         """Close the title capture. Also called when another tag interrupts an
@@ -65,6 +73,20 @@ class _Extractor(HTMLParser):
         self._in_title = False
         if self.title is None:
             self.title = "".join(self._title_buf).strip()
+
+    def _flush_heading(self):
+        """Emit the currently-open heading, if any. Called on its own close, on
+        the next heading opening, and on an interrupting block element, so a
+        nested or unclosed heading is recorded rather than dropped."""
+        if self._cur_heading is not None:
+            self.headings.append({"level": self._cur_heading,
+                                  "text": " ".join(self._heading_buf).strip()})
+            self._cur_heading = None
+            self._heading_buf = []
+
+    def close(self):
+        super().close()
+        self._flush_heading()  # an unclosed heading at end of document is not lost
 
     # -- tag open ---------------------------------------------------------
     def handle_starttag(self, tag, attrs):
@@ -91,6 +113,10 @@ class _Extractor(HTMLParser):
                 # name (the logo-link pattern); record it so the link-text
                 # check does not flag an accessible link as empty.
                 self._anchor_img_alt = a["alt"]
+            if self._cur_button is not None and a.get("alt"):
+                # Same for an icon button: a child <img alt> names it, so it is
+                # not an empty button.
+                self._button_img_alt = a["alt"]
         if tag in LANDMARK_TAGS:
             self.landmarks.add(tag)
         if "role" in a:
@@ -107,8 +133,11 @@ class _Extractor(HTMLParser):
                 pass
 
         if tag in HEADING_TAGS:
+            self._flush_heading()  # a heading interrupted by another is not lost
             self._cur_heading = int(tag[1])
             self._heading_buf = []
+        elif tag in HEADING_BREAKERS:
+            self._flush_heading()  # a block element closes an unclosed heading
         if tag == "a" and "href" in a:
             self._cur_anchor = a
             self._anchor_buf = []
@@ -119,12 +148,17 @@ class _Extractor(HTMLParser):
                 self.labels_for.add(a["for"])
         if tag in ("input", "select", "textarea"):
             itype = a.get("type", "text") if tag == "input" else tag
-            if itype not in ("hidden",):
+            # Push buttons (submit/reset/button) take their accessible name from
+            # value and fall back to a browser default, so they never need a
+            # <label>; excluding them keeps a normal form from failing. Image
+            # inputs stay in (their name comes from alt, checked below), so a
+            # genuinely alt-less image button is still caught. hidden has no UI.
+            if itype not in ("hidden", "submit", "reset", "button"):
                 self.form_controls.append({
                     "tag": tag, "type": itype, "id": a.get("id"), "name": a.get("name"),
                     "aria_label": a.get("aria-label"), "aria_labelledby": a.get("aria-labelledby"),
                     "title": a.get("title"), "placeholder": a.get("placeholder"),
-                    "wrapped_by_label": self._label_depth > 0,
+                    "alt": a.get("alt"), "wrapped_by_label": self._label_depth > 0,
                 })
         if tag == "script" and a.get("type", "").lower() == "application/ld+json":
             self._in_jsonld = True
@@ -132,6 +166,7 @@ class _Extractor(HTMLParser):
         if tag == "button":
             self._cur_button = a
             self._button_buf = []
+            self._button_img_alt = None
 
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
@@ -144,9 +179,8 @@ class _Extractor(HTMLParser):
             self._skip_depth -= 1
         if self._in_title:
             self._end_title()
-        if tag in HEADING_TAGS and self._cur_heading == int(tag[1]):
-            self.headings.append({"level": self._cur_heading, "text": " ".join(self._heading_buf).strip()})
-            self._cur_heading = None
+        if tag in HEADING_TAGS:
+            self._flush_heading()
         if tag == "a" and self._cur_anchor is not None:
             text = " ".join(self._anchor_buf).strip()
             self.anchors.append({
@@ -164,9 +198,12 @@ class _Extractor(HTMLParser):
             self._in_jsonld = False
             self._collect_jsonld("".join(self._jsonld_buf))
         if tag == "button" and self._cur_button is not None:
-            if not " ".join(self._button_buf).strip() and not self._cur_button.get("aria-label"):
+            if (not " ".join(self._button_buf).strip()
+                    and not self._cur_button.get("aria-label")
+                    and not self._button_img_alt):
                 self.buttons_empty += 1
             self._cur_button = None
+            self._button_img_alt = None
 
     # -- text -------------------------------------------------------------
     def handle_data(self, data):
@@ -189,13 +226,22 @@ class _Extractor(HTMLParser):
             obj = json.loads(text)
         except (json.JSONDecodeError, ValueError):
             return
+        # Inspect the top-level nodes and any @graph members: the wrapper shape
+        # {"@context":.., "@graph":[{...}]} is the dominant real-world form (Yoast,
+        # RankMath, WordPress core) and its types live only inside the graph.
+        nodes = []
         for node in obj if isinstance(obj, list) else [obj]:
             if isinstance(node, dict):
-                t = node.get("@type")
-                if isinstance(t, list):
-                    self.jsonld_types.extend(str(x) for x in t)
-                elif t:
-                    self.jsonld_types.append(str(t))
+                nodes.append(node)
+                graph = node.get("@graph")
+                if isinstance(graph, list):
+                    nodes.extend(g for g in graph if isinstance(g, dict))
+        for node in nodes:
+            t = node.get("@type")
+            if isinstance(t, list):
+                self.jsonld_types.extend(str(x) for x in t)
+            elif t:
+                self.jsonld_types.append(str(t))
 
 
 SPA_ROOT_MARKERS = ('id="root"', "id='root'", 'id="__next"', 'id="app"',

@@ -20,6 +20,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import common
 import htmlmeta
@@ -59,10 +60,12 @@ def _dup_check(mapping, label, n_pages):
     return {"verdict": "pass", "note": f"Each reviewed page has a distinct {label}."}
 
 
-def load_rendered_snapshots(slug):
+def load_rendered_snapshots(slug, min_capture_utc=None):
     """url -> rendered HTML captured by the agent's browser pass (PLAN.md
     section 26). Absence of the manifest is the normal case and returns
-    empty; the scanners never launch a browser themselves."""
+    empty; the scanners never launch a browser themselves. min_capture_utc,
+    when given (a pipeline run's start stamp), drops snapshots captured before
+    this run so a prior run's stale DOM is not scanned as current (P23)."""
     base = common.evidence_dir() / "rendered" / slug
     manifest_path = base / "manifest.json"
     if not manifest_path.exists():
@@ -75,6 +78,8 @@ def load_rendered_snapshots(slug):
         return {}
     out = {}
     for url, entry in (manifest.get("pages") or {}).items():
+        if min_capture_utc and (entry.get("captured_at_utc") or "") < min_capture_utc:
+            continue  # captured before this run started: stale DOM, skip
         f = base / (entry.get("file") or "")
         if f.is_file():
             out[url] = f.read_text(encoding="utf-8", errors="replace")
@@ -107,12 +112,15 @@ def group_issues(issues):
 
 def diff_issues(prev_result, result):
     """What changed since the previous run of the same target: issues present
-    now but not before (new) and present before but not now (resolved),
-    keyed by (scan, check, verdict)."""
+    now but not before (new) and present before but not now (resolved), keyed by
+    the grouped defect identity (label, check, verdict) with the per-page URL
+    stripped from the scan label - the same key group_issues uses. Counting
+    per-page would report one template defect newly appearing on 40 pages as 40
+    new issues, inconsistent with the grouped-finding view the report shows."""
     def keyed(res):
         issues = res.get("issues", {}) or {}
         flat = list(issues.get("fail", [])) + list(issues.get("warn", []))
-        return {(i["scan"], i["check"], i["verdict"]): i for i in flat}
+        return {(i["scan"].partition(":")[0], i["check"], i["verdict"]): i for i in flat}
     prev, curr = keyed(prev_result), keyed(result)
     return {
         "previous_measured_at": prev_result.get("measured_at_utc"),
@@ -143,6 +151,26 @@ def check_cross_page(page_scans):
     }
 
 
+def errored_scanners(host_scans, page_scans):
+    """Every scanner that ran but produced no gradable verdict and reported
+    failure: a crash caught by _safe_scan, or a scan that could not fetch its
+    target. These measured nothing, so they are surfaced by name rather than
+    silently graded around (the P7 fabrication-by-omission class)."""
+    errors = []
+    for e in registry.host_tools():
+        sr = host_scans.get(e.key) or {}
+        if sr.get("ok") is False and not common.verdicts_of(sr):
+            errors.append({"tool": sr.get("tool", e.tool_id), "scope": "host",
+                           "error": sr.get("error", "unknown error")})
+    for ps in page_scans:
+        for e in registry.page_tools():
+            sr = ps.get(e.key) or {}
+            if sr.get("ok") is False and not common.verdicts_of(sr):
+                errors.append({"tool": sr.get("tool", e.tool_id), "scope": ps.get("url"),
+                               "error": sr.get("error", "unknown error")})
+    return errors
+
+
 def build_scorecard(host_scans, page_scans):
     """Roll the per-check verdicts up into one band per category plus an overall band.
 
@@ -152,22 +180,49 @@ def build_scorecard(host_scans, page_scans):
     page category appears once any page produced verdicts for it.
     """
     cats = {}
+    errored = {}  # category -> [tool_id] that ran but measured nothing (crash or unfetchable)
     for e in registry.host_tools():
-        cats.setdefault(e.category, []).extend(common.verdicts_of(host_scans.get(e.key)))
+        sr = host_scans.get(e.key)
+        v = common.verdicts_of(sr)
+        cats.setdefault(e.category, []).extend(v)
+        if not v and (sr or {}).get("ok") is False:
+            errored.setdefault(e.category, []).append((sr or {}).get("tool", e.tool_id))
     for e in registry.page_tools():
         acc = []
         for ps in page_scans:
             sr = ps.get(e.key)
             if sr and sr.get("ok"):
                 acc += common.verdicts_of(sr)
+            elif (sr or {}).get("ok") is False and not common.verdicts_of(sr):
+                errored.setdefault(e.category, []).append((sr or {}).get("tool", e.tool_id))
         if acc:
             cats.setdefault(e.category, []).extend(acc)
-    categories = {name: common.grade(v) for name, v in cats.items()}
+    categories = {}
+    for name, v in cats.items():
+        g = common.grade(v)
+        if name in errored:
+            # A scanner in this category crashed or could not fetch its target, so
+            # the category was not fully measured. Do not let the surviving sibling
+            # scanners float the band to a clean posture: report it Not measured with
+            # the errored tools named (charter: never report an unmeasured thing as a
+            # pass). The real pass/warn/fail counts still travel for transparency.
+            g = {**g, "band": "Not measured", "score": None,
+                 "errors": sorted(set(errored[name]))}
+        categories[name] = g
     overall = common.grade([v for lst in cats.values() for v in lst])
+    all_errored = sorted({t for ts in errored.values() for t in ts})
+    if all_errored:
+        # A crash in any one category must be visible on the overall line too.
+        overall = {**overall, "errors": all_errored}
     return {"overall": overall, "categories": categories}
 
 
-def run(target, extra_pages):
+def run(target, extra_pages, min_capture_utc=None):
+    """Scan the target and its extra pages. min_capture_utc, when given by the
+    pipeline (its run-start stamp), makes the scanners ignore rendered evidence
+    captured before this run, so a prior run's stale DOM/metrics is never graded
+    as a current measurement (P23). None (standalone / manual capture) uses any
+    evidence on disk."""
     target = common.normalize_url(target)
     host = common.host_of(target)
     slug = common.slug_of(target)
@@ -176,18 +231,28 @@ def run(target, extra_pages):
     # shared assets repeat across pages and need not be re-fetched.
     common.enable_fetch_cache()
     try:
-        return _run(target, host, slug, extra_pages, load_rendered_snapshots(slug))
+        snapshots = load_rendered_snapshots(slug, min_capture_utc)
+        return _run(target, host, slug, extra_pages, snapshots, min_capture_utc)
     finally:
         common.disable_fetch_cache()
 
 
-def _run(target, host, slug, extra_pages, snapshots):
+def _run(target, host, slug, extra_pages, snapshots, min_capture_utc=None):
     host_scans = {
         e.key: _safe_scan(e.module.scan, target, tool_name=e.tool_id)
         for e in registry.host_tools()
     }
 
-    page_urls = [target] + [common.normalize_url(u) for u in extra_pages]
+    # Dedup the review set so one physical page is never scanned twice: an empty
+    # path and "/" are the same resource, so https://h and https://h/ collapse (a
+    # homepage almost always links to /), while distinct paths stay distinct.
+    seen, page_urls = set(), []
+    for u in [target] + [common.normalize_url(u) for u in extra_pages]:
+        p = urlparse(u)
+        key = (p.scheme, p.netloc.lower(), p.path or "/", p.query)
+        if key not in seen:
+            seen.add(key)
+            page_urls.append(u)
     page_scans = []
     for url in page_urls:
         # Fetch and parse each page once, then share that snapshot with every
@@ -206,6 +271,12 @@ def _run(target, host, slug, extra_pages, snapshots):
         if snap_html and entry.get("likely_client_rendered"):
             rendered_ctx = htmlmeta.page_from_snapshot(url, snap_html, ctx.get("res"))
             entry["rendered_snapshot_used"] = True
+        # Carry the run's freshness boundary on the context so the vitals scanner
+        # rejects a prior run's stale metrics (P23); other scanners ignore it.
+        if isinstance(ctx, dict):
+            ctx["min_capture_utc"] = min_capture_utc
+        if rendered_ctx is not None:
+            rendered_ctx["min_capture_utc"] = min_capture_utc
         for key, module, _ in PAGE_SCANNERS:
             page_arg = ctx if isinstance(ctx, dict) and "res" in ctx else None
             if rendered_ctx is not None and key != "performance":
@@ -251,6 +322,7 @@ def _run(target, host, slug, extra_pages, snapshots):
         "totals": {"fail": len(fails), "warn": len(warns),
                    "grouped_fail": len(grouped_fails), "grouped_warn": len(grouped_warns)},
         "scorecard": build_scorecard(host_scans, page_scans),
+        "scanner_errors": errored_scanners(host_scans, page_scans),
         "cross_page": cross_page,
         "host_scans": host_scans,
         "page_scans": page_scans,
@@ -484,6 +556,14 @@ def write_digest_md(result, path, history=None):
         for name, g in sc["categories"].items():
             lines.append(f"| {name} | {g['band']} | {g['pass']}/{g['warn']}/{g['fail']} |")
         lines.append("")
+    errs = result.get("scanner_errors") or []
+    if errs:
+        lines += ["## Scanner errors", "",
+                  "These scanners did not complete, so their checks were not measured "
+                  "and their categories read Not measured, never a clean pass:", ""]
+        for e in errs:
+            lines.append(f"- [{e['tool']}] {e['scope']}: {e['error']}")
+        lines.append("")
     grouped = result.get("issues_grouped", result["issues"])
     lines += ["## Failing checks", ""]
     if grouped["fail"]:
@@ -537,6 +617,14 @@ def main():
     out_dir = common.evidence_dir()
     paths = write_run_outputs(result, out_dir)
 
+    print_console_summary(result)
+    print(f"\nWrote {paths['json_path']}")
+    print(f"Wrote {paths['digest_path']}")
+
+
+def print_console_summary(result):
+    """The stdout run summary. A seam so the summary (including the scanner-error
+    block) is testable without driving main's argv and evidence-dir side effects."""
     print(f"Target: {result['target']}")
     print(f"Pages scanned: {len(result['pages_scanned'])}")
     print(f"Failing checks: {result['totals']['fail']} | Warnings: {result['totals']['warn']}")
@@ -546,6 +634,11 @@ def main():
         for name, g in sc["categories"].items():
             score = "n/a" if g["score"] is None else f"{g['score']:.2f}"
             print(f"  {name:14s} {g['band']:10s} pass/warn/fail = {g['pass']}/{g['warn']}/{g['fail']}  ({score})")
+    errs = result.get("scanner_errors") or []
+    if errs:
+        print("\nSCANNER ERRORS (checks not measured):")
+        for e in errs:
+            print(f"  [{e['tool']}] {e['scope']}: {e['error']}")
     grouped = result.get("issues_grouped", result["issues"])
     if grouped["fail"]:
         print("\nFAIL:")
@@ -559,8 +652,6 @@ def main():
     if delta:
         print(f"\nSince previous scan ({delta.get('previous_measured_at')}): "
               f"{len(delta['new'])} new, {len(delta['resolved'])} resolved.")
-    print(f"\nWrote {paths['json_path']}")
-    print(f"Wrote {paths['digest_path']}")
 
 
 if __name__ == "__main__":

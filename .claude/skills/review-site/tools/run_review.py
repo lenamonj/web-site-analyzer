@@ -15,6 +15,7 @@ Usage:
 """
 
 import sys
+import time
 from pathlib import Path
 
 import capture_rendered
@@ -38,12 +39,13 @@ def choose_pages(target, disco):
     return [u for u in disco.get("proposed_review_set", []) if u not in skip]
 
 
-def capture_and_rescan(result, target, extra):
+def capture_and_rescan(result, target, extra, run_start=None):
     """The automated rendered-evidence step (PLAN.md section 34): capture DOM
     snapshots and browser metrics when a browser is installed, then re-scan so
     the scanners consume them in the same run. Returns the capture summary
     (with the fresh scan under "scan" when a re-scan happened), or an honest
-    note when no browser exists or there is nothing to capture."""
+    note when no browser exists or there is nothing to capture. run_start bounds
+    the re-scan to evidence captured during this run (P23)."""
     browser = capture_rendered.find_browser()
     if not browser:
         return {"ok": False, "captured": [],
@@ -54,7 +56,7 @@ def capture_and_rescan(result, target, extra):
         return {"ok": True, "captured": [], "note": "nothing to capture"}
     summary = capture_rendered.capture_pages(result["slug"], plan, browser=browser)
     if summary.get("captured"):
-        summary["scan"] = scan_site.run(target, extra)
+        summary["scan"] = scan_site.run(target, extra, min_capture_utc=run_start)
         summary["rescanned"] = True
     return summary
 
@@ -67,6 +69,12 @@ def pipeline(target, out_dir=None, crawl_pages=None, fresh_crawl=False, capture=
     skips the browser step (PLAN.md section 34)."""
     target = common.normalize_url(target)
     out_dir = Path(out_dir) if out_dir else common.evidence_dir()
+
+    # Stamp when this run began so the scanners reject rendered evidence left by
+    # a prior run: the first scan below runs before capture and must not consume
+    # stale metrics/DOM, and the post-capture re-scan accepts only what this run
+    # just captured (captured_at_utc >= run_start). See P23.
+    run_start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     # Enable the per-run fetch cache for the whole pipeline so discovery's
     # (or the crawl's) page fetches are reused by the scan and the post-capture
@@ -82,9 +90,9 @@ def pipeline(target, out_dir=None, crawl_pages=None, fresh_crawl=False, capture=
         else:
             disco = discover_pages.discover(target)
             extra = choose_pages(target, disco)
-        result = scan_site.run(target, extra)
+        result = scan_site.run(target, extra, min_capture_utc=run_start)
         if capture:
-            capture_summary = capture_and_rescan(result, target, extra)
+            capture_summary = capture_and_rescan(result, target, extra, run_start)
             if capture_summary.get("rescanned"):
                 result = capture_summary.pop("scan")
     finally:

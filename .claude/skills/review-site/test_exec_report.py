@@ -12,6 +12,9 @@ Run from this directory:
     python -m unittest test_exec_report
 """
 
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -489,6 +492,42 @@ class TestBuilderDependencies(unittest.TestCase):
                           f"does not declare it")
         self.assertIn("python-docx", declared)
         self.assertIn("matplotlib", declared)
+
+
+class TestBuildMainInputGuard(unittest.TestCase):
+    """P11: the CLI must reject a structurally wrong input (a top-level JSON
+    array) with a clear message and a nonzero exit, not a raw traceback."""
+
+    def _run_main(self, argv):
+        orig = sys.argv
+        sys.argv = argv
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                ber.main()
+            code = 0
+        except SystemExit as e:
+            code = e.code
+        finally:
+            sys.argv = orig
+        return code, buf.getvalue()
+
+    def test_top_level_list_exits_nonzero_with_message(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "data.json"
+            bad.write_text("[1, 2, 3]", encoding="utf-8")
+            code, out = self._run_main(["build_exec_report.py", str(bad), str(Path(td) / "o.docx")])
+        self.assertEqual(code, 1)
+        self.assertIn("must be a JSON object", out)
+
+    def test_valid_dict_still_builds(self):
+        with tempfile.TemporaryDirectory() as td:
+            good = Path(td) / "data.json"
+            good.write_text(json.dumps(SAMPLE), encoding="utf-8")
+            out_docx = Path(td) / "o.docx"
+            code, _ = self._run_main(["build_exec_report.py", str(good), str(out_docx)])
+            self.assertEqual(code, 0)
+            self.assertTrue(out_docx.is_file())
 
 
 if __name__ == "__main__":

@@ -5,8 +5,9 @@ Chrome UX Report (CrUX) field-data scanner.
 Queries Google's public dataset of real-user Chrome experience for the
 target origin (one documented API call; passive data retrieval, not a probe
 of the target) and grades the p75 Core Web Vitals against the published
-thresholds. Needs a GOOGLE_API_KEY (environment or repo-root .env); without
-one, or when the origin has insufficient traffic to appear in the dataset,
+thresholds. Needs a CRUX_API_KEY or GOOGLE_API_KEY (environment or repo-root
+.env; the dedicated CRUX_API_KEY wins when both are set); without one, or when
+the origin has insufficient traffic to appear in the dataset,
 every check is an honest info and the grade is Not measured. The key is
 never logged and never included in results. See PLAN.md section 30.
 

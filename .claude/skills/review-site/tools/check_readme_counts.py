@@ -29,10 +29,14 @@ def count_tests(module_dir, module_name):
     return unittest.TestLoader().loadTestsFromModule(module).countTestCases()
 
 
-def readme_mismatches(text, scanner, builder, scanners, categories):
+def readme_mismatches(text, scanner, builder, scanners, categories,
+                      trackers, cmp_hosts, dkim):
     """Which documented counts in the README text disagree with the measured
     values. Pure (no IO), so the CI gate has unit coverage. Returns a list of
     human-readable mismatch strings; an empty list means everything is in sync.
+    Covers the test counts, the registry counts, and the privacy/DKIM collection
+    counts (trackers, CMP hosts, DKIM selectors) - all derived from the code so
+    prose cannot drift (O8).
     """
     total = scanner + builder
     expected = {
@@ -43,12 +47,16 @@ def readme_mismatches(text, scanner, builder, scanners, categories):
         "file-tree annotation": f"({scanner} tests)",
         "registered-scanner count (line 17)": f"{scanners} registered scanners",
         "scorecard-category count (line 17)": f"{categories} scorecard categories",
+        "tracker-domain count": f"{trackers} documented tracker domains",
+        "CMP-host count": f"{cmp_hosts} CMP hosts",
+        "DKIM-selector count": f"{dkim} documented selector families",
     }
     return [f"{where}: expected '{needle}' not found in README"
             for where, needle in expected.items() if needle not in text]
 
 
-def fixed_readme(text, scanner, builder, scanners, categories):
+def fixed_readme(text, scanner, builder, scanners, categories,
+                 trackers, cmp_hosts, dkim):
     """Rewrite the documented counts in the README text to the measured values,
     the write-side of readme_mismatches so a contributor runs one command instead
     of hand-editing every site. Pure (no IO) and idempotent: each site is matched
@@ -67,6 +75,9 @@ def fixed_readme(text, scanner, builder, scanners, categories):
         (r"\(\d+ tests\)", f"({scanner} tests)"),
         (r"\d+ registered scanners", f"{scanners} registered scanners"),
         (r"\d+ scorecard categories", f"{categories} scorecard categories"),
+        (r"\d+ documented tracker domains", f"{trackers} documented tracker domains"),
+        (r"\d+ CMP hosts", f"{cmp_hosts} CMP hosts"),
+        (r"\d+ documented selector families", f"{dkim} documented selector families"),
     ]
     for pattern, repl in subs:
         text = re.sub(pattern, repl, text)
@@ -77,26 +88,33 @@ def main():
     if str(TOOLS) not in sys.path:
         sys.path.insert(0, str(TOOLS))
     import registry
+    import scan_privacy
+    import scan_dns_email
     scanner = count_tests(TOOLS, "test_review_tools")
     builder = count_tests(REVIEW, "test_exec_report")
     total = scanner + builder
     tools = registry.host_tools() + registry.page_tools()
     scanners = len(tools)
     categories = len({t.category for t in tools})
+    trackers = len(scan_privacy.KNOWN_TRACKERS)
+    cmp_hosts = len(scan_privacy.CMP_HOSTS)
+    dkim = len(scan_dns_email.DKIM_SELECTORS)
+    counts = (scanner, builder, scanners, categories, trackers, cmp_hosts, dkim)
 
     text = README.read_text(encoding="utf-8")
 
     if "--fix" in sys.argv[1:]:
-        fixed = fixed_readme(text, scanner, builder, scanners, categories)
+        fixed = fixed_readme(text, *counts)
         if fixed != text:
             README.write_text(fixed, encoding="utf-8")
             print(f"README counts rewritten: scanner {scanner}, builder {builder}, "
-                  f"total {total}; {scanners} scanners, {categories} categories.")
+                  f"total {total}; {scanners} scanners, {categories} categories, "
+                  f"{trackers} trackers, {cmp_hosts} CMP, {dkim} DKIM.")
         else:
             print("README counts already in sync; nothing to rewrite.")
         return 0
 
-    problems = readme_mismatches(text, scanner, builder, scanners, categories)
+    problems = readme_mismatches(text, *counts)
 
     if problems:
         print("README count drift detected:")
@@ -108,7 +126,8 @@ def main():
               "registry counts: line 17).")
         return 1
     print(f"README counts in sync: scanner {scanner}, builder {builder}, "
-          f"total {total}; {scanners} scanners, {categories} categories.")
+          f"total {total}; {scanners} scanners, {categories} categories; "
+          f"{trackers} trackers, {cmp_hosts} CMP, {dkim} DKIM.")
     return 0
 
 

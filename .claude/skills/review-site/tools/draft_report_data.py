@@ -22,7 +22,6 @@ from pathlib import Path
 import common
 import trends
 
-MAX_FINDINGS = 15
 # Transparent draft severity per verdict; a human reviews and adjusts these.
 DRAFT_SEVERITY = {"fail": "High", "warn": "Medium"}
 RATING = {"pass": "Good", "warn": "Needs work", "fail": "Poor"}
@@ -335,10 +334,15 @@ def draft(scan, trend=None):
     slug = scan.get("slug", "site")
     scorecard = _scorecard(scan)
     # Grouped issues (one finding per site-wide defect) when the scan provides
-    # them; raw per-page issues as the fallback for older scan files.
+    # them; raw per-page issues as the fallback for older scan files. Every
+    # distinct finding is named, not a top-N slice: the grouped list is already
+    # deduplicated to one entry per defect, so it is naturally bounded, and the
+    # builder sorts by severity and renders the whole set. Silently dropping a
+    # real finding (a poor site can have more than a dozen) is exactly what the
+    # deliverable must not do.
     issues = scan.get("issues_grouped") or scan.get("issues", {}) or {}
     ordered = list(issues.get("fail", [])) + list(issues.get("warn", []))
-    findings = [_finding_from_issue(i, slug) for i in ordered[:MAX_FINDINGS]]
+    findings = [_finding_from_issue(i, slug) for i in ordered]
 
     measured_at = scan.get("measured_at_utc", "")
     date = measured_at.split("T", 1)[0] if "T" in measured_at else measured_at
@@ -406,6 +410,9 @@ def main():
         print(f"Scan JSON not found: {in_path}")
         sys.exit(1)
     scan = json.loads(in_path.read_text(encoding="utf-8"))
+    if not isinstance(scan, dict):
+        print(f"Scan JSON must be a JSON object, got {type(scan).__name__}: {in_path}")
+        sys.exit(1)
     history_path = in_path.with_name(f"{scan.get('slug', 'site')}_history.jsonl")
     trend = trends.trend_from_ledger(history_path) if history_path.exists() else None
     data = draft(scan, trend=trend)

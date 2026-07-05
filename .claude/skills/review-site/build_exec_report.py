@@ -1055,6 +1055,9 @@ def main():
         print(f"Input JSON not found: {in_path}")
         sys.exit(1)
     data = json.loads(in_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        print(f"Input JSON must be a JSON object, got {type(data).__name__}: {in_path}")
+        sys.exit(1)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     build(data, out_path, chart_dir=in_path.parent / "rendered")
     print(f"Wrote {out_path}")

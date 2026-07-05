@@ -97,7 +97,8 @@ reduces the ledger to one point per calendar quarter (the latest run in each
 quarter, so ad-hoc runs never pollute the series) and the draft step folds the
 result into the report data. With two or more quarterly points the executive
 report renders a "Progress this quarter" section: a quarter-over-quarter
-posture table, trend charts (from three quarters), and every resolved finding
+posture table, trend charts (added once three or more quarters of history
+exist, and they plot every quarter in the ledger), and every resolved finding
 named. Inspect a site's series any time with: python trends.py <slug>
 The third_party_origins metric is the count on the most exposed reviewed
 page, not a site-wide union.

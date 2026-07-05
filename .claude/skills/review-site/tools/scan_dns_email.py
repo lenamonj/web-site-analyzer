@@ -77,18 +77,29 @@ def check_dmarc(domain):
         return {"present": False, "record": None,
                 "verdict": "fail", "note": "No DMARC record. No policy for spoofed mail."}
     policy = None
+    pct = None
     for part in dmarc.split(";"):
         part = part.strip().lower()
         if part.startswith("p="):
             policy = part.split("=", 1)[1]
+        elif part.startswith("pct="):
+            try:
+                pct = int(part.split("=", 1)[1].strip())
+            except ValueError:
+                pct = None
     has_rua = any(p.strip().lower().startswith("rua=") for p in dmarc.split(";"))
-    if policy == "reject":
+    if policy in ("reject", "quarantine") and pct == 0:
+        # pct=0 applies the policy to 0% of mail (receivers fall back to the
+        # lower policy), so an enforcing p= is effectively monitoring only.
+        v, note = "warn", (f"DMARC p={policy} but pct=0, so the policy applies to 0% of mail "
+                           "and is effectively monitoring only.")
+    elif policy == "reject":
         v, note = "pass", "DMARC policy is reject."
     elif policy == "quarantine":
         v, note = "pass", "DMARC policy is quarantine."
     else:
         v, note = "warn", f"DMARC policy is p={policy or 'none'} (monitor only)."
-    return {"present": True, "record": dmarc, "policy": policy,
+    return {"present": True, "record": dmarc, "policy": policy, "pct": pct,
             "aggregate_reports": has_rua, "verdict": v, "note": note}
 
 
@@ -144,9 +155,18 @@ def check_dnssec(domain):
     if not res["ok"]:
         return {"signed": None, "verdict": "info",
                 "note": f"DNSSEC lookup failed ({res['error']}); signing status could not be determined."}
-    if res["answers"]:
-        return {"signed": True, "verdict": "pass", "note": "DNSSEC keys published (zone is signed)."}
-    return {"signed": False, "verdict": "info", "note": "No DNSKEY; zone is not DNSSEC-signed."}
+    if not res["answers"]:
+        return {"signed": False, "verdict": "info", "note": "No DNSKEY; zone is not DNSSEC-signed."}
+    # A DNSKEY can be published without a matching DS record in the parent zone,
+    # in which case the chain of trust is never anchored and a validating
+    # resolver treats the zone as insecure. The resolver's AD (Authenticated
+    # Data) flag, not the mere presence of a key, is what confirms validation.
+    if res["ad"]:
+        return {"signed": True, "verdict": "pass",
+                "note": "DNSSEC keys published and validated by the resolver (AD flag set)."}
+    return {"signed": False, "verdict": "warn",
+            "note": ("DNSKEY published but the resolver did not authenticate it (no AD flag): the "
+                     "zone is likely missing a parent DS record, so validators treat it as unsigned.")}
 
 
 def _mx_gate(has_mx, feature):

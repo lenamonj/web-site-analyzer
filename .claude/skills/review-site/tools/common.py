@@ -23,6 +23,10 @@ from urllib.parse import urlparse, urljoin
 USER_AGENT = "website-review-bot/1.0 (+passive-audit; contact via site owner)"
 DEFAULT_TIMEOUT = 15
 MAX_BODY_BYTES = 3_000_000  # cap downloads so a huge page cannot stall a run
+MAX_DECOMPRESSED_BYTES = 30_000_000  # cap decompressed output so a compression
+#                                      bomb (3 MB gzip -> GBs) cannot exhaust RAM
+MAX_JSON_BYTES = 5_000_000  # cap trusted-endpoint JSON reads (RDAP/CrUX/DoH) so a
+#                             misbehaving endpoint cannot stream an unbounded body
 
 
 # One attribute-region pattern for every regex-based scanner: sequences of
@@ -53,11 +57,16 @@ def host_of(url):
 
 
 def slug_of(url):
-    """Match the slug rule in CLAUDE.md: drop scheme and leading www., dots to hyphens."""
+    """Match the slug rule in CLAUDE.md: drop scheme and leading www., dots to
+    hyphens. Any character illegal in a filename (the colons in an IPv6-literal
+    host, control chars) is also mapped to a hyphen so the slug is a safe file
+    name on every platform (Windows rejects ':'). Normal and unicode-IDN hosts
+    are unchanged."""
     host = host_of(url)
     if host.startswith("www."):
         host = host[4:]
-    return host.replace(".", "-")
+    slug = host.replace(".", "-")
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "-", slug).strip("-")
 
 
 # Minimal multi-label public suffixes so registrable-domain guessing is sane.
@@ -65,6 +74,13 @@ MULTI_SUFFIXES = {
     "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "org.au",
     "co.jp", "co.nz", "co.za", "com.br", "com.cn", "com.mx",
 }
+# Second-level labels that, under a two-letter country-code TLD, form a public
+# suffix (com.sg, co.in, org.hk, gov.tw, ...). No hardcoded list of ccTLDs can be
+# complete, so this pattern covers the common shape; err toward treating such a
+# host as a multi-label suffix, which keeps a third-party same-suffix registrant
+# out of the same-site set (a scope-safe over-conservatism, never an escape).
+SECOND_LEVEL_LABELS = {"com", "co", "org", "net", "gov", "edu", "ac", "mil",
+                       "gob", "go", "ne", "or"}
 
 
 def registrable_domain(host):
@@ -72,9 +88,13 @@ def registrable_domain(host):
     Shared host helper: several scanners and the discovery/crawler tools compare
     same-site by registrable domain, so it lives here rather than in one scanner."""
     labels = host.strip(".").split(".")
-    if len(labels) >= 3 and ".".join(labels[-2:]) in MULTI_SUFFIXES:
+    if len(labels) < 2:
+        return host
+    tld, second = labels[-1], labels[-2]
+    cc_second_level = len(tld) == 2 and tld.isalpha() and second in SECOND_LEVEL_LABELS
+    if len(labels) >= 3 and (".".join(labels[-2:]) in MULTI_SUFFIXES or cc_second_level):
         return ".".join(labels[-3:])
-    return ".".join(labels[-2:]) if len(labels) >= 2 else host
+    return ".".join(labels[-2:])
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -124,20 +144,26 @@ def _decompress(raw, encoding):
     Uses streaming decompressors so a body truncated at the MAX_BODY_BYTES read
     cap still yields its decompressed prefix (matching how a truncated
     uncompressed body keeps its first bytes) instead of raising or leaving the
-    body compressed."""
+    body compressed. Output is bounded at MAX_DECOMPRESSED_BYTES: decompress with
+    a max_length so a compression bomb (a 3 MB gzip that inflates to gigabytes)
+    is truncated at the ceiling rather than exhausting memory - the same
+    truncate-here semantics as the wire cap."""
     enc = (encoding or "").lower().strip()
     try:
         if enc == "gzip" or (not enc and raw[:2] == b"\x1f\x8b"):
-            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw)
+            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw, MAX_DECOMPRESSED_BYTES)
         if enc == "deflate":
             try:
-                return zlib.decompressobj(zlib.MAX_WBITS).decompress(raw)
+                return zlib.decompressobj(zlib.MAX_WBITS).decompress(raw, MAX_DECOMPRESSED_BYTES)
             except zlib.error:
-                return zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw)  # raw deflate stream
+                return zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw, MAX_DECOMPRESSED_BYTES)
         if enc == "br":
             try:
                 import brotli
-                return brotli.decompress(raw)
+                # brotli has no bounded-decompress API; the tool never advertises
+                # br (Accept-Encoding is gzip, deflate), so this path is only hit
+                # by a non-conformant server. Cap the result defensively.
+                return brotli.decompress(raw)[:MAX_DECOMPRESSED_BYTES]
             except Exception:
                 return raw  # brotli is not stdlib; leave the body as-is if unavailable
     except (OSError, zlib.error):
@@ -185,6 +211,12 @@ def disable_fetch_cache():
         _FETCH_CACHE_DEPTH = max(0, _FETCH_CACHE_DEPTH - 1)
         if _FETCH_CACHE_DEPTH == 0:
             _FETCH_CACHE = None
+
+
+class TooManyRedirects(Exception):
+    """A redirect chain that exceeds max_redirects (or loops) without reaching a
+    terminal response, so http_fetch returns ok=False instead of presenting the
+    last un-followed 3xx as a success."""
 
 
 def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want_body=True,
@@ -260,6 +292,13 @@ def http_fetch(url, method="GET", max_redirects=5, timeout=DEFAULT_TIMEOUT, want
                 except Exception:
                     pass
             break
+        else:
+            # The loop ran out of hops while still on a redirect: the chain exceeds
+            # max_redirects or loops, so no terminal resource was reached. Report a
+            # failure (handled by the outer except) rather than falling through to
+            # the success builder, which would present the last 3xx with body=None
+            # as ok - a looping host must not read as reachable/converged.
+            raise TooManyRedirects(f"redirect chain exceeds {max_redirects} hops")
 
         elapsed_ms = round((time.perf_counter() - started) * 1000)
         final = hops[-1]
@@ -319,6 +358,15 @@ def env_value(name):
     return None
 
 
+def _read_json_capped(resp):
+    """Parse a JSON HTTP response, reading at most MAX_JSON_BYTES. The trusted
+    first-party endpoints (IANA RDAP, Google DoH/CrUX) return small bodies; the
+    cap stops a misbehaving one from streaming an unbounded read into memory, the
+    same way http_fetch bounds page bodies. An oversized body truncates and fails
+    to parse, which every caller already handles as an error."""
+    return json.loads(resp.read(MAX_JSON_BYTES).decode("utf-8", errors="replace"))
+
+
 def http_post_json(url, payload, timeout=DEFAULT_TIMEOUT):
     """POST a JSON payload and parse a JSON response. Never raises; errors are
     returned. Part of the stubbed network-primitive set (see the contract
@@ -330,12 +378,12 @@ def http_post_json(url, payload, timeout=DEFAULT_TIMEOUT):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return {"ok": True, "status": resp.status,
-                    "json": json.loads(resp.read().decode("utf-8", errors="replace")),
+                    "json": _read_json_capped(resp),
                     "error": None}
     except urllib.error.HTTPError as e:
         detail = None
         try:
-            detail = json.loads(e.read().decode("utf-8", errors="replace"))
+            detail = _read_json_capped(e)
         except Exception:
             pass
         return {"ok": False, "status": e.code, "json": detail,
@@ -353,7 +401,7 @@ def _http_get_json(url, timeout=DEFAULT_TIMEOUT):
     req = urllib.request.Request(
         url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+        return _read_json_capped(resp)
 
 
 def _rdap_base_for(tld, timeout=DEFAULT_TIMEOUT):
@@ -380,8 +428,13 @@ def parse_rdap_domain(data):
     if not isinstance(data, dict):
         return {"ok": False, "error": "RDAP response was not a JSON object",
                 "expiration": None, "registration": None}
+    # `events` should be an array, but a non-conformant registry can return a
+    # scalar; isinstance beats `or []`, which only rescues falsy junk and lets a
+    # truthy scalar (a count int, a bool) crash the comprehension.
+    raw_events = data.get("events")
     events = {e.get("eventAction"): e.get("eventDate")
-              for e in (data.get("events") or []) if isinstance(e, dict) and e.get("eventAction")}
+              for e in (raw_events if isinstance(raw_events, list) else [])
+              if isinstance(e, dict) and e.get("eventAction")}
     return {"ok": True, "error": None,
             "expiration": events.get("expiration"),
             "registration": events.get("registration")}
@@ -415,7 +468,8 @@ def doh_query(name, rtype, timeout=DEFAULT_TIMEOUT):
     q = f"https://dns.google/resolve?name={urllib.parse.quote(name)}&type={rtype}"
     req = urllib.request.Request(q, headers={"accept": "application/dns-json", "User-Agent": USER_AGENT})
     try:
-        data = json.load(urllib.request.urlopen(req, timeout=timeout))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = _read_json_capped(resp)
         answers = [a.get("data", "") for a in data.get("Answer", [])]
         return {"ok": True, "error": None, "status": data.get("Status"),
                 "ad": data.get("AD", False), "answers": answers, "raw": data.get("Answer", [])}

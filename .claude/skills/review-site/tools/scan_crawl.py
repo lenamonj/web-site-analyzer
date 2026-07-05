@@ -48,7 +48,7 @@ def _star_group_disallows_all(body):
 
 def check_robots_txt(base):
     res = common.http_fetch(urljoin(base, "/robots.txt"), want_body=True)
-    if res.get("final_status") is None:
+    if not res["ok"]:  # fetch did not complete (no response, or a failed redirect)
         return {"present": None, "status": None, "sitemaps": [], "verdict": "info",
                 "note": f"robots.txt could not be fetched ({res.get('error')}); presence unknown."}
     body = res.get("body") or ""
@@ -71,7 +71,7 @@ def check_robots_txt(base):
 def check_sitemap(base, robots_sitemaps):
     candidate = robots_sitemaps[0] if robots_sitemaps else urljoin(base, "/sitemap.xml")
     res = common.http_fetch(candidate, want_body=True)
-    if res.get("final_status") is None:
+    if not res["ok"]:  # fetch did not complete (no response, or a failed redirect)
         return {"url": candidate, "status": None, "verdict": "info",
                 "note": f"Sitemap could not be fetched ({res.get('error')}); presence unknown."}
     body = res.get("body") or ""
@@ -93,7 +93,10 @@ def check_host_canonicalization(host):
                 "note": f"Host {host} is a subdomain; apex/www canonicalization not applicable."}
     variants = {h: common.http_fetch(f"https://{h}", want_body=False)
                 for h in (apex, f"www.{apex}")}
-    reachable = {h: r for h, r in variants.items() if r.get("final_status") is not None}
+    # A host is reachable only if the fetch reached a terminal response; a redirect
+    # loop or over-cap chain has ok=False (though final_status is a 3xx), so it must
+    # not count as a live, converged host.
+    reachable = {h: r for h, r in variants.items() if r.get("ok")}
     if len(reachable) < 2:
         missing = [h for h in variants if h not in reachable][0]
         return {"verdict": "info", "unreachable": missing,
