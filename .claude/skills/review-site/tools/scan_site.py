@@ -113,14 +113,17 @@ def group_issues(issues):
 def diff_issues(prev_result, result):
     """What changed since the previous run of the same target: issues present
     now but not before (new) and present before but not now (resolved), keyed by
-    the grouped defect identity (label, check, verdict) with the per-page URL
-    stripped from the scan label - the same key group_issues uses. Counting
-    per-page would report one template defect newly appearing on 40 pages as 40
-    new issues, inconsistent with the grouped-finding view the report shows."""
+    the grouped defect identity (label, check) with the per-page URL stripped from
+    the scan label. The verdict is deliberately NOT part of the key: a defect that
+    merely worsens or eases (warn<->fail) is the same persistent defect, so keying
+    on the verdict too would report it as one resolved plus one new - a false
+    "improvement" claim for a defect that is still there. Counting per-page would
+    likewise report one template defect on 40 pages as 40 new, inconsistent with
+    the grouped-finding view the report shows."""
     def keyed(res):
         issues = res.get("issues", {}) or {}
         flat = list(issues.get("fail", [])) + list(issues.get("warn", []))
-        return {(i["scan"].partition(":")[0], i["check"], i["verdict"]): i for i in flat}
+        return {(i["scan"].partition(":")[0], i["check"]): i for i in flat}
     prev, curr = keyed(prev_result), keyed(result)
     return {
         "previous_measured_at": prev_result.get("measured_at_utc"),

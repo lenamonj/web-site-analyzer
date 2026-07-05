@@ -47,6 +47,15 @@ def _load_robots(base):
     return rp
 
 
+def _origin(url):
+    p = urlparse(url)
+    return f"{p.scheme}://{p.netloc}"
+
+
+def _crawl_delay(rp):
+    return float(rp.crawl_delay(UA_TOKEN) or rp.crawl_delay("*") or 0)
+
+
 def _eligible(url, domain):
     parts = urlparse(url)
     if parts.scheme not in ("http", "https"):
@@ -83,9 +92,20 @@ def crawl(target, max_pages=100, delay=DEFAULT_DELAY, state_path=None,
         if loaded and loaded.get("target") == target:
             state = loaded
 
-    rp = _load_robots(target)
-    crawl_delay = rp.crawl_delay(UA_TOKEN) or rp.crawl_delay("*") or 0
-    wait = max(delay, float(crawl_delay))
+    # Per-authority robots.txt: RFC 9309 scopes robots to one scheme+host, and the
+    # crawl follows same-registrable-domain subdomains, so each origin gets its own
+    # parser instead of applying the target's rules (and delay) to other subdomains.
+    robots = {}
+
+    def robots_for(url):
+        origin = _origin(url)
+        rp = robots.get(origin)
+        if rp is None:
+            rp = _load_robots(origin + "/")
+            robots[origin] = rp
+        return rp
+
+    wait = max(delay, _crawl_delay(robots_for(target)))
 
     visited = set(state["visited"])
     queue = [u for u in state["queue"] if u not in visited]
@@ -96,6 +116,7 @@ def crawl(target, max_pages=100, delay=DEFAULT_DELAY, state_path=None,
         queued.discard(url)
         visited.add(url)
 
+        rp = robots_for(url)
         if not rp.can_fetch(UA_TOKEN, url):
             state["skipped_by_robots"] += 1
         else:
@@ -116,7 +137,7 @@ def crawl(target, max_pages=100, delay=DEFAULT_DELAY, state_path=None,
                         queue.append(absolute)
                         queued.add(absolute)
             if queue and len(state["collected"]) < max_pages:
-                sleep(wait)
+                sleep(max(wait, _crawl_delay(rp)))  # honor this origin's own delay
 
         state["visited"] = sorted(visited)
         state["queue"] = queue

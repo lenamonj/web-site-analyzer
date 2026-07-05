@@ -52,8 +52,20 @@ def _extract_locs(body):
     return [m.strip() for m in LOC_RE.findall(body)]
 
 
-def _collect_sitemap_urls(base, robots_sitemaps):
-    start = robots_sitemaps[0] if robots_sitemaps else urljoin(base, "/sitemap.xml")
+def _same_site(url, domain):
+    return common.registrable_domain(common.host_of(url)) == domain
+
+
+def _collect_sitemap_urls(base, robots_sitemaps, domain):
+    # Fetch only sitemaps on the target's own registrable domain. A robots.txt
+    # Sitemap: line and a sitemapindex <loc> are content served by the reviewed
+    # site and can name any host, so an unguarded fetch would contact a site the
+    # operator never authorized (the crawler enforces the same gate via _eligible).
+    # An off-domain advertised sitemap degrades to the conventional same-domain
+    # /sitemap.xml; a coverage miss on a cross-domain-CDN sitemap is acceptable, a
+    # scope escape is not.
+    on_site = [s for s in robots_sitemaps if _same_site(s, domain)]
+    start = on_site[0] if on_site else urljoin(base, "/sitemap.xml")
     res = common.http_fetch(start, want_body=True)
     if res["final_status"] != 200 or not res["body"]:
         return {"found": False, "urls": [], "sitemaps_read": []}
@@ -62,6 +74,8 @@ def _collect_sitemap_urls(base, robots_sitemaps):
     if "<sitemapindex" in body.lower():
         page_urls, read = [], [start]
         for child in locs[:MAX_CHILD_SITEMAPS]:
+            if not _same_site(child, domain):
+                continue
             r = common.http_fetch(child, want_body=True)
             if r["final_status"] == 200 and r["body"]:
                 page_urls.extend(_extract_locs(r["body"]))
@@ -81,7 +95,7 @@ def _internal_nav_links(anchors, base, domain):
         absolute = urljoin(base, href).split("#")[0]
         if urlparse(absolute).scheme not in ("http", "https"):
             continue
-        if common.registrable_domain(common.host_of(absolute)) != domain:
+        if not _same_site(absolute, domain):
             continue
         if absolute not in seen:
             seen.add(absolute)
@@ -129,7 +143,7 @@ def discover(url):
         robots_sitemaps = [l.split(":", 1)[1].strip() for l in robots["body"].splitlines()
                            if l.lower().startswith("sitemap:")]
 
-    sm = _collect_sitemap_urls(base, robots_sitemaps)
+    sm = _collect_sitemap_urls(base, robots_sitemaps, domain)
     nav = _internal_nav_links(parsed["anchors"], base, domain)
 
     all_urls, seen = [], set()

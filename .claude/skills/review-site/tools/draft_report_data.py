@@ -162,8 +162,14 @@ def _assessment(scan):
         weaknesses.append(f"{CATEGORY_LABEL.get(name, name)}: {g['band'].lower()} ({detail})"
                           + (f". Example: {note}" if note else ""))
     wv = _web_vitals(scan)
-    if wv and all(m["rating"] == "Good" for m in wv["metrics"]):
-        strengths.insert(0, "Core Web Vitals all in the Good range")
+    # Claim "all Good" only when every expected metric for the source was measured
+    # (not a partial subset) and rated Good. A lab capture measures TBT, which is
+    # not a Core Web Vital (the interactivity CWV is INP, never available in lab),
+    # so phrase a lab pass as lab metrics, never as Core Web Vitals.
+    if wv and wv["complete"] and all(m["rating"] == "Good" for m in wv["metrics"]):
+        strengths.insert(0, "Core Web Vitals all in the Good range"
+                         if wv["source"] == "field"
+                         else "Lab performance metrics all in the Good range")
     return {"strengths": strengths, "weaknesses": weaknesses}
 
 
@@ -235,7 +241,9 @@ def _web_vitals(scan):
         ("field_cls", "CLS", lambda v: f"{v:.2f}"),
         ("field_inp", "INP", lambda v: f"{int(v)}ms")])
     if field:
-        return {"source": "field", "metrics": field,
+        # complete == all three of LCP, CLS, INP were measured; only then is an
+        # "all in the Good range" claim about the full Core Web Vitals honest.
+        return {"source": "field", "metrics": field, "complete": len(field) == 3,
                 "captured_note": "Real Chrome users, 28-day p75 (CrUX)"}
     for ps in scan.get("page_scans", []) or []:
         lab = _vitals_metrics((ps.get("vitals") or {}).get("checks", {}), [
@@ -243,7 +251,7 @@ def _web_vitals(scan):
             ("cls", "CLS", lambda v: f"{v:.2f}"),
             ("tbt", "TBT", lambda v: f"{int(v)}ms")])
         if lab:
-            return {"source": "lab", "metrics": lab,
+            return {"source": "lab", "metrics": lab, "complete": len(lab) == 3,
                     "captured_note": "Lab capture, one load"}
     return None
 
@@ -263,7 +271,11 @@ def _scorecard(scan):
             # truthful score bar without parsing the display string.
             row["score"] = score
         rows.append(row)
-    return {"overall": overall, "rows": rows}
+    # Carry the scanner crashes into the report so a Not-measured category is
+    # explained, not silently graded around at the overall level (the P7 class,
+    # one layer up: the digest/console surfaced these but the deliverable did not).
+    return {"overall": overall, "rows": rows,
+            "scanner_errors": scan.get("scanner_errors") or []}
 
 
 def _finding_from_issue(issue, slug):
@@ -375,6 +387,14 @@ def draft(scan, trend=None):
     top_priority = action_plan[0]["action"] if action_plan else None
     bits = [f"DRAFT (sharpen for the CEO): measured posture is {scorecard['overall']} "
             f"across {n_pages} page(s)"]
+    # A crashed scanner leaves its category Not measured, so the overall posture
+    # covers only what was measured; say so rather than let an uncaveated band read
+    # as a clean bill for a category that never ran.
+    sc_errors = scorecard.get("scanner_errors") or []
+    if sc_errors:
+        tools = ", ".join(sorted({str(e.get("tool")) for e in sc_errors}))
+        bits.append(f"{len(sc_errors)} scanner(s) could not measure their category "
+                    f"({tools}), so this posture covers only the measured categories")
     if strongest:
         bits.append(f"the strongest area is {strongest.lower()}")
     if top_priority:

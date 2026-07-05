@@ -14,6 +14,7 @@ Usage:
 """
 
 import sys
+from urllib.parse import urljoin
 
 import common
 import htmlmeta
@@ -83,6 +84,40 @@ def _robots_meta_check(robots):
             "note": "No noindex on this page." if not robots else f"Robots meta: {robots}."}
 
 
+def _canonical_check(canonical, base):
+    # A canonical link names the authoritative URL for this page. Grade where it
+    # points, not merely that it is present: a canonical on a different
+    # registrable domain tells search engines to index that other site and drop
+    # this page, so it is a fail, not a pass. Relative hrefs and same-site
+    # variants (apex vs www, subdomains) resolve to the page's own domain and
+    # stay pass.
+    if not canonical:
+        return {"value": None, "verdict": "info", "note": "No canonical link."}
+    resolved = urljoin(base, canonical.strip())
+    page_domain = common.registrable_domain(common.host_of(base))
+    canon_host = common.host_of(resolved)
+    canon_domain = common.registrable_domain(canon_host)
+    if canon_domain and page_domain and canon_domain != page_domain:
+        return {"value": canonical, "verdict": "fail",
+                "note": (f"Canonical points off-host to {canon_host}; this page tells search "
+                         "engines to index that domain instead, dropping this page from results.")}
+    return {"value": canonical, "verdict": "pass", "note": "Canonical set."}
+
+
+def _viewport_check(viewport):
+    # Mobile-friendliness (Google's own criterion) needs width=device-width so the
+    # layout adapts to the device; a fixed-width viewport (content="width=1024")
+    # is present but not responsive, so grade the VALUE, not mere presence.
+    if not viewport:
+        return {"value": None, "verdict": "fail",
+                "note": "No viewport meta; mobile rendering will suffer."}
+    if "width=device-width" in viewport.replace(" ", "").lower():
+        return {"value": viewport, "verdict": "pass", "note": "Responsive viewport set (width=device-width)."}
+    return {"value": viewport, "verdict": "warn",
+            "note": (f"Viewport is set but not responsive (content=\"{viewport}\"); it lacks "
+                     "width=device-width, so the page will not adapt to mobile screens.")}
+
+
 def _image_alt_check(images, inconclusive):
     if inconclusive or not images:
         note = ("Images not assessable from static HTML (client-rendered)."
@@ -114,13 +149,8 @@ def _scan(url, page=None):
         "meta_description": {**_len_verdict(parsed["meta_description"], DESC_MIN, DESC_MAX,
                                             "Meta description"),
                              "value": parsed["meta_description"]},
-        "canonical": {"value": parsed["canonical"],
-                      "verdict": "pass" if parsed["canonical"] else "info",
-                      "note": "Canonical set." if parsed["canonical"] else "No canonical link."},
-        "viewport": {"value": parsed["meta_viewport"],
-                     "verdict": "pass" if parsed["meta_viewport"] else "fail",
-                     "note": "Mobile viewport set." if parsed["meta_viewport"]
-                     else "No viewport meta; mobile rendering will suffer."},
+        "canonical": _canonical_check(parsed["canonical"], base),
+        "viewport": _viewport_check(parsed["meta_viewport"]),
         "lang": {"value": parsed["html_lang"],
                  "verdict": "pass" if parsed["html_lang"] else "warn",
                  "note": f"html lang={parsed['html_lang']}." if parsed["html_lang"]

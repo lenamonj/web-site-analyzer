@@ -575,7 +575,7 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   .com/.co.uk cases still pass. Scanner 334 -> 335; README resynced to 335/369
   (guard exit 0); no builder change. Closes the last Medium.
 
-- [ ] **P32 (todo, M)** Mixed `rank` types in recommendations crash the entire
+- [x] **P32 (done, M)** Mixed `rank` types in recommendations crash the entire
   build. build_exec_report.py:963 sorts `data.get("recommendations", [])` by
   `key=lambda r: r.get("rank", 999)`; the default is the int 999, so if any
   recommendation carries a string rank ("1", "2" - a natural slip in the
@@ -588,7 +588,14 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   the sort key to numeric, non-numeric last (a (0, float(rank)) / (1, 0.0) tuple).
   Accept: build with recommendations ranked "10", 2, none, "1" succeeds and orders
   one, two, ten, none; suites green.
-- [ ] **P33 (todo, M)** A UTF-8 BOM defeats TARGET.txt and .env reads, silently
+  Done: the recommendations sort now uses a _rank_key that returns (0, float(rank))
+  or, on TypeError/ValueError (a non-numeric or missing rank), (1, 0.0), so numeric
+  ranks order first and a string/absent rank sorts last without a str-vs-int
+  comparison. New test test_mixed_rank_types_sort_numerically_without_crashing builds
+  a doc with ranks "10"/2/none/"1" and reads back the table order (one, two, ten,
+  none). Builder 34 -> 35, exec-report green; scanner 338 and report-charts 8
+  unaffected; README resynced to 373 total (guard exit 0).
+- [x] **P33 (done, M)** A UTF-8 BOM defeats TARGET.txt and .env reads, silently
   disabling target auto-resolution and the first credential. common.read_target_file
   (common.py:522) reads TARGET.txt with encoding="utf-8" and matches
   line.strip().lower().startswith("http"); '﻿'.isspace() is False, so a BOM
@@ -602,6 +609,458 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   Fix: read both (and any other hand-edited text file) with encoding="utf-8-sig".
   Accept: TARGET.txt / .env with a leading BOM resolve their first line; a normal
   file still works; suites green.
+  Done: read_target_file and env_value now read with encoding="utf-8-sig" (which
+  strips a leading BOM and otherwise reads as utf-8; env_value keeps
+  errors="replace"). New TestHandEditedFileReads: TARGET.txt and .env with a BOM
+  resolve their first line, a normal file still works. The suite stubs env_value
+  offline, so the test captures the real reader (_REAL_ENV_VALUE) before the stub.
+  Scanner 338 -> 340; builder 35 and report-charts 8 unaffected; README resynced to
+  340/375 (guard exit 0). Closes the last Medium.
+
+- [x] **P38 (done, M)** add_key_dates_panel crashes the whole report on a non-string
+  key-date label - a missed spot in the P35 non-string-scalar class.
+  build_exec_report.py:607 calls item.get("label", "").upper() on the raw value,
+  while the sibling value field on the next line is str()-guarded. A present-but-non-
+  string label aborts the only deliverable. Reproduced: build with
+  key_dates={"items":[{"label":None,"value":"2026-01-01"}]} -> AttributeError
+  'NoneType' has no attribute 'upper' (also 123, a dict); a missing label is already
+  safe (.get -> ""); "Cert expiry" builds fine. exec_report_data.json is hand-edited
+  and "label": null is valid JSON, so the trigger is realistic. Found by the P35-run
+  replenishment partial audit (builder rendering). Fix: str(item.get("label") or
+  "").upper(), matching the value field's guard. Accept: the three non-string-label
+  builds succeed; a normal label still renders; suites green.
+  Done: the label now reads str(item.get("label") or "").upper(), matching the
+  value field's str() guard; the sibling detail was already safe (it goes through
+  the now-coercing add_run). Extended test_non_string_scalars_do_not_crash_the_build
+  with key_dates label None/123. Verified a normal "Cert expiry" still renders as
+  "CERT EXPIRY" in the panel table cell. Builder 37 (extended test), exec-report
+  green; scanner 342 and report-charts 8 unaffected; guard exit 0.
+
+- [x] **P40 (done, M)** cookie_consent false-PASSes on substring-matched consent
+  markers, suppressing a real "trackers without consent" warning. scan_privacy
+  _consent_detected (scan_privacy.py:301) tests each CONSENT_MARKERS entry as a raw
+  substring of body.lower(); "truste" (scan_privacy.py:209) is a substring of the
+  everyday words trusted / trustee / trustees, and "cookie-policy" (:208) matches a
+  plain footer link href="/cookie-policy" - neither is a consent mechanism.
+  Reproduced: _consent_detected("we are a trusted vendor") -> True, and a page with
+  a Google Analytics script, no consent banner, and the copy "trusted by thousands"
+  grades cookie_consent pass (should be warn), inflating the privacy band from 0.5
+  to 1.0. The substring-on-structured-data class (like SPF -all / robots content=none
+  / CSP directive) applied to consent detection. Found by the P36-run replenishment
+  partial audit (scanner grading decisions). Fix: drop the bare "truste" marker
+  (truste.com/trustarc.com are already in the CMP_HOSTS list) and drop "cookie-policy"
+  (a policy-page link is not a consent mechanism); the remaining hyphenated/brand
+  markers do not collide with prose. Accept: _consent_detected("a trusted vendor")
+  and _consent_detected('<a href="/cookie-policy">') return False; a page with a real
+  cookie-consent/onetrust marker still detects True; the GA + trusted + no-CMP page
+  grades cookie_consent warn; scanner suite green.
+  Done: dropped "truste" and "cookie-policy" from CONSENT_MARKERS (16 -> 14 markers;
+  TrustArc still detected via trustarc.com in CMP_HOSTS) and documented that every
+  remaining marker must be specific enough not to collide with prose. Verified
+  "trusted"/"trustee"/a cookie-policy link no longer detect, while a cookie-consent
+  class, onetrust, trustarc.com host, usercentrics, and cmplz still do. New test
+  test_consent_markers_do_not_substring_match_prose. Scanner 343 -> 344; README
+  resynced to 344/381 (guard exit 0; CMP_HOSTS count unchanged at 20); no builder
+  change.
+
+- [x] **P44 (done, M)** Multiple SPF records grade pass, missing a permerror that
+  makes SPF non-functional. scan_dns_email.check_spf (scan_dns_email.py:50) selects
+  the first `v=spf1` record and grades only it, never counting them. Per RFC 7208
+  sec 3.2/4.5 a domain publishing more than one v=spf1 TXT record MUST yield
+  permerror - receivers ignore SPF and DMARC-via-SPF alignment breaks. Reproduced:
+  records ["v=spf1 include:_spf.google.com -all", "v=spf1 include:mailgun.org ~all"]
+  -> verdict pass (should fail). Two SPF records is a classic slip (a vendor include
+  added as a second record). Found by the P41-run replenishment partial audit
+  (scanner grading decisions). Fix: if more than one record starts with v=spf1,
+  return fail "Multiple SPF records (permerror; receivers ignore SPF)". Accept: two
+  v=spf1 records yield verdict != pass; a single record stays pass; scanner suite
+  green.
+  Done: check_spf now counts v=spf1 records after confirming one is present, and
+  returns fail "Multiple SPF records published: a permerror..." when more than one
+  exists; a single record (even with unrelated TXT records alongside) still grades
+  by its all-mechanism. New test test_multiple_spf_records_are_a_permerror. Scanner
+  346 -> 347; README resynced to 347/384 (guard exit 0); no builder change.
+- [x] **P45 (done, M)** Referrer-Policy: no-referrer-when-downgrade grades pass, but
+  it leaks full URLs (path+query) to every cross-origin HTTPS destination.
+  scan_http_security.check_referrer_policy (scan_http_security.py:98-101) flags only
+  unsafe-url; every other value passes. Per the W3C Referrer Policy spec / MDN,
+  no-referrer-when-downgrade sends the full URL on same-or-more-secure requests -
+  the same leak the check already warns about for unsafe-url, and the reason the web
+  default moved to strict-origin-when-cross-origin. Reproduced:
+  no-referrer-when-downgrade -> pass; strict-origin-when-cross-origin -> pass;
+  unsafe-url -> warn. Found by the P41-run replenishment partial audit. Fix: also
+  warn when the effective (last) token is no-referrer-when-downgrade, with the same
+  full-URL-leak note. Accept: no-referrer-when-downgrade -> warn; strict-origin-
+  when-cross-origin / origin-when-cross-origin / same-origin stay pass; suite green.
+  Done: check_referrer_policy now grades the effective (last) token of the
+  comma-separated fallback list, warning when it is unsafe-url OR
+  no-referrer-when-downgrade (both leak full URLs cross-origin); the modern
+  origin-based policies pass. Also fixes a latent substring quirk (unsafe-url as a
+  non-last fallback token no longer false-warns). Extended test_matrix with the
+  no-referrer-when-downgrade / origin-based / fallback-list cases. Scanner 347
+  (extended test); README total 384 unchanged (guard exit 0); no builder change.
+- [x] **P46 (done, M)** The canonical check passed on any value, so a cross-host
+  canonical (a page de-indexing itself) graded clean. scan_seo canonical check
+  (scan_seo.py:117-119) was `pass if parsed["canonical"] else info` and never compared
+  the href to the page URL, though base = res["final_url"] is in scope. A canonical
+  pointing to a different host, or pointing every page at the homepage, tells Google
+  to drop this page in favor of the target - a damaging misconfiguration. Reproduced
+  against https://example.com/products/widget: canonical https://evil-other.com/ ->
+  pass "Canonical set."; a self canonical -> pass. Found by the P41-run replenishment
+  partial audit. Fix: resolve the href against base; if its registrable host differs
+  from the page host, fail ("canonical points off-host"). Accept: a cross-host
+  canonical yields fail; a self/same-host canonical stays pass; scanner suite green.
+  Done: extracted _canonical_check(canonical, base) in scan_seo.py - it resolves the
+  href against base with urljoin, then compares registrable_domain(host_of(resolved))
+  to registrable_domain(host_of(base)); a different registrable domain fails ("points
+  off-host to <host>; tells search engines to index that domain instead"), while a
+  self, apex-vs-www, subdomain, or relative canonical stays pass and an absent one is
+  info. Same registrable-domain same-site model the crawler/discovery already share,
+  so www/subdomain variants are not false-failed. New test test_canonical_check
+  (cross-host + protocol-relative off-host -> fail; self/www/subdomain/relative ->
+  pass; none -> info). Scanner 347 -> 348; README resynced to 348/385 (guard exit 0);
+  no builder change. Closes the last Medium of the P41-run replenishment.
+
+#### Replenishment from the P48-run partial audit (2026-07-05, orchestration + report layer)
+The Low tail dropped the open count below three, so a partial audit targeted the
+least-recently-scored dimensions (the P41 run swept scanner grading logic): the
+orchestration/scope tools (run_review, discover_pages, crawler) and the report/trend
+builder (trends, report_charts, draft_report_data). A general-purpose auditor swept
+them read-only; I reproduced each finding myself before filing. crawler.py, trends.py,
+report_charts.py, and run_review.py had no reproducible defect. Two Medium found.
+- [x] **P51 (done, S)** discover_pages fetches off-domain hosts named by the target's
+  own robots.txt / sitemap index, with no same-domain guard - a scope-boundary gap
+  (the default scoping helper contacts hosts the operator never named). discover_pages
+  _collect_sitemap_urls (discover_pages.py:57 and :65) fetches the robots.txt Sitemap:
+  URL and every <loc> inside a <sitemapindex> via common.http_fetch with no eligibility
+  check, while the sibling _internal_nav_links (:84) already drops any absolute URL
+  whose registrable_domain != the target domain. Reproduced: with a stubbed http_fetch,
+  a target on target.example whose robots.txt advertises
+  Sitemap: https://attacker-controlled.test/sitemap.xml (a <sitemapindex> pointing at
+  https://third-party.test/child.xml) makes the tool fetch BOTH off-domain hosts
+  (sitemaps_read lists them). Same scope-filter class as P27 (rated Medium); this one
+  is on the default path and fetches immediately, and the sitemap URL is
+  attacker-influenceable (an SSRF-flavored angle: a hostile target could name an
+  internal address), though the response body is only parsed for <loc> and never
+  reflected. Found by the P48-run replenishment partial audit. Fix: before fetching
+  start and each child, skip any URL whose registrable_domain(host_of(url)) != the
+  target's registrable domain (reuse the crawler's _eligible model); the charter's
+  "a coverage miss is acceptable, a scope escape is not" governs the cross-CDN-sitemap
+  tradeoff. Accept: a test with a stubbed http_fetch and an off-domain robots Sitemap
+  asserts the tool fetches no host other than the target's registrable domain; a
+  same-domain (incl. www/subdomain) sitemap is still fetched; suites green.
+  Done: _collect_sitemap_urls now takes the target domain and fetches only same-
+  registrable-domain sitemaps via a shared _same_site(url, domain) helper - it filters
+  the robots.txt Sitemap: candidates to on-domain ones (falling back to the
+  conventional same-domain /sitemap.xml when none is on-domain, so an off-domain
+  advertised sitemap degrades to a coverage miss, not a scope escape) and skips any
+  off-domain sitemapindex <loc> child. _internal_nav_links now reuses the same helper
+  (DRY). New test test_sitemap_collection_never_fetches_off_domain (off-domain robots
+  Sitemap + a third-party child -> zero off-domain fetches; the www child on the same
+  registrable domain is still read). Scanner 352 -> 353; README resynced to 353/390
+  (guard exit 0); no builder change.
+- [x] **P52 (done, S)** The CEO report claims "Core Web Vitals all in the Good range"
+  from a lab capture (whose third metric is TBT, not a Core Web Vital) and even from a
+  single partial metric - a misleading claim in the deliverable. draft_report_data
+  _assessment (draft_report_data.py:165-166) inserts that strength whenever every
+  measured vitals metric rates Good, but the lab branch of _web_vitals (:240-247)
+  measures LCP, CLS, and TBT (TBT is a lab proxy; the interactivity CWV is INP, never
+  in lab), and _vitals_metrics (:218-226) includes only measured metrics, so a partial
+  set (e.g. LCP alone) satisfies all(). Reproduced: a scan with a lab vitals capture
+  LCP/CLS/TBT all Good -> strengths == ["Core Web Vitals all in the Good range"]; a
+  scan with only field_lcp/lcp measured and Good -> same string. Secondary effect:
+  bottom_line derives the "strongest area" from strengths[0], emitting the overstated
+  phrase. Medium: an SEO/ranking-weighted claim in the CEO report asserting a
+  real-user CWV pass on evidence that did not measure all three CWV. Found by the
+  P48-run replenishment partial audit. Fix: insert the CWV strength only when
+  source == "field" and all three of LCP, CLS, INP are present and Good; for a lab
+  capture, phrase it as lab performance metrics, not Core Web Vitals. Accept: a lab
+  all-Good scan and a partial-field all-Good scan do NOT yield the "Core Web Vitals all
+  in the Good range" strength; a field capture with all three Good still does; suites
+  green.
+  Done: _web_vitals now returns a complete flag (len(metrics) == 3, so all expected
+  metrics for the source were measured), keeping the "what is the full set" knowledge
+  where the specs live. _assessment inserts the strength only when complete AND all
+  metrics rate Good, and phrases it by source: "Core Web Vitals all in the Good range"
+  for a field (CrUX) capture, "Lab performance metrics all in the Good range" for a lab
+  capture (whose TBT is not a CWV). A partial field capture (e.g. LCP only) is not
+  complete, so it makes no all-Good claim. New test
+  test_cwv_strength_requires_a_complete_field_capture (field all-3 -> CWV string;
+  partial field -> no claim; lab all-Good -> lab phrasing, not CWV). Scanner 353 -> 354;
+  builder 37 green (consumes the web_vitals dict with the new key); README resynced to
+  354/391 (guard exit 0). Note: bottom_line's "strongest area" reads slightly awkwardly
+  for the field case but is no longer false and sits in explicitly-DRAFT text, so not
+  filed.
+
+#### Replenishment from the P52-run partial audit (2026-07-05, parser + builder + capture)
+The Low tail dropped the open count below three, so a partial audit targeted the
+least-recently-scored surfaces: the HTML parser (htmlmeta), the docx builder
+(build_exec_report), and the rendered-capture tier (capture_rendered, scan_vitals). A
+general-purpose auditor swept them read-only; I reproduced every finding myself before
+filing. scan_vitals had no reproducible defect. Two Medium and one Low found (the Low,
+P55, is in the Later section).
+- [x] **P53 (done, M)** An unclosed <title> makes the parser swallow the rest of the
+  document, so every heading/anchor/image/landmark after it is dropped and the false
+  "no H1 / no links / no images" verdicts ship as MEASURED facts. Python 3.13 parses
+  <title> as RCDATA, so a missing </title> sends the remaining markup into title text;
+  handle_starttag never fires for the following tags. htmlmeta.py: the title fallback
+  (~:298-303) recovers the title string but not the lost body, and render_assessment
+  sees a word-heavy page as sparse=False, so it does NOT mark the page inconclusive -
+  defeating the very safeguard meant to stop an unread body being reported clean.
+  Reproduced: the same body with a closed title -> headings=1 anchors=1 images=1; with
+  an unclosed <title> -> headings=0 anchors=0 images=0, client_rendered=False (shipped
+  as measured). Medium: malformed-but-real input (a truncated response, a broken
+  template concat, a CMS bug) yields confidently-wrong findings across the SEO and
+  accessibility scanners, on HTML the operator does not control. Found by the P52-run
+  replenishment partial audit. Fix: detect the unterminated-RCDATA case (title started
+  and never closed at parse end) and reparse the body, or re-feed the swallowed
+  remainder, so structural extraction is not lost; alternatively mark the page
+  inconclusive when the title consumed the body. Accept: a page with a real body and an
+  unclosed <title> yields the same headings/anchors/images as the closed-title version
+  (or is marked inconclusive), not a false zero graded as measured; the closed-title
+  case is unchanged; suites green.
+  Done: parse_html now detects the unclosed-title case (title None with a non-empty
+  RCDATA _title_buf), recovers the real title as the text before the first "<", then
+  reparses the swallowed markup (from that "<" onward) with a fresh _Extractor and folds
+  it in via a new _merge_extractors helper. The merge extends the structural lists
+  (metas/links/anchors/headings/images/form_controls/roles/jsonld_types) and unions the
+  sets (labels_for/landmarks/ids) and counters; it leaves word_count to the first parse
+  (which already counted the swallowed text as RCDATA data, so adding the reparse would
+  double it) - the body was never interpreted in the first parse, so the collections
+  combine without overlap. New test test_unclosed_title_does_not_swallow_the_body (a
+  closed and an unclosed title yield identical title/lang/headings/anchors/images/
+  landmarks/jsonld; a title unclosed at EOF still works). Verified the closed-title,
+  empty-title, and no-title cases are unchanged. Scanner 354 -> 355; builder 37 green;
+  README resynced to 355/392 (guard exit 0).
+- [x] **P54 (done, S)** Two remaining non-string scalar spots crash the whole build
+  (the sole deliverable) on a hand-edited exec_report_data.json - the P35 class, two
+  sites the coercion sweep missed. (a) build_exec_report.py:923: a scorecard row with a
+  numeric score feeds detail straight into re.sub(...) with no str() -> "TypeError:
+  expected string or bytes-like object, got 'int'" when detail is non-string. (b)
+  build_exec_report.py:301: (data.get("report_label") or "EXECUTIVE REPORT").upper()
+  calls .upper() on the raw value -> "AttributeError 'int' object has no attribute
+  'upper'" for a numeric/boolean report_label. Reproduced both against the real build():
+  detail=2024 and report_label=2024 each abort before the docx is written. Sibling
+  paths (:514, :607) already str()-wrap. Medium: a crash kills the only deliverable,
+  though both triggers require a hand-edit. Found by the P52-run replenishment partial
+  audit. Fix: coerce both - str(row.get("detail", "")) before the regex, and
+  (str(data.get("report_label") or "") or "EXECUTIVE REPORT").upper(). Accept: a build
+  with a numeric scorecard detail and a numeric report_label both succeed (no crash); a
+  normal string detail/label still renders; builder suite green.
+  Done: coerced both spots with the codebase str(... or "") idiom - detail = str(row.get
+  ("detail") or "") at the assignment (so both the re.sub and the cell-render paths get
+  a string), and label = (str(data.get("report_label") or "") or "EXECUTIVE REPORT")
+  .upper(). Verified both crash inputs now build, a string report_label still uppercases
+  to the gold badge, and a detail's "(score N)" suffix is still stripped. Extended
+  test_non_string_scalars_do_not_crash_the_build with the numeric detail and numeric
+  report_label cases. Builder 37 (extended an existing test, count unchanged), exec-
+  report green; scanner 355 and README total 392 unaffected (guard exit 0). This closes
+  the last member of the P35 non-string-scalar-crashes-the-builder class found so far,
+  and the last Medium of the P52-run replenishment.
+
+#### Replenishment from the P49-run partial audit (2026-07-05, network core + remaining scanners)
+The Low tail dropped the open count below three, so a partial audit targeted the
+least-recently-swept surfaces: the shared network/parse core (common) and the scanners
+the P41 grading sweep did not deeply cover (scan_tls, scan_accessibility, scan_links,
+scan_design, scan_readability). A general-purpose auditor swept them read-only; I
+reproduced every finding myself before filing. common and scan_readability were clean.
+Four Medium and one Low found - four are the presence-not-value / raw-text-match class
+in files the earlier sweep never reached. The Low (P60) is in the Later section.
+- [x] **P56 (done, S)** The mixed-content scan fabricates an active-mixed-content
+  security FAIL on commented-out markup - a vulnerability that does not exist, graded,
+  in the CEO report. scan_links._mixed_content runs MIXED_RE.findall over the raw
+  response body (scan_links.py:38-40, ~:116), so an http:// script/iframe reference
+  inside an HTML comment (never fetched by any browser) is reported as active mixed
+  content and graded fail. Reproduced: _mixed_content('<!-- legacy: <script
+  src="http://legacy.example/x.js"></script> -->', is_https=True) -> verdict fail, 1
+  active item. Commenting out legacy tracker/script tags is common. Medium: fabricates a
+  graded security vulnerability, a direct charter violation ("do not fabricate
+  vulnerabilities; never report an unmeasured thing as fail"). Found by the P49-run
+  replenishment partial audit. Fix: strip HTML comments (and ideally <template> and
+  <noscript> bodies) from the html before matching, or match on parsed elements. Accept:
+  an http script/iframe only inside an HTML comment on an https page -> mixed_content
+  pass (not fail); a real uncommented http script still fails; suite green.
+  Done: _mixed_content now strips HTML comments (via a new _strip_comments helper)
+  before running MIXED_RE and the <link> scan, so a resource referenced only inside
+  <!-- ... --> is not counted. _strip_comments is a LINEAR string scan (find "<!--" then
+  "-->"), deliberately NOT a lazy <!--.*?--> regex - I measured that regex at 37s on 50k
+  unclosed "<!--" (a ReDoS, the N6 class). Scoped to comments (the reproduced case);
+  left <template>/<noscript> alone (rarer and more arguable, especially noscript which a
+  no-JS user does render) to avoid over-reach. New test
+  test_mixed_content_ignores_commented_out_markup (commented http script -> pass; a
+  comment does not hide a real script after it -> fail; 20k unclosed "<!--" stays under
+  1s). Scanner 355 -> 356; README resynced to 356/393 (guard exit 0); no builder change.
+- [x] **P57 (done, S)** A dangling aria-labelledby (or aria-describedby / label[for])
+  reference counts as a real accessible name, so an effectively-unlabeled control grades
+  "all controls labeled". scan_accessibility._accessible_name (scan_accessibility.py:31)
+  returns "aria-labelledby" whenever the attribute is present and never checks the
+  referenced id exists (the parsed ids set is passed in but unused for this branch).
+  Reproduced: _accessible_name({'aria_labelledby':'ghost', ...}, set()) -> "aria-
+  labelledby" though no id="ghost" exists, so form_labels grades pass "All form controls
+  have a programmatic label". Realistic (id typos, dynamically generated ids). Medium:
+  assistive tech gets no name, yet the report says every control is labeled - presence-
+  not-value. Found by the P49-run replenishment partial audit. Fix: for aria-labelledby
+  / aria-describedby verify each referenced token is in parsed["ids"], and for label[for]
+  that the id is targeted, before crediting the name. Accept: a control whose
+  aria-labelledby points at a non-existent id is NOT counted as labeled (form_labels not
+  pass); a control pointing at a real id still passes; suite green.
+  Done: _accessible_name now takes the page ids set and credits aria-labelledby only
+  when at least one referenced id (it is a space-separated id list) exists on the page;
+  a dangling reference falls through to the next name source (title/alt) or None. Scoped
+  to aria-labelledby, the only reference-based name source here: aria-label is a literal
+  string (valid as-is), label[for] was already validated (line 29 checks the control's
+  id is in labels_for), and aria-describedby is a description, not a name, so
+  _accessible_name never used it. _form_check passes set(parsed["ids"]). Updated
+  test_accessible_name (new 3rd arg + valid/dangling/title-fallback cases) and
+  test_form_check (added the ids key to the hand-built fixtures + a dangling-then-
+  resolved end-to-end case). Scanner 356 (extended tests, count unchanged); README total
+  393 unaffected (guard exit 0); no builder change.
+- [x] **P58 (done, S)** The image-dimension (layout-shift) check accepts any "width"
+  substring in a style attribute, so responsive images that reserve no vertical space get
+  a false "declares dimensions" pass. scan_design.check_image_dimensions via STYLE_DIM_RE
+  (scan_design.py:43, ~:171) treats a style containing the substring width - including
+  max-width or a bare width:100% with no height - as declaring dimensions. Reproduced:
+  three <img style="max-width:100%"> -> verdict pass, missing_dimensions 0; width:100%
+  (no height) -> also pass. max-width:100%/height:auto responsive images are ubiquitous
+  and cause CLS, so the check reports a clean bill on the exact pattern it exists to
+  catch. Substring-on-structured-data. Medium: a wrong layout-shift verdict in the
+  report. Found by the P49-run replenishment partial audit. Fix: parse the inline style
+  declarations and require BOTH a width (or aspect-ratio) and a height, excluding
+  max-width/min-width. Accept: <img style="max-width:100%"> counts as missing dimensions
+  (warn if most images are like that); <img style="width:800px;height:600px"> and a
+  width/height attribute pair still pass; suite green.
+  Done: replaced the substring-matching STYLE_DIM_RE with STYLE_ATTR_RE (captures the
+  style value) plus a _style_reserves_space helper that parses the declarations by
+  property NAME and reserves space only on aspect-ratio, or an explicit width AND height
+  - so max-width/min-width (distinct property names) and a bare percentage width no
+  longer count. The width/height HTML-attribute branch is unchanged. New test
+  test_style_dimensions_grade_properties_not_a_width_substring (max-width:100% /
+  min-width / width:100% / height:auto -> warn; width+height / aspect-ratio /
+  aspect-ratio+width -> pass). Scanner 356 -> 357; README resynced to 357/394 (guard exit
+  0); no builder change.
+- [x] **P59 (done, S)** Any CAA record grades "pass: CAA restricts certificate
+  issuance", even a record that restricts nothing. scan_tls.check_caa (scan_tls.py:93-96)
+  grades pass on the presence of any CAA answer; a record carrying only an iodef property
+  (an incident-reporting contact, no issue/issuewild) does not restrict issuance, yet is
+  reported as restricting it. Reproduced (stubbed doh_query): a single record
+  '0 iodef "mailto:sec@example.com"' -> verdict pass, note "CAA restricts certificate
+  issuance". Medium: a misleading security-posture claim - a domain with an iodef-only
+  CAA still lets any public CA issue, but the report says issuance is restricted.
+  Presence-not-value on structured DNS. Found by the P49-run replenishment partial audit.
+  Fix: parse each record's property tag and grade pass only when an issue/issuewild
+  property is present; treat iodef-only as info (any CA may still issue). Accept: an
+  iodef-only CAA -> info (not pass); a record with issue "letsencrypt.org" -> pass; no
+  CAA -> info as now; suite green.
+  Done: added _restricts_issuance(record) - it reads the tag (second token of the
+  "<flags> <tag> <value>" presentation format) and returns True only for issue/issuewild.
+  check_caa now grades pass only when at least one record restricts issuance (and the
+  note lists only the restricting records); a CAA set with no issue/issuewild (iodef- or
+  contactemail-only) grades info "present but no issue/issuewild, any public CA may still
+  issue"; no CAA stays info. New test test_caa_iodef_only_does_not_restrict_issuance
+  (iodef-only -> info; iodef+issue -> pass naming the issue record); the existing
+  issue-record pass and absent/lookup-failure info tests still hold. Scanner 357 -> 358;
+  README resynced to 358/395 (guard exit 0); no builder change. Closes the last Medium of
+  the P49-run replenishment.
+
+#### Replenishment from the P50-run partial audit (2026-07-05, docs + tests + orchestration)
+The Low tail dropped the open count below three, so a partial audit targeted the
+least-recently-scored DIMENSIONS (the prior four rounds swept the code): documentation
+accuracy (SKILL.md, README, CAPTURE.md, CLAUDE.md vs code), test-suite integrity, and
+the aggregator/CLI orchestration (scan_site, run_review, check_readme_counts). A
+general-purpose auditor swept them read-only; I reproduced every finding myself. The
+orchestration layer and the doc counts/defaults were clean (359+37+8 tests, 14 scanners,
+10 categories, all counts match). One Medium and two Low found (the Low, P62/P63, are in
+the Later section).
+- [x] **P61 (done, S)** test_exec_report errors instead of skipping when python-docx is
+  absent, contradicting its own docstring ("Skipped entirely when python-docx is not
+  installed", test_exec_report.py:8). TestBuildMainInputGuard (test_exec_report.py:497)
+  lacks the @unittest.skipUnless(HAVE_DOCX, ...) decorator its three sibling classes
+  carry, and its 5 tests reference ber, which is bound only under `if HAVE_DOCX:` (:31),
+  so without docx they raise NameError: name 'ber' is not defined. Reproduced (docx
+  import blocked): loadTestsFromName("test_exec_report.TestBuildMainInputGuard") ->
+  errors 5, skipped 0, first error "NameError: name 'ber' is not defined"; every
+  guarded class skips correctly. Masked in CI (ci.yml installs requirements first), so it
+  only bites a contributor working on the stdlib scanners without the optional builder
+  dep. Medium: misleading documentation plus a broken skip path that turns a clean skip
+  into a FAILED run. Found by the P50-run replenishment partial audit. Fix: decorate
+  TestBuildMainInputGuard with @unittest.skipUnless(HAVE_DOCX, "python-docx not
+  installed") like its siblings. Accept: with docx import blocked, that class's tests
+  SKIP (not error); with docx present they still run and pass; builder suite green.
+  Done: decorated TestBuildMainInputGuard with @unittest.skipUnless(HAVE_DOCX,
+  "python-docx not installed"), matching TestExecReport/TestTrendSection/TestReportLabel.
+  Verified with the docx import blocked: the class's 5 tests SKIP (errors 0, skipped 5),
+  no NameError; with docx present the full builder suite runs and passes (37). The
+  docstring's "Skipped entirely" is now true for the build tests (TestBuilderDependencies
+  is intentionally dep-independent - it reads requirements.txt to assert the deps are
+  declared, so it must run regardless). Builder 37 (decorator, no count change); scanner
+  359 and README total 396 unaffected (guard exit 0).
+
+#### Replenishment from the P60-run partial audit (2026-07-05, scorecard + trend numeric core)
+The Low tail dropped the open count below three, so a partial audit targeted the
+cross-cutting NUMERIC/aggregation logic - the scorecard rollup (common.grade,
+scan_site.build_scorecard), the band thresholds, and the trend/delta math (trends,
+diff_issues) - where a wrong number becomes a wrong deliverable. A general-purpose
+auditor swept it read-only; I reproduced every finding myself. The medians (even/odd/
+empty), quarter bucketing and order-independence, the grouped multi-page diff identity,
+and every guarded division were sound. Two Medium and one Low found (the Low, P66, is in
+the Later section).
+- [x] **P64 (done, S)** A crashed scanner leaves the overall posture "Strong / 1.0" and
+  the crash is dropped from the CEO deliverable entirely - a clean headline for a site
+  whose whole category went unmeasured. build_scorecard (scan_site.py:212-217) forces the
+  errored CATEGORY to Not measured (P7) but grades the OVERALL band purely from the
+  surviving categories' verdicts and only bolts on an errors key (:216) without
+  downgrading or caveating it; draft_report_data.draft (draft_report_data.py:_scorecard/
+  bottom_line) then drops scanner_errors and both the per-category and overall errors keys,
+  so the exec-report data has no trace of which scanner crashed. Reproduced: with the
+  tls-category scanner ok=False (no verdicts) and every other host tool passing,
+  build_scorecard overall band=Strong score=1.0 errors=['scan_tls'], tls category Not
+  measured; draft() -> report overall "Strong", crashed tool name absent, no errors key.
+  A single-scanner crash is realistic (a DoH/CrUX timeout, a malformed cert crashing TLS
+  parse). Medium: a Strong CEO headline for an unmeasured category, with the reason
+  suppressed - the charter's "never report an unmeasured thing as clean" at the overall
+  level. Found by the P60-run replenishment partial audit. Fix: propagate
+  overall.errors / scanner_errors into the report data (a visible caveat) and caveat the
+  overall headline when a category errored, mirroring the per-category Not measured
+  treatment. Accept: with a crashed scanner, the exec-report data names the errored
+  scanner (or carries a scanner-error caveat) and the overall headline is not an
+  uncaveated Strong; the no-crash path is unchanged; suites green.
+  Done: fixed in the data layer (draft_report_data), which the builder already renders.
+  _scorecard now carries scan["scanner_errors"] into the report data as
+  scorecard.scanner_errors (naming each errored tool/scope/error), and bottom_line - the
+  executive callout the builder already renders verbatim - gains a caveat clause when any
+  scanner errored: "N scanner(s) could not measure their category (<tools>), so this
+  posture covers only the measured categories". So the CEO headline is no longer an
+  uncaveated Strong and the crash is named, without a new builder element (the per-
+  category Not-measured row from P7 already shows in the table). New test
+  test_scanner_crash_is_surfaced_and_caveats_the_headline (crash -> scorecard.scanner_errors
+  names scan_tls and bottom_line caveated; base SCAN -> empty errors, no caveat). Scanner
+  361 -> 362; builder 37 green (the new key is inert to the builder); README resynced to
+  362/399 (guard exit 0).
+- [x] **P65 (done, S)** A defect that worsens warn->fail is counted as BOTH 1 resolved and
+  1 new, and named as "resolved" in the CEO progress section though it got worse.
+  scan_site.diff_issues (scan_site.py:123) keys the grouped identity on
+  (scan_label, check, verdict) - verdict is part of the key - so the same scanner+check
+  changing warn->fail yields two distinct keys: the fail is "new" and the warn is
+  "resolved". Reproduced: prev warn / curr fail for a11y:contrast -> new
+  [('contrast','fail')], resolved [('contrast','warn')]; trends.build_trend then lists the
+  contrast defect by name as resolved (a false improvement claim) while also counting it
+  new. A defect degrading across quarters is common; the trend section (2+ quarters) makes
+  a concrete wrong claim. Medium. Found by the P60-run replenishment partial audit. Fix:
+  key diff_issues on (scan_label, check) only and treat a verdict change as a persistence
+  (or a distinct "worsened"/"improved" bucket), not a resolved+new pair. Accept: a defect
+  changing warn->fail is neither counted as resolved nor listed as a resolved finding (it
+  persists, optionally flagged worsened); a genuinely gone defect is still resolved and a
+  genuinely new one still new; suites green.
+  Done: diff_issues now keys the grouped identity on (scan_label, check) only - the
+  verdict is deliberately dropped from the key, so a defect that worsens (warn->fail) or
+  eases (fail->warn) is the same persistent defect and is neither new nor resolved.
+  Chose the minimal key change over adding a "worsened" bucket (KISS); the docstring now
+  states why the verdict is excluded. New test
+  test_diff_issues_treats_a_verdict_change_as_persistence (warn->fail and fail->warn ->
+  0 new / 0 resolved; a genuinely gone defect -> 0/1; a genuinely new one -> 1/0). The
+  existing new/resolved and defects-not-pages diff tests still pass (they key on distinct
+  checks). Scanner 362 -> 363; README resynced to 363/400 (guard exit 0); no builder
+  change. Closes the last Medium of the P60-run replenishment.
 
 ### Later (Low)
 - [x] **P5 (done, S)** Own-fetch checks that grade off a failed/partial probe
@@ -763,7 +1222,7 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   test_interrupted_or_unclosed_heading_is_not_dropped covers nested, unclosed+block,
   unclosed-at-EOF, and the inline-children case. Scanner 337 -> 338; README resynced
   to 338/372 (guard exit 0); no builder change.
-- [ ] **P30 (todo, S)** A multi-token `role` value is not matched to landmark roles.
+- [x] **P30 (done, S)** A multi-token `role` value is not matched to landmark roles.
   htmlmeta.py:96-97 stores the raw role string; scan_accessibility._landmark_check
   (scan_accessibility.py:138-140) tests token membership against whole strings, so
   role="navigation menubar" yields roles == {"navigation menubar"} and "navigation"
@@ -772,7 +1231,12 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   P11-run replenishment partial audit. Fix: split role on whitespace into individual
   tokens when populating roles. Accept: "navigation" is in the roles set for the
   input above; suites green.
-- [ ] **P31 (todo, S)** A cross-subdomain crawl uses only the target host's
+  Done: the role handler now does self.roles.extend(a["role"].split()) instead of
+  append, so each fallback token is matchable and role="navigation menubar"
+  satisfies the navigation landmark. New test test_multi_token_role_is_split_into_
+  tokens. Scanner 340 -> 341; README resynced to 341/376 (guard exit 0); no builder
+  change.
+- [x] **P31 (done, S)** A cross-subdomain crawl uses only the target host's
   robots.txt. crawler.crawl loads robots once from the target (crawler.py:86,
   _load_robots(target)) and applies rp.can_fetch to every URL, while _eligible
   (crawler.py:50-57) admits any same-registrable-domain host including other
@@ -785,7 +1249,15 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   (scheme+host) and consult the matching one per URL. Accept: a URL on a subdomain
   whose robots disallows it is counted in skipped_by_robots, not collected; suites
   green.
-- [ ] **P34 (todo, S)** A progress-only executive summary renders an orphaned strip
+  Done: crawl now keys RobotFileParser instances by origin (scheme+host) via a
+  robots_for(url) cache and consults the matching parser for can_fetch on every URL;
+  the per-page sleep is max(base wait, that origin's crawl-delay) so a stricter
+  subdomain delay is honored too. Added _origin/_crawl_delay helpers. New test
+  test_subdomain_robots_are_honored_per_origin: a blog.acme.example/secret link
+  disallowed by the subdomain's own robots is skipped (skipped_by_robots >= 1, never
+  fetched) while /ok is collected. Scanner 341 -> 342; README resynced to 342/377
+  (guard exit 0); no builder change.
+- [x] **P34 (done, S)** A progress-only executive summary renders an orphaned strip
   with no heading. build_exec_report.py:883 `if progress and not trend:` renders the
   "Since the previous review..." strip, but section_titles adds no "Executive
   summary" heading when there is no bottom_line/assessment/trend, so on
@@ -795,7 +1267,14 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   emit the Executive summary heading when only progress exists. Accept: with only
   progress present, the strip renders under an Executive summary heading; suites
   green.
-- [ ] **P35 (todo, S)** Non-string scalars where a string is contracted crash the
+  Done: computed progress/trend before section_titles and introduced
+  has_exec_summary = bottom_line or assessment or (progress and not trend); both the
+  section_titles entry and the rendered heading now gate on it, so a progress-only
+  report gets an Executive summary heading, a contents entry, and the strip under
+  it. New test test_progress_only_renders_under_an_executive_summary_heading.
+  Builder 35 -> 36, exec-report green; scanner 342 and report-charts 8 unaffected;
+  README resynced to 378 total (guard exit 0).
+- [x] **P35 (done, S)** Non-string scalars where a string is contracted crash the
   build. site as null -> TypeError in add_running_header (build_exec_report.py:386,
   " | ".join([None,...])); scorecard.overall as a number -> AttributeError at
   add_cover:325 (overall.upper()); a non-string quick_wins/assessment item ->
@@ -803,7 +1282,15 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   string), so Low, but the deliverable dies on a hand-authoring slip. Found by the
   P29-run replenishment partial audit. Fix: str()-coerce those three sites. Accept:
   building with site/overall/a quick_win as a number succeeds; suites green.
-- [ ] **P36 (todo, S)** env_value keeps an inline comment and rejects `export`.
+  Done: add_run now renders "" for None and str(x) for any other scalar (covers
+  quick_wins/assessment/strengths items); add_cover and add_glance_tiles coerce the
+  scorecard overall band to str (handles a number or a stray dict); the running
+  header joins str(b) for b in bits (handles a non-string site). New test
+  test_non_string_scalars_do_not_crash_the_build covers site/overall/quick_win as a
+  number, overall as a dict, an int assessment item, and site as null. Builder
+  36 -> 37, exec-report green; scanner 342 and report-charts 8 unaffected; README
+  resynced to 379 total (guard exit 0).
+- [x] **P36 (done, S)** env_value keeps an inline comment and rejects `export`.
   common.py:357 returns line.split("=",1)[1].strip().strip('"').strip("'") with no
   comment handling, so `SERPER_API_KEY=abc123 # note` returns "abc123 # note" (a
   wrong secret), and `export NAME=...` fails the startswith match. Minor (only
@@ -811,7 +1298,14 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   audit. Fix: strip an unquoted trailing #comment and tolerate a leading `export `.
   Accept: env_value on `K=v # c` returns "v"; `export K=v` returns "v"; a value
   containing a literal # inside quotes is preserved; suites green.
-- [ ] **P37 (todo, S)** normalize_url misreads a scheme-less host:port. common.py:49
+  Done: env_value now strips a leading `export ` before matching the key; for the
+  value, a leading quote makes it keep everything up to the closing quote (a literal
+  # and interior spaces preserved, anything after the closing quote dropped), and an
+  unquoted value ends at the first inline # comment. New test
+  test_env_value_strips_comments_and_tolerates_export (K=v # c -> v; export K=v -> v;
+  K="ab#cd" -> ab#cd; K="quoted" # note -> quoted; K= -> None). Scanner 342 -> 343;
+  README resynced to 343/380 (guard exit 0); no builder change.
+- [x] **P37 (done, S)** normalize_url misreads a scheme-less host:port. common.py:49
   uses urlparse(url).scheme to decide whether to prepend https://, but
   urlparse("example.com:8080").scheme == "example.com" (a dotted string is a valid
   URI scheme), so no scheme is added and host_of/slug_of then return "" (the
@@ -821,6 +1315,236 @@ file:line and a reproduced behavior; see JOURNAL.md 2026-07-04 (Phase P audit).
   "://" rather than urlparse().scheme) and prepend the scheme. Accept:
   normalize_url("example.com:8080") yields an https URL whose host_of is
   "example.com"; suites green.
+  Done: normalize_url now keys on the "://" separator (`if "://" not in url`) rather
+  than urlparse().scheme, so a bare host:port gets https:// prepended and host_of
+  returns the host; a real scheme (http://, https://) and a bare host are unchanged.
+  New test test_normalize_url_handles_scheme_less_host_port. Scanner 344 -> 345;
+  README resynced to 345/382 (guard exit 0); no builder change.
+- [x] **P39 (done, S)** The evidence appendix crashes on a non-string code or image.
+  build_exec_report.py:778 does code.split("\n") - item.get("code") is not None lets
+  a numeric code through to .split (AttributeError) - and :1050 does
+  Path(img).exists() where a numeric truthy image reaches Path(123) (TypeError). A
+  null code/image is already handled (code falls through, image is falsy); only a
+  present non-string crashes. Low realism (snippets/paths are strings) but the same
+  P35 coercion gap. Reproduced: evidence=[{"caption":"c","code":123}] and
+  [{"caption":"c","image":123}] both crash the build. Found by the P35-run
+  replenishment partial audit. Fix: str() the code before split; gate image on
+  isinstance(item.get("image"), str). Accept: both cases build without raising; a
+  normal code/image exhibit still renders; suites green.
+  Done: add_code_block now iterates str(code).split (a non-string snippet
+  stringifies), and the image branch gates on isinstance(item.get("image"), str) so
+  a non-string path is skipped rather than Path()'d. Extended
+  test_non_string_scalars_do_not_crash_the_build with evidence code=123 / image=123;
+  a normal code snippet and a missing image path still render. Builder 37 (extended
+  test), exec-report green; scanner 345 and report-charts 8 unaffected; guard exit 0.
+- [x] **P41 (done, S)** The form-action downgrade check misses the HTML5 formaction
+  override. scan_page_security.check_form_actions (scan_page_security.py:87-106)
+  scans only `<form action=...>`, but a submit button/input can override it with
+  formaction="http://..." and submit over plain HTTP while the form's own action is
+  secure. Reproduced: `<form action="/submit">...<button type=submit
+  formaction="http://insecure.example/steal">Send</button></form>` grades pass - a
+  real (if uncommon) downgrade vector graded clean. Found by the P36-run replenishment
+  partial audit. Fix: also extract formaction from button/input[type=submit|image]
+  and apply the same http:// test. Accept: the fixture returns fail; a formaction over
+  https stays pass; scanner suite green.
+  Done: added FORMACTION_RE (with the same (?<![-\w]) lookbehind so it stays distinct
+  from action= and data-formaction) and check_form_actions now also collects any
+  http:// formaction from the body into the insecure list; the note names both form
+  action and button formaction. New test test_http_formaction_override_fails (a
+  secure form + an http formaction -> fail with the URL listed; a data-formaction ->
+  pass). Scanner 345 -> 346; README resynced to 346/383 (guard exit 0); no builder
+  change.
+- [x] **P42 (done, S)** An empty integrity="" was counted as SRI present, a false
+  pass. scan_page_security INTEGRITY_RE (scan_page_security.py:42) matched
+  `integrity\s*=` regardless of value, so a cross-origin `<script src=...
+  integrity="">` (empty metadata = no protection) graded pass instead of warn.
+  Reproduced: `<script src="https://cdn.other-site.example/lib.js" integrity="">`
+  -> pass, vs warn with the attribute absent. Low prevalence (author error). Found by
+  the P36-run replenishment partial audit. Fix: require a non-empty integrity value
+  (a sha256-/sha384-/sha512- token). Accept: the empty-value fixture returns warn; a
+  real sha256- integrity stays pass; scanner suite green.
+  Done: INTEGRITY_RE now requires a real hash token -
+  `integrity\s*=\s*["']?\s*sha(?:256|384|512)-` (case-insensitive, quote optional,
+  leading whitespace allowed), so integrity="" and a non-hash value no longer count
+  as protection while a genuine sha256/384/512- value still passes. The (?<![-\w])
+  lookbehind keeps it off data-integrity=. New test test_sri_empty_integrity_value_
+  warns (empty and non-hash -> warn; real sha512- -> pass; data-integrity decoy ->
+  warn). Scanner 348 -> 349; README resynced to 349/386 (guard exit 0); no builder
+  change.
+- [x] **P43 (done, S)** Legacy Expires/s-maxage-only assets got a false "uncached"
+  warn. scan_performance._measure (scan_performance.py:88-91) recorded only
+  cache-control, and _asset_caching_check treated an asset as cached only via
+  max-age>0/immutable, so an asset whose freshness is a bare Expires: header (Apache
+  mod_expires) or s-maxage only was scored uncached; if more than half the assets are
+  like that the check warns "repeat visits redownload them" - factually wrong.
+  Reproduced: two 200 assets with cache_control=None (Expires-set) -> warn. Modern
+  CDNs send Cache-Control so prevalence is low today (rises against a legacy target).
+  Found by the P36-run replenishment partial audit. Fix: capture Expires in _measure
+  and treat a future Expires (or s-maxage) as a caching lifetime. Accept: two assets
+  with a future Expires and no Cache-Control return pass; scanner suite green.
+  Done: _measure now captures the Expires header; _asset_caching_check credits an
+  asset with a usable lifetime when it is immutable, has max-age>0, has s-maxage>0, OR
+  carries a still-future Expires (parsed via email.utils.parsedate_to_datetime and
+  compared to now; a past date or Expires: 0 is stale, so not credited), while
+  Cache-Control no-store/no-cache still override any Expires (browser precedence).
+  Refactored _cache_max_age onto a shared _cc_seconds(cc, directive) helper (DRY;
+  a (?<![-\w]) lookbehind keeps max-age and s-maxage distinct). New test
+  test_expires_and_s_maxage_count_as_caching_lifetime (future Expires / s-maxage ->
+  pass; past Expires, Expires: 0, and no-store+Expires -> warn). Scanner 349 -> 350;
+  README resynced to 350/387 (guard exit 0); no builder change.
+- [x] **P47 (done, S)** A revoked DKIM key (empty p=) was counted as a published key.
+  scan_dns_email._is_dkim_record (scan_dns_email.py:116) returned True on any p= tag
+  including an empty value, but RFC 6376 sec 3.6.1 says an empty p= means the key is
+  revoked. Reproduced: _is_dkim_record("v=DKIM1; p=") -> True, so a revoked key on a
+  common selector grades pass "DKIM key published". Edge (revoked keys usually sit on
+  rotated random selectors). Found by the P41-run replenishment partial audit. Fix:
+  treat a p= whose value is empty/whitespace as revoked, not present. Accept:
+  _is_dkim_record("v=DKIM1; p=") is False; a real p=<key> stays True; suite green.
+  Done: _is_dkim_record now scans every tag (rather than returning on the first) and
+  returns False the moment it sees a p= with an empty/whitespace value, so a revoking
+  p= vetoes a preceding v=DKIM1 or k= (order-independent); a non-empty p=/k=/v=DKIM1
+  still marks a published key. New test test_dkim_empty_p_is_revoked_not_published
+  (six _is_dkim_record cases incl. p-before-v and k=+empty-p, plus end to end: a
+  selector answering only a revoked key grades info, not pass); the existing
+  substring-decoy test still passes. Scanner 350 -> 351; README resynced to 351/388
+  (guard exit 0); no builder change.
+- [x] **P48 (done, S)** Missing Permissions-Policy graded a hard fail (over-strict
+  false fail that deflated the security band). scan_http_security.py:308-310 routed
+  an absent Permissions-Policy through check_simple_header's fail path (:87), scoring
+  0.0 - equal weight to missing HSTS. Mozilla HTTP Observatory (the de facto scorer)
+  does not score Permissions-Policy at all; it is an advanced/optional header most
+  hardened sites omit. Reproduced: {} -> fail. Opposite-direction from the dangerous
+  class (deflates rather than inflates) but can push a category from Adequate to Weak
+  in the CEO report. Found by the P41-run replenishment partial audit. Fix: grade its
+  absence info (or warn), not fail. Accept: no Permissions-Policy -> info/warn, not
+  fail; a present policy still grades; suite green.
+  Done: added an absent_verdict parameter to check_simple_header (default "fail", so
+  X-Content-Type-Options and every other caller are unchanged) and the
+  permissions_policy registry entry passes "info" with a note that it is an advanced,
+  optional header major scorers do not penalize. New test
+  test_absent_permissions_policy_is_info_not_fail (end to end: absent Permissions-
+  Policy -> info while absent X-Content-Type-Options still -> fail; a present policy
+  still passes). Scanner 351 -> 352; README resynced to 352/389 (guard exit 0); no
+  builder change.
+- [x] **P49 (done, S)** The version-banner check false-warned on a CDN node id.
+  scan_http_security.py:269 had has_version = any(ch.isdigit() for ch in val), so any
+  digit read as a version. Reproduced: Server: ECAcc (nyd/D179) (an Akamai edge node
+  id) -> warn "Version banners present". Minor (warn not fail; the string is disclosed
+  either way). Found by the P41-run replenishment partial audit. Fix: require a
+  version-shaped token (regex \b\d+(\.\d+)+\b or name/digits) before flagging. Accept:
+  a bare node id like ECAcc (nyd/D179) does not warn; nginx/1.25.3 still warns; suite
+  green.
+  Done: added VERSION_RE = re.compile(r"\b\d+(?:\.\d+)+\b") (a dotted numeric token,
+  two-plus components) and check_disclosure now sets reveals_version =
+  bool(VERSION_RE.search(val)), so a bare integer in a CDN node id or build hash no
+  longer reads as a version while nginx/1.25.3, Apache/2.4.52, Microsoft-IIS/10.0,
+  PHP/8.1.2, and x-aspnet-version 4.0.30319 still warn (added import re). Extended
+  test_disclosure with the Akamai node id (info, reveals_version False), IIS/10.0
+  (warn), and ASP.NET name (info). Scanner 355 (extended test, count unchanged); README
+  total 392 unaffected (guard exit 0); no builder change.
+- [x] **P50 (done, S)** A non-responsive viewport passed as mobile-friendly.
+  scan_seo.py:120-123 passed on any non-empty viewport content, but Google's
+  mobile-friendly requirement is width=device-width; a fixed-width viewport
+  (content="width=1024") is not responsive. Reproduced: content="width=1024" -> pass
+  "Mobile viewport set". Uncommon in practice. Found by the P41-run replenishment
+  partial audit. Fix: pass only when the content contains width=device-width;
+  otherwise warn. Accept: width=1024 -> warn; width=device-width -> pass; suite green.
+  Done: extracted _viewport_check(viewport) - absent -> fail (unchanged); content with
+  width=device-width (space-insensitive, case-insensitive) -> pass "Responsive viewport
+  set"; present but without it (width=1024, or a width-less value) -> warn "set but not
+  responsive". New test test_viewport_check (device-width incl. uppercase -> pass;
+  width=1024 and initial-scale-only -> warn; None/"" -> fail). Scanner 358 -> 359; README
+  resynced to 359/396 (guard exit 0); no builder change.
+- [x] **P55 (done, S)** Rendered snapshot filenames churn every run, orphaning old
+  snapshot files (a determinism smell and a small disk leak in the evidence tree).
+  capture_rendered.py:534 seeds taken from the existing manifest, which already holds
+  the URL's own current filename, so snapshot_filename (:456, called at :554) allocates
+  a NEW name for a URL merely being refreshed instead of reusing its slot; the manifest
+  is repointed (:557), leaving the prior snapshot orphaned. Reproduced across three runs
+  of one page: home.html -> home-2.html -> home.html (oscillates), both files left on
+  disk. Low: scan_site.py:83 reads only the manifest-referenced file, so the deliverable
+  stays correct - this is internal evidence hygiene, not a wrong report. Found by the
+  P52-run replenishment partial audit. Fix: if url already has a manifest entry, reuse
+  manifest["pages"][url]["file"]; call snapshot_filename only for a URL new to the
+  manifest. Accept: capturing the same DOM page twice reuses one filename (no
+  home-2.html), and two distinct pages still get distinct names; the capture test(s)
+  green.
+  Done: the DOM-snapshot branch now reuses manifest["pages"][url]["file"] when the URL
+  already has an entry, and only calls snapshot_filename for a URL new to the manifest -
+  so a refresh keeps its slot instead of being pushed to a new name by taken (which is
+  seeded from the manifest, including the URL's own file). New test
+  test_refreshing_a_dom_page_reuses_its_snapshot_filename (capture the same page 3 times:
+  one stable filename, exactly one .html on disk, no orphan); the distinct-page and
+  manual-merge tests still pass, so genuinely new URLs still get distinct names. Scanner
+  359 -> 360; README resynced to 360/397 (guard exit 0); no builder change.
+- [x] **P60 (done, S)** A far-future cert notAfter crashes the whole TLS scan on Windows.
+  scan_tls.py:121 calls time.strftime("%Y-%m-%d", time.gmtime(expiry_epoch)) after
+  _parse_not_after (scan_tls.py:51-61); on Windows time.gmtime raises OSError [Errno 22]
+  for any epoch past ~year 3000, uncaught inside _scan, aborting the TLS category with no
+  result. Reproduced: _parse_not_after("Dec 31 23:59:59 9999 GMT") then gmtime ->
+  OSError; boundary is year 3000 ok, 3001 crash. Low: tls_info validates the chain first
+  and a publicly-trusted leaf never carries notAfter beyond ~398 days, so a live
+  handshake reaching this path is very unlikely (the 99991231235959Z no-expiry sentinel
+  is a CA-cert convention, not a presented leaf), but it is a genuine uncaught crash.
+  Found by the P49-run replenishment partial audit. Fix: guard the gmtime/strftime
+  conversion (clamp far-future epochs or wrap in try/except) so a pathological date
+  degrades to an info note, not an aborted scan. Accept: a stubbed far-future notAfter
+  (year 9999) yields a graded TLS result (the expiry check degrades, not raises), not an
+  aborted scan; a normal expiry still formats; suite green.
+  Done: wrapped the time.strftime(time.gmtime(expiry_epoch)) call in try/except
+  (OSError, ValueError, OverflowError); on failure expires_on is set to None (the display
+  date is dropped, never fabricated) and days_left - plain arithmetic in _parse_not_after,
+  not gmtime - still drives the expiry verdict. New test
+  test_far_future_cert_expiry_does_not_abort_the_scan (notAfter year 9999 -> scan ok,
+  expiry pass, expires_on None; a 2027 cert still formats expires_on "2027-08-29"). Scanner
+  360 -> 361; README resynced to 361/398 (guard exit 0); no builder change.
+- [x] **P62 (done, S)** Two inaccurate statements in README.md. (a) README.md:239 said
+  "Network primitives are stubbed suite-wide so no test can ever reach a real network or
+  read a real key", but only http_post_json, env_value, and rdap_domain are stubbed at
+  module import; http_fetch, tls_info, and doh_query are patched per-test (try/finally),
+  so a new test that forgets to patch could reach the live network - the "no test can
+  ever" guarantee is not enforced by the mechanism described. Reproduced: after importing
+  test_review_tools, common.http_fetch/tls_info/doh_query are unchanged (not stubbed)
+  while http_post_json/env_value/rdap_domain are. (b) README.md:261 says "ci.yml  Both
+  test suites" but CI runs THREE (test_review_tools, test_exec_report, test_report_charts)
+  plus check_readme_counts, inconsistent with README:241 ("all three suites"). Low:
+  misleading docs, no product impact. Found by the P50-run replenishment partial audit.
+  Fix: (a) reword to name what is stubbed suite-wide (CrUX POST, key reader, RDAP) vs
+  per-test (HTTP/TLS/DoH); (b) change "Both test suites" to "all three test suites +
+  README-count guard". Accept: README no longer claims suite-wide stubbing of
+  http_fetch/tls_info/doh_query, and the ci.yml line says three suites; guard exit 0.
+  Done: (a) README.md:239 now reads "The CrUX API call, the credential reader, and RDAP
+  are stubbed suite-wide at import; the HTTP fetch, TLS, and DoH primitives are stubbed
+  per test, so the suite reaches no real network and reads no real key" - accurate to the
+  mechanism (http_post_json/env_value/rdap_domain suite-wide, http_fetch/tls_info/doh_query
+  per-test), dropping the overstated "no test can ever". (b) README.md:261 now says "All
+  three test suites + README-count guard" - verified ci.yml runs test_review_tools,
+  test_exec_report, test_report_charts, and check_readme_counts.py. Documentation-only; the
+  count guard is still in sync (400 total, prose edits do not touch counts).
+- [ ] **P63 (todo, S)** test_cover_contents_list_names_rendered_sections_in_order does
+  not check order. test_exec_report.py:144-151 asserts only assertIn(name, listing)
+  membership within a 600-char slice, so a regression that reordered the cover's contents
+  list would still pass though the test name promises order. Low: the invariant holds
+  today (cover and headings both derive from the same section_titles list), so the risk
+  is small, but the test does not guard what it claims. Found by the P50-run replenishment
+  partial audit. Fix: assert the found positions are monotonically increasing (or compare
+  the extracted ordered names to the expected sequence). Accept: the test fails if the
+  contents-list order is shuffled relative to the section order; builder suite green.
+- [ ] **P66 (todo, S)** The scorecard band is computed from the unrounded score but the
+  ROUNDED score is displayed, so at every band boundary the shown number contradicts the
+  band label. common.grade (common.py:578-581) derives band from the exact score, then
+  returns round(score, 2); draft_report_data._scorecard renders "<band> ... (score 0.85)"
+  plus a numeric score bar. Reproduced: 9 pass / 4 warn (raw 0.84615) -> displayed_score
+  0.85, band Adequate, though 0.85 is the Strong cutoff; 5 pass / 12 warn (raw 0.64706) ->
+  0.65 displayed, band Weak (0.65 is the Adequate cutoff); 0 pass / 19 warn / 5 fail (raw
+  0.39583) -> 0.4 displayed, band Poor (0.40 is the Weak cutoff). Low: the band (from the
+  true score) is the honest posture, so it misleads the eye, not the verdict - a
+  wrong-looking number, not a flipped band. Found by the P60-run replenishment partial
+  audit. Fix: make label and number agree - display the score at enough precision that it
+  does not round onto a boundary (or floor rather than round), keeping the band as the
+  source of truth; do NOT compute the band from the rounded score (that would inflate a
+  just-below-boundary site by a band). Accept: no scorecard row shows a displayed score
+  that sits in a different band's range than its label; suites green.
 
 ## Phase O - Third convergence-audit findings (2026-07-04)
 The third full-audit pass (after N1-N8 closed; four independent auditors, all
@@ -1387,6 +2111,11 @@ Marginal Low observations from the Phase M audit, judged not worth a task:
 - scan_site orchestrator hardcodes the "performance" key for the rendered-DOM
   skip (Phase N audit): a documented single exception to the registry-driven
   design; moving it to a scanner flag is churn for one line.
+- draft_report_data._scorecard (:253) does (sc.get("overall") or {}).get("band")
+  and would AttributeError if scorecard.overall were a plain string (P35-run audit):
+  unreachable from real data - scan_site.build_scorecard always emits overall as a
+  common.grade dict, and the scan JSON is machine-written, so only a hand-edited
+  scan file (not a supported input, unlike exec_report_data.json) triggers it.
 
 ## Phase L - Audit findings (Ralph audit pass 2026-07-04)
 Generated by an evidence-based audit of the whole suite (both test suites green

@@ -202,11 +202,15 @@ CMP_HOSTS = (
     "cookie-script.com", "civiccomputing.com",
 )
 
+# Class/id/script markers of a real consent mechanism. Matched as substrings of the
+# page, so every entry must be specific enough not to collide with prose: the bare
+# "truste" (hits trusted/trustee) and "cookie-policy" (a plain policy-page link, not
+# a consent widget) were dropped - TrustArc is still caught via trustarc.com in
+# CMP_HOSTS, and the rest are hyphenated/brand tokens that do not occur in copy.
 CONSENT_MARKERS = (
     "cookie-consent", "cookie-banner", "cookie-notice", "cookieconsent",
     "onetrust", "ot-sdk", "gdpr-consent", "consent-banner", "cookie-bar",
-    "cookie-policy", "didomi", "usercentrics", "cmplz", "borlabs-cookie",
-    "truste", "iubenda",
+    "didomi", "usercentrics", "cmplz", "borlabs-cookie", "iubenda",
 )
 
 SCRIPT_RE = common.tag_attrs_re("script")

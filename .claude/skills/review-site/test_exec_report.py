@@ -494,6 +494,7 @@ class TestBuilderDependencies(unittest.TestCase):
         self.assertIn("matplotlib", declared)
 
 
+@unittest.skipUnless(HAVE_DOCX, "python-docx not installed")
 class TestBuildMainInputGuard(unittest.TestCase):
     """P11: the CLI must reject a structurally wrong input (a top-level JSON
     array) with a clear message and a nonzero exit, not a raw traceback."""
@@ -528,6 +529,68 @@ class TestBuildMainInputGuard(unittest.TestCase):
             code, _ = self._run_main(["build_exec_report.py", str(good), str(out_docx)])
             self.assertEqual(code, 0)
             self.assertTrue(out_docx.is_file())
+
+    def test_mixed_rank_types_sort_numerically_without_crashing(self):
+        # P32: string ranks ("1", "10") mixed with an int and a missing rank must
+        # not make sorted() compare str and int; they order numerically with a
+        # non-numeric or absent rank last.
+        data = dict(SAMPLE, recommendations=[
+            {"rank": "10", "recommendation": "ten", "impact": "a", "effort": "s"},
+            {"rank": 2, "recommendation": "two", "impact": "b", "effort": "m"},
+            {"recommendation": "none", "impact": "c", "effort": "l"},
+            {"rank": "1", "recommendation": "one", "impact": "d", "effort": "s"},
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build(data, out)  # must not raise
+            doc = Document(str(out))
+            table = next(t for t in doc.tables
+                         if any(c.text.strip() == "RECOMMENDATION" for c in t.rows[0].cells))
+            order = [row.cells[1].text.strip() for row in table.rows[1:]]
+        self.assertEqual(order, ["one", "two", "ten", "none"])
+
+    def test_non_string_scalars_do_not_crash_the_build(self):
+        # P35: a hand-authoring slip that types site/overall/a quick_win as a number
+        # (or a stray dict overall) must stringify, not crash the only deliverable.
+        cases = [
+            {"site": 123, "target_url": "https://x/", "scorecard": {"overall": "Weak", "rows": []}},
+            {"site": "x", "scorecard": {"overall": 0.9, "rows": []}},
+            {"site": "x", "scorecard": {"overall": {"band": "Weak"}, "rows": []}},
+            {"site": "x", "scorecard": {"overall": "Weak", "rows": []}, "quick_wins": [123, "ok"]},
+            {"site": None, "scorecard": {"overall": "Weak", "rows": []}},
+            # P38: a key-date label typed as null/number must not crash .upper()
+            {"site": "x", "key_dates": {"items": [{"label": None, "value": "2026-01-01"}]}},
+            {"site": "x", "key_dates": {"items": [{"label": 123, "value": "2026-01-01"}]}},
+            # P39: a non-string evidence code/image must not crash split()/Path()
+            {"site": "x", "evidence": [{"caption": "c", "code": 123}]},
+            {"site": "x", "evidence": [{"caption": "c", "image": 123}]},
+            # P54: a numeric scorecard-row detail must not crash re.sub (it runs
+            # only when a numeric score is present on the row), and a numeric
+            # report_label must not crash .upper().
+            {"site": "x", "scorecard": {"overall": "Weak", "rows": [
+                {"category": "SEO", "band": "Weak", "score": 0.5, "detail": 2024}]}},
+            {"site": "x", "report_label": 2024, "scorecard": {"overall": "Weak", "rows": []}},
+        ]
+        for data in cases:
+            with tempfile.TemporaryDirectory() as td:
+                ber.build(data, Path(td) / "o.docx")  # must not raise
+                self.assertTrue((Path(td) / "o.docx").is_file())
+
+    def test_progress_only_renders_under_an_executive_summary_heading(self):
+        # P34: progress without a bottom line, assessment, or trend must render its
+        # strip under an Executive summary heading, not orphaned under the tiles.
+        data = {"site": "x", "target_url": "https://x/", "date": "2026-07-05",
+                "scorecard": {"overall": "Weak", "rows": []},
+                "progress": {"previous_date": "2026-04-01", "new_issues": 1,
+                             "resolved_issues": 2}}
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build(data, out)
+            texts = [p.text for p in Document(str(out)).paragraphs]
+        self.assertTrue(any(t.strip().endswith("Executive summary") for t in texts),
+                        "Executive summary heading missing for progress-only data")
+        self.assertTrue(any("Since the previous review" in t for t in texts),
+                        "progress strip missing")
 
 
 if __name__ == "__main__":

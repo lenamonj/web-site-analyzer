@@ -83,6 +83,17 @@ def _probe_legacy(host, port=443, timeout=10):
                 "note": "Server refused legacy TLS 1.0/1.1 (or the local client blocked it)."}
 
 
+def _restricts_issuance(record):
+    """True if a CAA record actually restricts certificate issuance. Presentation
+    format is "<flags> <tag> <value>"; only issue/issuewild restrict which CAs may
+    issue. iodef (incident-reporting contact), contactemail/contactphone, and the
+    like are present but restrict nothing, so a record set of only those still lets
+    any public CA issue."""
+    parts = record.split()
+    tag = parts[1].lower() if len(parts) >= 2 else ""
+    return tag in ("issue", "issuewild")
+
+
 def check_caa(domain):
     """CAA record: which certificate authorities may issue for the domain.
     One passive DoH lookup; absence is common and reported as an observation."""
@@ -91,9 +102,16 @@ def check_caa(domain):
         return {"verdict": "info", "records": [],
                 "note": f"CAA lookup failed ({res['error']}); issuance policy unknown."}
     records = [a for a in res["answers"] if a]
-    if records:
+    restricting = [r for r in records if _restricts_issuance(r)]
+    if restricting:
         return {"verdict": "pass", "records": records,
-                "note": f"CAA restricts certificate issuance: {', '.join(records[:6])}."}
+                "note": f"CAA restricts certificate issuance: {', '.join(restricting[:6])}."}
+    if records:
+        # CAA present but no issue/issuewild property (e.g. an iodef-only record),
+        # so it does not restrict issuance: any public CA may still issue.
+        return {"verdict": "info", "records": records,
+                "note": ("CAA record present but no issue/issuewild property, so any public "
+                         "CA may still issue; add an issue policy to restrict certificate issuance.")}
     return {"verdict": "info", "records": [],
             "note": "No CAA record; any public CA may issue certificates for this domain."}
 
@@ -118,7 +136,14 @@ def _scan(target):
     expiry_verdict, expiry_note = "info", "Certificate expiry not reported by peer."
     if not_after:
         expiry_epoch, days_left = _parse_not_after(not_after)
-        expires_on = time.strftime("%Y-%m-%d", time.gmtime(expiry_epoch))
+        try:
+            expires_on = time.strftime("%Y-%m-%d", time.gmtime(expiry_epoch))
+        except (OSError, ValueError, OverflowError):
+            # Windows time.gmtime raises OSError past ~year 3000; a pathological or
+            # far-future notAfter must not abort the whole TLS scan. days_left is
+            # plain arithmetic, so the verdict below still holds; only the
+            # human-readable expiry date is dropped.
+            expires_on = None
         if days_left < 0:
             expiry_verdict, expiry_note = "fail", f"Certificate expired {abs(days_left)} days ago."
         elif days_left < EXPIRY_WARN_DAYS:

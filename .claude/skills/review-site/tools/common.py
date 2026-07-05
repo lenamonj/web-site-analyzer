@@ -47,7 +47,10 @@ def normalize_url(url):
     url = url.strip()
     if not url:
         return url
-    if not urlparse(url).scheme:
+    # A real scheme is signalled by "://"; urlparse().scheme alone misreads a bare
+    # host:port (example.com:8080 -> scheme "example.com", no host), so key on the
+    # separator instead.
+    if "://" not in url:
         url = "https://" + url
     return url
 
@@ -351,10 +354,24 @@ def env_value(name):
     path = repo_root() / ".env"
     if not path.exists():
         return None
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    # utf-8-sig strips a leading BOM so a Notepad-saved .env does not hide its
+    # first key behind ﻿ (see read_target_file).
+    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = line.strip()
-        if line.startswith(name + "="):
-            return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+        if line.startswith("export "):  # tolerate `export NAME=value`
+            line = line[len("export "):].lstrip()
+        if not line.startswith(name + "="):
+            continue
+        value = line.split("=", 1)[1].strip()
+        if value[:1] in ('"', "'"):
+            # A quoted value keeps everything inside the quotes (a literal # too);
+            # anything after the closing quote (e.g. a comment) is dropped.
+            end = value.find(value[0], 1)
+            value = value[1:end] if end != -1 else value[1:]
+        else:
+            # An unquoted value ends at the first inline # comment.
+            value = value.split("#", 1)[0].strip()
+        return value or None
     return None
 
 
@@ -519,7 +536,10 @@ def read_target_file():
     path = repo_root() / "TARGET.txt"
     if not path.exists():
         return None
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # utf-8-sig strips a leading BOM: Notepad (Windows, this project's platform)
+    # saves UTF-8 with a BOM by default, which strip() leaves in place, so a plain
+    # utf-8 read would make the first line start with ﻿ and fail startswith.
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         if line.strip().lower().startswith("http"):
             return line.strip()
     return None

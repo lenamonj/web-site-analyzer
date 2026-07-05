@@ -25,14 +25,20 @@ SCOPE = "page"
 MAX_SCALE_RE = re.compile(r"maximum-scale=(\d+(?:\.\d+)?)")
 
 
-def _accessible_name(control, labels_for):
+def _accessible_name(control, labels_for, ids):
     if control["id"] and control["id"] in labels_for:
         return "label[for]"
     if control["wrapped_by_label"]:
         return "wrapping label"
     if control["aria_label"]:
         return "aria-label"
-    if control["aria_labelledby"]:
+    # aria-labelledby is a space-separated list of id references, not a literal
+    # string: it names the control only if at least one referenced id exists on
+    # the page. A dangling reference (id typo, JS-generated id absent from the
+    # static DOM) provides no accessible name, so fall through rather than credit
+    # it - otherwise an effectively-unlabeled control grades "labeled".
+    labelledby = control["aria_labelledby"]
+    if labelledby and any(tok in ids for tok in labelledby.split()):
         return "aria-labelledby"
     if control["title"]:
         return "title"
@@ -91,7 +97,7 @@ def _form_check(parsed, inconclusive):
         return {"count": len(controls), "unlabeled": 0, "verdict": "info", "note": note}
     unlabeled, placeholder_only = [], []
     for c in controls:
-        src = _accessible_name(c, set(parsed["labels_for"]))
+        src = _accessible_name(c, set(parsed["labels_for"]), set(parsed["ids"]))
         if not src:
             if c["placeholder"]:
                 placeholder_only.append(c.get("name") or c.get("id") or c["type"])

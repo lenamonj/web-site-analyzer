@@ -56,6 +56,7 @@ import trends as trends_mod
 # these primitives override them locally and restore the stubs after.
 common.http_post_json = lambda url, payload, timeout=None: {
     "ok": False, "status": None, "json": None, "error": "stubbed offline (suite default)"}
+_REAL_ENV_VALUE = common.env_value  # kept so the .env-parsing test can exercise the real reader
 common.env_value = lambda name: None
 # RDAP is a network primitive too: default it to "unavailable" so the whole
 # suite (including the tool-contract sweep) stays offline. Tests that exercise
@@ -164,6 +165,26 @@ class TestHtmlParser(unittest.TestCase):
         # a well-formed heading with inline children is unaffected
         self.assertEqual(hs('<h1>Hello <span>there</span></h1>'), [(1, "Hello  there")])
 
+    def test_unclosed_title_does_not_swallow_the_body(self):
+        # P53: under Python 3.13 an unclosed <title> parses the rest of the
+        # document as RCDATA, so headings/anchors/images/landmarks after it would
+        # be lost and a false "no H1 / no links / no images" would ship as a
+        # measured fact. The parser must recover the title AND the body structure.
+        body = ('<h1>Head</h1><nav><a href="/x">L</a></nav>'
+                '<img src="/i.png" alt="i"><main role="main"><p id="c">t</p></main>')
+        closed = '<html lang="en"><head><title>My Site</title></head><body>' + body + '</body></html>'
+        unclosed = '<html lang="en"><head><title>My Site</head><body>' + body + '</body></html>'
+        c, u = htmlmeta.parse_html(closed), htmlmeta.parse_html(unclosed)
+        for key in ("title", "html_lang", "jsonld_types"):
+            self.assertEqual(u[key], c[key], key)
+        for key in ("headings", "anchors", "images"):
+            self.assertEqual(len(u[key]), len(c[key]), key)
+            self.assertEqual(len(u[key]), 1, key)
+        self.assertEqual(u["landmarks"], c["landmarks"])
+        self.assertEqual(u["title"], "My Site")
+        # a title unclosed at end of document (no following markup) still works
+        self.assertEqual(htmlmeta.parse_html("<title>Just A Title")["title"], "Just A Title")
+
     def test_images_alt(self):
         self.assertEqual(len(self.good["images"]), 2)
         self.assertTrue(all(i["has_alt"] for i in self.good["images"]))
@@ -209,6 +230,14 @@ class TestHtmlParser(unittest.TestCase):
         self.assertIn("nav", self.good["landmarks"])
         self.assertEqual(self.good["landmarks"], sorted(self.good["landmarks"]))
         self.assertEqual(self.bad["positive_tabindex"], 1)
+
+    def test_multi_token_role_is_split_into_tokens(self):
+        # P30: role is a space-separated fallback list; each token must be matchable
+        # so role="navigation menubar" satisfies the navigation landmark.
+        roles = htmlmeta.parse_html('<div role="navigation menubar">x</div>')["roles"]
+        self.assertIn("navigation", roles)
+        self.assertIn("menubar", roles)
+        self.assertEqual(htmlmeta.parse_html('<div role="main">y</div>')["roles"], ["main"])
 
     def test_malformed_does_not_crash(self):
         out = htmlmeta.parse_html("<html><body><p>unclosed <b>bold <img src=x></body>")
@@ -398,6 +427,14 @@ class TestSecurityChecks(unittest.TestCase):
         dup = sec.check_disclosure({"server": ["nginx/1.25.3", "nginx/1.25.3"]})
         self.assertEqual(dup["verdict"], "warn")
         self.assertEqual(dup["banners"]["server"]["value"], "nginx/1.25.3")
+        # P49: a version is a dotted numeric token, not any digit. A CDN node id
+        # (Akamai "ECAcc (nyd/D179)") is a banner without a version -> info, not a
+        # false "version banners present" warn; a real dotted version still warns.
+        node = sec.check_disclosure({"server": "ECAcc (nyd/D179)"})
+        self.assertEqual(node["verdict"], "info")
+        self.assertFalse(node["banners"]["server"]["reveals_version"])
+        self.assertEqual(sec.check_disclosure({"server": "Microsoft-IIS/10.0"})["verdict"], "warn")
+        self.assertEqual(sec.check_disclosure({"x-powered-by": "ASP.NET"})["verdict"], "info")
 
     def test_duplicate_headers(self):
         # A header sent twice (origin plus CDN) is folded into a list by
@@ -449,6 +486,30 @@ class TestSecurityChecks(unittest.TestCase):
         self.assertIn("checks", result)
         for name, check in result["checks"].items():
             self.assertIn(check.get("verdict"), ("pass", "warn", "fail", "info"), name)
+
+    def test_absent_permissions_policy_is_info_not_fail(self):
+        # P48: Permissions-Policy is advanced/optional (Mozilla Observatory does
+        # not score it), so its absence is info, not a hard fail that deflates the
+        # band. A genuinely expected header (X-Content-Type-Options) still fails
+        # when absent, and a present Permissions-Policy still grades pass.
+        measured = {
+            "ok": True, "error": None, "hops": [],
+            "final_url": "https://m.example/", "final_status": 200,
+            "final_headers": {"strict-transport-security": "max-age=63072000"},
+        }
+        orig = common.http_fetch
+        common.http_fetch = lambda *a, **k: measured
+        try:
+            result = sec.scan("https://m.example")
+        finally:
+            common.http_fetch = orig
+        v = {n: c["verdict"] for n, c in result["checks"].items()}
+        self.assertEqual(v["permissions_policy"], "info")
+        self.assertEqual(v["x_content_type_options"], "fail")
+        # a present policy still grades pass
+        self.assertEqual(sec.check_simple_header(
+            {"permissions-policy": "geolocation=()"}, "Permissions-Policy", None,
+            "x", "info")["verdict"], "pass")
 
     def test_unreachable_target_is_not_measured_not_fabricated(self):
         # M1: a target that never responds (ok=False, no hops, no headers) must
@@ -513,29 +574,71 @@ class TestSeoChecks(unittest.TestCase):
         # must not false-trigger.
         self.assertEqual(seo._robots_meta_check("nonexistent")["verdict"], "pass")
 
+    def test_canonical_check(self):
+        base = "https://acme.example/page"
+        # Value, not presence (P46): a cross-registrable-domain canonical
+        # de-indexes this page in favor of that domain, so it fails.
+        self.assertEqual(seo._canonical_check("https://competitor.test/", base)["verdict"], "fail")
+        self.assertEqual(seo._canonical_check("//other.test/x", base)["verdict"], "fail")
+        # Self and same-site variants (apex vs www, subdomain, relative) pass.
+        self.assertEqual(seo._canonical_check("https://acme.example/page", base)["verdict"], "pass")
+        self.assertEqual(seo._canonical_check("https://www.acme.example/page", base)["verdict"], "pass")
+        self.assertEqual(seo._canonical_check("https://blog.acme.example/x", base)["verdict"], "pass")
+        self.assertEqual(seo._canonical_check("/other", base)["verdict"], "pass")
+        # No canonical is informational, never a fail.
+        self.assertEqual(seo._canonical_check(None, base)["verdict"], "info")
+
+    def test_viewport_check(self):
+        # P50: value, not presence. Mobile-friendliness needs width=device-width;
+        # a fixed-width or width-less viewport is present but not responsive.
+        self.assertEqual(seo._viewport_check("width=device-width, initial-scale=1")["verdict"], "pass")
+        self.assertEqual(seo._viewport_check("WIDTH=DEVICE-WIDTH")["verdict"], "pass")  # case-insensitive
+        self.assertEqual(seo._viewport_check("width=1024")["verdict"], "warn")
+        self.assertEqual(seo._viewport_check("initial-scale=1")["verdict"], "warn")
+        self.assertEqual(seo._viewport_check(None)["verdict"], "fail")
+        self.assertEqual(seo._viewport_check("")["verdict"], "fail")
+
 
 class TestAccessibilityChecks(unittest.TestCase):
     def test_accessible_name(self):
         self.assertEqual(a11y._accessible_name({"id": "e", "wrapped_by_label": False,
-                         "aria_label": None, "aria_labelledby": None, "title": None}, {"e"}), "label[for]")
+                         "aria_label": None, "aria_labelledby": None, "title": None}, {"e"}, set()), "label[for]")
         self.assertEqual(a11y._accessible_name({"id": None, "wrapped_by_label": False,
-                         "aria_label": "Search", "aria_labelledby": None, "title": None}, set()), "aria-label")
+                         "aria_label": "Search", "aria_labelledby": None, "title": None}, set(), set()), "aria-label")
         self.assertIsNone(a11y._accessible_name({"id": None, "wrapped_by_label": False,
-                          "aria_label": None, "aria_labelledby": None, "title": None}, set()))
+                          "aria_label": None, "aria_labelledby": None, "title": None}, set(), set()))
+        # P57: aria-labelledby names the control only if a referenced id exists.
+        base = {"id": None, "wrapped_by_label": False, "aria_label": None, "title": None}
+        self.assertEqual(a11y._accessible_name({**base, "aria_labelledby": "lbl"}, set(), {"lbl"}),
+                         "aria-labelledby")
+        # a dangling reference (no such id) provides no name -> falls through to None
+        self.assertIsNone(a11y._accessible_name({**base, "aria_labelledby": "ghost"}, set(), set()))
+        # but a title still names it when aria-labelledby is dangling
+        self.assertEqual(a11y._accessible_name(
+            {**base, "aria_labelledby": "ghost", "title": "Search"}, set(), set()), "title")
 
     def test_form_check(self):
         labeled = {"form_controls": [{"tag": "input", "type": "email", "id": "email", "name": "email",
                     "aria_label": None, "aria_labelledby": None, "title": None,
-                    "placeholder": None, "wrapped_by_label": False}], "labels_for": ["email"]}
+                    "placeholder": None, "wrapped_by_label": False}], "labels_for": ["email"], "ids": ["email"]}
         self.assertEqual(a11y._form_check(labeled, False)["verdict"], "pass")
         unlabeled = {"form_controls": [{"tag": "input", "type": "text", "id": None, "name": "q",
                       "aria_label": None, "aria_labelledby": None, "title": None,
-                      "placeholder": None, "wrapped_by_label": False}], "labels_for": []}
+                      "placeholder": None, "wrapped_by_label": False}], "labels_for": [], "ids": []}
         self.assertEqual(a11y._form_check(unlabeled, False)["verdict"], "fail")
         placeholder = {"form_controls": [{"tag": "input", "type": "text", "id": None, "name": "q",
                         "aria_label": None, "aria_labelledby": None, "title": None,
-                        "placeholder": "Search", "wrapped_by_label": False}], "labels_for": []}
+                        "placeholder": "Search", "wrapped_by_label": False}], "labels_for": [], "ids": []}
         self.assertEqual(a11y._form_check(placeholder, False)["verdict"], "warn")
+        # P57: a control whose aria-labelledby points at a non-existent id is not
+        # labeled (dangling reference gives assistive tech no name).
+        dangling = {"form_controls": [{"tag": "input", "type": "text", "id": None, "name": "q",
+                     "aria_label": None, "aria_labelledby": "ghost", "title": None,
+                     "placeholder": None, "wrapped_by_label": False}], "labels_for": [], "ids": []}
+        self.assertEqual(a11y._form_check(dangling, False)["verdict"], "fail")
+        # the same control names itself once the referenced id exists on the page
+        resolved = {"form_controls": dangling["form_controls"], "labels_for": [], "ids": ["ghost"]}
+        self.assertEqual(a11y._form_check(resolved, False)["verdict"], "pass")
 
     def test_form_labels_ignore_buttons_and_honor_image_alt(self):
         # Push buttons (submit/reset/button) take their name from value, so a
@@ -593,6 +696,22 @@ class TestLinkChecks(unittest.TestCase):
         self.assertEqual(links._mixed_content(clean, True)["verdict"], "pass")
         # A page not served over HTTPS cannot have mixed content.
         self.assertEqual(links._mixed_content(active, False)["verdict"], "info")
+
+    def test_mixed_content_ignores_commented_out_markup(self):
+        # P56: a browser never fetches a resource referenced only inside an HTML
+        # comment, so it must not be graded as (fabricated) mixed content.
+        commented = '<!-- legacy: <script src="http://cdn.example/old.js"></script> -->'
+        self.assertEqual(links._mixed_content(commented, True)["verdict"], "pass")
+        # a comment must not hide a real, uncommented insecure script after it
+        mixed = ('<!-- <script src="http://a/x.js"></script> -->'
+                 '<script src="http://b/live.js"></script>')
+        self.assertEqual(links._mixed_content(mixed, True)["verdict"], "fail")
+        # the comment strip is a linear string scan, not a lazy regex: many
+        # unclosed '<!--' must not hang (ReDoS, cf. the N6 sitemap fix).
+        import time
+        t = time.perf_counter()
+        links._mixed_content("<!--" * 20000, True)
+        self.assertLess(time.perf_counter() - t, 1.0)
 
     def test_mixed_content_link_rel(self):
         # A <link> is mixed content only when its rel actually fetches a
@@ -693,6 +812,16 @@ class TestTlsAndDns(unittest.TestCase):
         self.assertEqual(common.slug_of("https://www.example.com/x"), "example-com")
         self.assertEqual(common.slug_of("https://192.168.0.1"), "192-168-0-1")
 
+    def test_normalize_url_handles_scheme_less_host_port(self):
+        # P37: a bare host:port must get a scheme (urlparse would read the host as
+        # the scheme and leave no host, naming the deliverable "_...docx").
+        self.assertEqual(common.normalize_url("example.com:8080"), "https://example.com:8080")
+        self.assertEqual(common.host_of("example.com:8080"), "example.com")
+        self.assertEqual(common.host_of("localhost:3000"), "localhost")
+        # a real scheme and a bare host are unchanged
+        self.assertEqual(common.normalize_url("http://example.com"), "http://example.com")
+        self.assertEqual(common.normalize_url("example.com"), "https://example.com")
+
     def test_spf_all_mechanism_is_a_token_not_a_substring(self):
         # The 'all' mechanism is a standalone term; a domain that merely
         # contains "-all" (include:my-all.com) must not be read as a hard fail
@@ -710,6 +839,23 @@ class TestTlsAndDns(unittest.TestCase):
             self.assertEqual(dns.check_spf("example.com")["verdict"], "warn")
             dns._txt_records = lambda name: (["v=spf1 include:my-all.com"], ok)
             self.assertIn("no explicit 'all'", dns.check_spf("example.com")["note"])
+        finally:
+            dns._txt_records = orig
+
+    def test_multiple_spf_records_are_a_permerror(self):
+        # P44: more than one v=spf1 record is an RFC 7208 permerror; receivers
+        # ignore SPF, so it must fail, not pass on the first record.
+        orig = dns._txt_records
+        try:
+            ok = {"ok": True}
+            dns._txt_records = lambda name: (
+                ["v=spf1 include:_spf.google.com -all", "v=spf1 include:mailgun.org ~all"], ok)
+            r = dns.check_spf("example.com")
+            self.assertEqual(r["verdict"], "fail")
+            self.assertIn("permerror", r["note"].lower())
+            # a single record (with an unrelated TXT alongside) still grades normally
+            dns._txt_records = lambda name: (["v=spf1 -all", "google-site-verification=x"], ok)
+            self.assertEqual(dns.check_spf("example.com")["verdict"], "pass")
         finally:
             dns._txt_records = orig
 
@@ -738,6 +884,35 @@ class TestTlsAndDns(unittest.TestCase):
             finally:
                 locale.setlocale(locale.LC_TIME, orig)
             break
+
+    def test_far_future_cert_expiry_does_not_abort_the_scan(self):
+        # P60: on Windows time.gmtime raises OSError past ~year 3000, so a
+        # pathological far-future notAfter must degrade (drop the display date),
+        # not crash the whole TLS scan. days_left is plain arithmetic, so the
+        # verdict still holds and a normal cert still formats its date.
+        def info_with(not_after):
+            return lambda host, *a, **k: {
+                "ok": True, "error": None, "protocol": "TLSv1.3", "alpn": "h2",
+                "cipher": ("TLS_AES_256_GCM_SHA384", "TLSv1.3", 256),
+                "cert": {"subject": ((("commonName", "example.com"),),),
+                         "issuer": ((("commonName", "CA"),),),
+                         "subjectAltName": (("DNS", "example.com"),),
+                         "notAfter": not_after}}
+        orig_info, orig_probe, orig_doh = common.tls_info, tls._probe_legacy, common.doh_query
+        common.doh_query = lambda name, rtype, *a, **k: {
+            "ok": True, "error": None, "answers": [], "raw": []}
+        tls._probe_legacy = lambda host, *a, **k: {"verdict": "info", "note": "stub"}
+        try:
+            common.tls_info = info_with("Dec 31 23:59:59 9999 GMT")
+            r = tls.scan("https://example.com")  # must not raise
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["checks"]["expiry"]["verdict"], "pass")  # huge days_left
+            self.assertIsNone(r["expires_on"])  # display date dropped, not fabricated
+            common.tls_info = info_with("Aug 29 21:41:26 2027 GMT")
+            r2 = tls.scan("https://example.com")
+            self.assertEqual(r2["expires_on"], "2027-08-29")  # normal date still formats
+        finally:
+            common.tls_info, tls._probe_legacy, common.doh_query = orig_info, orig_probe, orig_doh
 
 
 class TestScorecard(unittest.TestCase):
@@ -1191,6 +1366,40 @@ class TestDiscovery(unittest.TestCase):
         self.assertLessEqual(len([u for u in out if "/products" in u]), disco.PER_SECTION)
         self.assertIn("https://x.com/privacy", out)
 
+    def test_sitemap_collection_never_fetches_off_domain(self):
+        # P51: a robots.txt Sitemap: line and a sitemapindex <loc> are content
+        # served by the reviewed site and can name any host. The collector must
+        # fetch only sitemaps on the target's own registrable domain, so a
+        # hostile/misconfigured target cannot make the tool contact a third party.
+        index = ('<?xml version="1.0"?><sitemapindex>'
+                 '<sitemap><loc>https://third-party.test/child.xml</loc></sitemap>'
+                 '<sitemap><loc>https://www.target.example/child2.xml</loc></sitemap>'
+                 '</sitemapindex>')
+        child = '<?xml version="1.0"?><urlset><url><loc>https://target.example/p1</loc></url></urlset>'
+        orig = common.http_fetch
+        fetched = []
+
+        def stub(url, **k):
+            fetched.append(url)
+            body = child if "child" in url else index
+            return {"ok": True, "final_status": 200, "body": body, "error": None}
+
+        common.http_fetch = stub
+        try:
+            # An off-domain robots Sitemap must not be fetched; the collector
+            # falls back to the conventional same-domain /sitemap.xml.
+            res = disco._collect_sitemap_urls(
+                "https://target.example/",
+                ["https://attacker-controlled.test/sitemap.xml"], "target.example")
+        finally:
+            common.http_fetch = orig
+        off_domain = [u for u in fetched
+                      if common.registrable_domain(common.host_of(u)) != "target.example"]
+        self.assertEqual(off_domain, [])
+        # the same-registrable-domain child (www) is still fetched
+        self.assertIn("https://www.target.example/child2.xml", res["sitemaps_read"])
+        self.assertNotIn("https://third-party.test/child.xml", res["sitemaps_read"])
+
 
 class TestPerfCompressionCaching(unittest.TestCase):
     def test_compression_check(self):
@@ -1475,6 +1684,17 @@ class TestPrivacy(unittest.TestCase):
             '<script src="https://consent.cookiebot.com/uc.js"></script>'))
         self.assertTrue(privacy._consent_detected('<div class="cookie-consent-banner">'))
         self.assertFalse(privacy._consent_detected('<div>no banner here</div>'))
+
+    def test_consent_markers_do_not_substring_match_prose(self):
+        # P40: bare "truste"/"cookie-policy" collided with everyday copy and a
+        # policy-page link, false-passing cookie_consent. TrustArc is still caught
+        # via its CMP host, and a real widget marker still detects.
+        for innocent in ("we are a trusted vendor", "trustee report",
+                         '<a href="/cookie-policy">cookie policy</a>'):
+            self.assertFalse(privacy._consent_detected(innocent.lower()), innocent)
+        self.assertTrue(privacy._consent_detected(
+            '<script src="https://cdn.trustarc.com/x.js"></script>'))
+        self.assertTrue(privacy._consent_detected('<div id="cmplz-cookiebanner">'))
 
     def test_consent_verdict_matrix(self):
         self.assertEqual(privacy._consent_verdict(True, True)["verdict"], "pass")
@@ -1768,6 +1988,30 @@ class TestAssetCachingAndRedirects(unittest.TestCase):
         c = perf._asset_caching_check(measured, inconclusive=False)
         self.assertEqual(c["verdict"], "warn")
 
+    def test_expires_and_s_maxage_count_as_caching_lifetime(self):
+        # P43: an asset whose only freshness is a future Expires header (Apache
+        # mod_expires) or an s-maxage directive is not "uncached".
+        future = "Wed, 21 Oct 2099 07:28:00 GMT"
+        by_expires = [
+            {"url": "https://a/1.js", "status": 200, "cache_control": None, "expires": future},
+            {"url": "https://a/2.css", "status": 200, "cache_control": None, "expires": future}]
+        self.assertEqual(perf._asset_caching_check(by_expires, False)["verdict"], "pass")
+        by_s_maxage = [
+            {"url": "https://a/1.js", "status": 200, "cache_control": "s-maxage=31536000"},
+            {"url": "https://a/2.css", "status": 200, "cache_control": "public, s-maxage=600"}]
+        self.assertEqual(perf._asset_caching_check(by_s_maxage, False)["verdict"], "pass")
+        # A past Expires (or Expires: 0) is already stale, so still uncached; and
+        # Cache-Control no-store overrides a future Expires.
+        stale = [
+            {"url": "https://a/1.js", "status": 200, "cache_control": None,
+             "expires": "Thu, 01 Jan 1970 00:00:00 GMT"},
+            {"url": "https://a/2.css", "status": 200, "cache_control": None, "expires": "0"}]
+        self.assertEqual(perf._asset_caching_check(stale, False)["verdict"], "warn")
+        overridden = [
+            {"url": "https://a/1.js", "status": 200, "cache_control": "no-store", "expires": future},
+            {"url": "https://a/2.css", "status": 200, "cache_control": "no-store", "expires": future}]
+        self.assertEqual(perf._asset_caching_check(overridden, False)["verdict"], "warn")
+
     def test_nothing_measured_is_info(self):
         self.assertEqual(perf._asset_caching_check([], False)["verdict"], "info")
         self.assertEqual(perf._asset_caching_check(
@@ -1922,6 +2166,27 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
         curr30 = {"issues": {"warn": curr["issues"]["warn"][:30], "fail": []}}
         d = site.diff_issues(prev40, curr30)
         self.assertEqual((len(d["new"]), len(d["resolved"])), (0, 0))
+
+    def test_diff_issues_treats_a_verdict_change_as_persistence(self):
+        # P65: a defect that worsens warn->fail (or eases fail->warn) is the same
+        # persistent defect, so it must be neither new nor resolved - keying the
+        # diff on the verdict would report it as one resolved plus one new (a false
+        # "improvement" claim) while it is still present.
+        c = lambda scan, check, verdict: {"scan": scan, "check": check,
+                                          "verdict": verdict, "note": "n"}
+        worse_prev = {"issues": {"fail": [], "warn": [c("a11y:https://x/", "contrast", "warn")]}}
+        worse_curr = {"issues": {"fail": [c("a11y:https://x/", "contrast", "fail")], "warn": []}}
+        d = site.diff_issues(worse_prev, worse_curr)
+        self.assertEqual((len(d["new"]), len(d["resolved"])), (0, 0))
+        # a genuinely gone defect is still resolved; a genuinely new one still new.
+        gone = site.diff_issues(
+            {"issues": {"fail": [c("sec:https://x/", "hsts", "fail")], "warn": []}},
+            {"issues": {"fail": [], "warn": []}})
+        self.assertEqual((len(gone["new"]), len(gone["resolved"])), (0, 1))
+        added = site.diff_issues(
+            {"issues": {"fail": [], "warn": []}},
+            {"issues": {"fail": [], "warn": [c("seo:https://x/", "title", "warn")]}})
+        self.assertEqual((len(added["new"]), len(added["resolved"])), (1, 0))
 
     def test_attach_delta_reads_previous_json(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2148,6 +2413,39 @@ class TestCrawler(unittest.TestCase):
         self.assertNotIn("https://other.example/", self.fetches)
         # Crawl-delay: 2 raises the 1.0s default; one wait between each fetch.
         self.assertTrue(self.sleeps and all(s == 2.0 for s in self.sleeps))
+
+    def test_subdomain_robots_are_honored_per_origin(self):
+        # P31: a link into a same-registrable subdomain whose own robots disallows
+        # the path must be skipped, not crawled under the apex's permissive robots.
+        import crawler
+        site = {
+            "https://acme.example/robots.txt": "User-agent: *\nDisallow:",
+            "https://acme.example/": '<a href="https://blog.acme.example/secret">s</a> '
+                                     '<a href="https://blog.acme.example/ok">o</a>',
+            "https://blog.acme.example/robots.txt": "User-agent: *\nDisallow: /secret",
+            "https://blog.acme.example/ok": "fine",
+            "https://blog.acme.example/secret": "must not be fetched",
+        }
+
+        fetches = self.fetches
+
+        def fetch(url, *a, **k):
+            fetches.append(url)
+            body = site.get(url)
+            status = 200 if body is not None else 404
+            return {"ok": body is not None, "error": None,
+                    "hops": [{"url": url, "status": status, "headers": {}}],
+                    "final_url": url, "final_status": status, "final_headers": {},
+                    "content_type": "text/html", "content_encoding": "", "body": body,
+                    "body_bytes": len(body or ""), "uncompressed_bytes": len(body or ""),
+                    "elapsed_ms": 1, "requested_url": url}
+
+        common.http_fetch = fetch
+        r = crawler.crawl("https://acme.example/", max_pages=10, delay=0, sleep=lambda s: None)
+        self.assertIn("https://blog.acme.example/ok", r["pages"])
+        self.assertNotIn("https://blog.acme.example/secret", r["pages"])
+        self.assertNotIn("https://blog.acme.example/secret", self.fetches)
+        self.assertGreaterEqual(r["stats"]["skipped_by_robots"], 1)
 
     def test_page_cap_is_enforced(self):
         import crawler
@@ -2649,6 +2947,24 @@ class TestDkimSelectorFamilies(unittest.TestCase):
         finally:
             dns._txt_records = orig
 
+    def test_dkim_empty_p_is_revoked_not_published(self):
+        # P47: an empty p= is a revoked key (RFC 6376 sec 3.6.1), so it does not
+        # count as a published key even alongside v=DKIM1 or k=; scanning every
+        # tag makes a revoking p= veto a preceding v=DKIM1 (order-independent).
+        self.assertFalse(dns._is_dkim_record("v=DKIM1; p="))
+        self.assertFalse(dns._is_dkim_record("v=DKIM1; p=   "))
+        self.assertFalse(dns._is_dkim_record("p=; v=DKIM1"))
+        self.assertFalse(dns._is_dkim_record("v=DKIM1; k=rsa; p="))
+        self.assertTrue(dns._is_dkim_record("v=DKIM1; k=rsa; p=MIGfMA0"))
+        self.assertTrue(dns._is_dkim_record("p=MIGfMA0; v=DKIM1"))
+        # end to end: a selector answering only a revoked key grades info, not pass.
+        orig = dns._txt_records
+        try:
+            dns._txt_records = lambda name: (["v=DKIM1; k=rsa; p="], {})
+            self.assertEqual(dns.check_dkim("example.com")["verdict"], "info")
+        finally:
+            dns._txt_records = orig
+
     def test_dmarc_rua_keys_on_tag_boundary(self):
         # "rua=" buried inside another tag's value is not aggregate reporting;
         # a real rua= tag is (L12).
@@ -2950,6 +3266,26 @@ class TestPageSecurity(unittest.TestCase):
         r = psec.scan("https://acme.example/", page=self._ctx(html))
         self.assertEqual(r["checks"]["subresource_integrity"]["verdict"], "pass")
 
+    def test_sri_empty_integrity_value_warns(self):
+        # P42: integrity="" (and a non-hash value) is no protection, so it must
+        # count as missing SRI, not pass on the bare attribute name.
+        for bad in ('integrity=""', 'integrity="nothash"'):
+            html = self.BASE.format(
+                f'<script src="https://cdn.vendor.example/lib.js" {bad}></script>')
+            r = psec.scan("https://acme.example/", page=self._ctx(html))
+            c = r["checks"]["subresource_integrity"]
+            self.assertEqual(c["verdict"], "warn", bad)
+            self.assertEqual(c["without_integrity"], 1, bad)
+        # a real hash token still passes; a data-integrity decoy does not count.
+        good = self.BASE.format('<script src="https://cdn.vendor.example/lib.js" '
+                                'integrity="sha512-zzz"></script>')
+        self.assertEqual(psec.scan("https://acme.example/", page=self._ctx(good))
+                         ["checks"]["subresource_integrity"]["verdict"], "pass")
+        decoy = self.BASE.format('<script src="https://cdn.vendor.example/lib.js" '
+                                 'data-integrity="sha384-x"></script>')
+        self.assertEqual(psec.scan("https://acme.example/", page=self._ctx(decoy))
+                         ["checks"]["subresource_integrity"]["verdict"], "warn")
+
     def test_sri_same_origin_only_is_info(self):
         html = self.BASE.format('<script src="/app.js"></script>')
         r = psec.scan("https://acme.example/", page=self._ctx(html))
@@ -2972,6 +3308,22 @@ class TestPageSecurity(unittest.TestCase):
         html = self.BASE.format('<form action="/login"><input name="u"></form>')
         r = psec.scan("https://acme.example/", page=self._ctx(html))
         self.assertEqual(r["checks"]["insecure_form_action"]["verdict"], "pass")
+
+    def test_http_formaction_override_fails(self):
+        # P41: a submit button's formaction overrides a secure form action; an
+        # http:// formaction is still a downgrade. data-formaction is ignored.
+        html = self.BASE.format(
+            '<form action="/login"><button type="submit" '
+            'formaction="http://insecure.example/steal">Send</button></form>')
+        r = psec.scan("https://acme.example/", page=self._ctx(html))
+        c = r["checks"]["insecure_form_action"]
+        self.assertEqual(c["verdict"], "fail")
+        self.assertIn("http://insecure.example/steal", c["insecure_actions"])
+        # a data-formaction is not a real submission target
+        safe = self.BASE.format(
+            '<form action="/login"><button data-formaction="http://x/y">Go</button></form>')
+        self.assertEqual(psec.scan("https://acme.example/",
+                                   page=self._ctx(safe))["checks"]["insecure_form_action"]["verdict"], "pass")
 
     def test_inline_handlers_reported_as_info(self):
         html = self.BASE.format('<button onclick="go()">Go</button><div onmouseover="x()">y</div>')
@@ -3186,6 +3538,19 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(c["verdict"], "warn")
         self.assertEqual(c["missing_dimensions"], 2)
 
+    def test_style_dimensions_grade_properties_not_a_width_substring(self):
+        # P58: a responsive image (max-width:100%, or a percentage width with no
+        # height) reserves no vertical space and shifts layout, so it must NOT
+        # count as declaring dimensions just because "width" appears in the style.
+        for style in ("max-width:100%", "min-width:200px", "width:100%", "height:auto"):
+            r = self._scan(body=f'<img src="/a.png" style="{style}">' * 3)
+            self.assertEqual(r["checks"]["image_dimensions"]["verdict"], "warn", style)
+        # a real reservation still passes: explicit width+height, or aspect-ratio.
+        for style in ("width:800px;height:600px", "aspect-ratio:16/9",
+                      "aspect-ratio:16/9;width:100%"):
+            r = self._scan(body=f'<img src="/a.png" style="{style}">' * 3)
+            self.assertEqual(r["checks"]["image_dimensions"]["verdict"], "pass", style)
+
     def test_client_rendered_marks_body_checks_info_but_head_still_counts(self):
         orig = common.http_fetch
         common.http_fetch = self._no_favicon_fetch
@@ -3256,6 +3621,27 @@ class TestSecurityTxtAndCaa(unittest.TestCase):
         self.assertEqual(c["verdict"], "pass")
         self.assertIn('0 issue "letsencrypt.org"', c["records"])
 
+    def test_caa_iodef_only_does_not_restrict_issuance(self):
+        # P59: a CAA record set with only an iodef (or other non-issue) property
+        # restricts nothing, so any public CA may still issue -> info, not a pass
+        # that claims issuance is restricted. A mixed set still passes on issue.
+        orig = common.doh_query
+        try:
+            common.doh_query = lambda name, rtype, *a, **k: {
+                "ok": True, "error": None, "status": 0, "ad": False,
+                "answers": ['0 iodef "mailto:sec@acme.example"'], "raw": []}
+            c = tls.check_caa("acme.example")
+            self.assertEqual(c["verdict"], "info")
+            self.assertIn("no issue/issuewild", c["note"])
+            common.doh_query = lambda name, rtype, *a, **k: {
+                "ok": True, "error": None, "status": 0, "ad": False,
+                "answers": ['0 iodef "mailto:x"', '0 issue "digicert.com"'], "raw": []}
+            c2 = tls.check_caa("acme.example")
+            self.assertEqual(c2["verdict"], "pass")
+            self.assertIn('0 issue "digicert.com"', c2["note"])  # names the restricting record
+        finally:
+            common.doh_query = orig
+
     def test_caa_absent_is_info(self):
         orig = common.doh_query
         common.doh_query = lambda name, rtype, *a, **k: {
@@ -3316,6 +3702,22 @@ class TestDraftReportData(unittest.TestCase):
         rows = {r["category"]: r for r in drpt.draft(self.SCAN)["scorecard"]["rows"]}
         self.assertEqual(rows["security"]["score"], 0.07)
         self.assertEqual(rows["seo"]["score"], 0.79)
+
+    def test_scanner_crash_is_surfaced_and_caveats_the_headline(self):
+        # P64: a crashed scanner leaves its category Not measured, so the report
+        # must name the errored scanner and the overall headline must say the
+        # posture is incomplete - not read as a clean band for an unmeasured
+        # category. The no-crash path (base SCAN) carries neither.
+        base = drpt.draft(self.SCAN)
+        self.assertEqual(base["scorecard"]["scanner_errors"], [])
+        self.assertNotIn("could not measure their category", base["bottom_line"])
+        crashed = json.loads(json.dumps(self.SCAN))
+        crashed["scanner_errors"] = [{"tool": "scan_tls", "scope": "host",
+                                      "error": "cert parse crash"}]
+        d = drpt.draft(crashed)
+        self.assertEqual([e["tool"] for e in d["scorecard"]["scanner_errors"]], ["scan_tls"])
+        self.assertIn("scan_tls", d["bottom_line"])
+        self.assertIn("could not measure their category", d["bottom_line"])
 
     def test_findings_map_severity_ordering_and_evidence(self):
         d = drpt.draft(self.SCAN)
@@ -3394,6 +3796,41 @@ class TestDraftReportData(unittest.TestCase):
         d = drpt.draft(scan)
         self.assertTrue(any(s.startswith("SEO and on-page: strong")
                             for s in d["assessment"]["strengths"]))
+
+    def test_cwv_strength_requires_a_complete_field_capture(self):
+        # P52: "Core Web Vitals all in the Good range" is a real-user CWV claim, so
+        # it may appear only from a field (CrUX) capture with all three of LCP,
+        # CLS, INP measured and Good. A lab capture (LCP/CLS/TBT - TBT is not a
+        # CWV) instead reads as lab metrics, and a partial field capture makes no
+        # "all Good" claim at all.
+        base = json.loads(json.dumps(self.SCAN))
+        base["scorecard"]["categories"] = {}  # isolate the vitals strength
+        CWV = "Core Web Vitals all in the Good range"
+        LAB = "Lab performance metrics all in the Good range"
+
+        def strengths(host_scans=None, page_scans=None):
+            s = json.loads(json.dumps(base))
+            s["host_scans"] = host_scans or {}
+            s["page_scans"] = page_scans or []
+            return drpt.draft(s)["assessment"]["strengths"]
+
+        field_all = {"crux": {"checks": {
+            "field_lcp": {"verdict": "pass", "value": 1800},
+            "field_cls": {"verdict": "pass", "value": 0.03},
+            "field_inp": {"verdict": "pass", "value": 150}}}}
+        self.assertIn(CWV, strengths(host_scans=field_all))
+        # partial field (only LCP measured, Good) makes no all-Good claim
+        field_partial = {"crux": {"checks": {
+            "field_lcp": {"verdict": "pass", "value": 1500}}}}
+        self.assertNotIn(CWV, strengths(host_scans=field_partial))
+        # a lab all-Good capture reads as lab metrics, never Core Web Vitals
+        lab_all = [{"vitals": {"checks": {
+            "lcp": {"verdict": "pass", "value": 1800},
+            "cls": {"verdict": "pass", "value": 0.03},
+            "tbt": {"verdict": "pass", "value": 0}}}}]
+        lab_strengths = strengths(page_scans=lab_all)
+        self.assertNotIn(CWV, lab_strengths)
+        self.assertIn(LAB, lab_strengths)
 
     def test_strengths_are_ordered_by_score_so_strongest_is_true(self):
         scan = json.loads(json.dumps(self.SCAN))
@@ -3575,6 +4012,15 @@ class TestReferrerPolicy(unittest.TestCase):
             {"referrer-policy": "strict-origin-when-cross-origin"})["verdict"], "pass")
         self.assertEqual(sec.check_referrer_policy(
             {"referrer-policy": "unsafe-url"})["verdict"], "warn")
+        # P45: the legacy default no-referrer-when-downgrade leaks full URLs
+        # cross-origin, so it must warn; the modern origin-based policies pass. The
+        # effective policy of a fallback list is its last token.
+        self.assertEqual(sec.check_referrer_policy(
+            {"referrer-policy": "no-referrer-when-downgrade"})["verdict"], "warn")
+        for safe in ("origin-when-cross-origin", "same-origin", "no-referrer"):
+            self.assertEqual(sec.check_referrer_policy({"referrer-policy": safe})["verdict"], "pass")
+        self.assertEqual(sec.check_referrer_policy(
+            {"referrer-policy": "unsafe-url, strict-origin"})["verdict"], "pass")
 
 
 class TestTrackerListDepth(unittest.TestCase):
@@ -3704,6 +4150,66 @@ class TestCrawl(unittest.TestCase):
         # 2 pass + 2 warn merged into one bucket -> score 0.75, no key overwrite.
         self.assertEqual((g["pass"], g["warn"], g["fail"]), (2, 2, 0))
         self.assertEqual(g["score"], 0.75)
+
+
+class TestHandEditedFileReads(unittest.TestCase):
+    """P33: TARGET.txt and .env are hand-edited on Windows, where Notepad saves a
+    leading UTF-8 BOM; a utf-8-sig read must strip it so the first line still
+    resolves."""
+
+    def _with_repo(self, files):
+        tmp = tempfile.TemporaryDirectory()
+        for name, data in files.items():
+            (Path(tmp.name) / name).write_bytes(data)
+        orig = common.repo_root
+        common.repo_root = lambda: Path(tmp.name)
+
+        def restore():
+            common.repo_root = orig
+            tmp.cleanup()
+        return restore
+
+    def test_target_file_tolerates_a_bom(self):
+        restore = self._with_repo({"TARGET.txt": b"\xef\xbb\xbfhttps://example.com\n"})
+        try:
+            self.assertEqual(common.read_target_file(), "https://example.com")
+        finally:
+            restore()
+        restore = self._with_repo({"TARGET.txt": b"# note\nhttps://plain.example\n"})
+        try:
+            self.assertEqual(common.read_target_file(), "https://plain.example")
+        finally:
+            restore()
+
+    def test_env_value_tolerates_a_bom_on_the_first_key(self):
+        # common.env_value is stubbed offline suite-wide (line ~59); exercise the
+        # real reader captured before the stub.
+        import os
+        os.environ.pop("SERPER_API_KEY", None)
+        restore = self._with_repo({".env": b"\xef\xbb\xbfSERPER_API_KEY=secret123\n"})
+        try:
+            self.assertEqual(_REAL_ENV_VALUE("SERPER_API_KEY"), "secret123")
+        finally:
+            restore()
+
+    def test_env_value_strips_comments_and_tolerates_export(self):
+        # P36: an unquoted inline # comment is dropped, `export NAME=` is tolerated,
+        # and a # inside quotes is preserved.
+        import os
+        os.environ.pop("K", None)
+        cases = {
+            "K=v # c": "v",
+            "export K=v": "v",
+            'K="ab#cd"': "ab#cd",
+            'K="quoted" # note': "quoted",
+            "K=": None,
+        }
+        for line, expected in cases.items():
+            restore = self._with_repo({".env": (line + "\n").encode("utf-8")})
+            try:
+                self.assertEqual(_REAL_ENV_VALUE("K"), expected, line)
+            finally:
+                restore()
 
 
 class TestMainInputGuards(unittest.TestCase):
@@ -4094,6 +4600,24 @@ class TestCaptureRendered(unittest.TestCase):
             self.assertEqual(set(manifest["pages"]), {first, second})
             metrics = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
             self.assertEqual(set(metrics["pages"]), {first, second})
+
+    def test_refreshing_a_dom_page_reuses_its_snapshot_filename(self):
+        # P55: capturing the same DOM page across runs must reuse its snapshot
+        # file, not oscillate the name (home.html -> home-2.html -> ...) and
+        # orphan the prior file on disk.
+        page = "https://x.example/app"
+        plan = {"pages": [page], "dom_pages": [page], "dropped": []}
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            names = []
+            for _ in range(3):
+                caprend.capture_pages("x-example", plan, session_factory=self.FakeSession,
+                                      out_dir=out_dir, delay_s=0)
+                manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+                names.append(manifest["pages"][page]["file"])
+            self.assertEqual(len(set(names)), 1)  # same filename every run
+            html_files = sorted(p.name for p in out_dir.glob("*.html"))
+            self.assertEqual(html_files, [names[0]])  # no orphaned home-2.html
 
     def test_page_failure_is_named_and_the_run_continues(self):
         bad = "https://x.example/bad"

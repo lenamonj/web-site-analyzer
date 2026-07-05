@@ -4487,3 +4487,1303 @@ static-scanner charter did not yet reach.
 over background images), then P11/P12 (Low). Three Medium open, so not converged. No
 promise.
 
+## 2026-07-04 - P22: dedup the review set so one page is not scanned twice
+
+**Task:** P22 (Medium). scan_site._run built page_urls as [target] + normalized
+extras with no dedup, and normalize_url does not strip a trailing slash, so
+https://example.com and https://example.com/ were scanned as two pages. Because a
+homepage almost always links to /, group_issues then gave every homepage failure
+pages=[both strings], page_count=2, and the report claimed "2 page(s)" listing the
+same page twice; pages_scanned inflated the cover tile and the homepage's
+vitals/weight double-entered the trend medians.
+
+**What I did:** _run now dedups by a canonical key (scheme, netloc.lower(),
+path or "/", query). Empty path and "/" share the key, so the homepage collapses;
+distinct paths keep distinct keys. I deliberately did NOT strip trailing slashes on
+non-root paths (/a vs /a/ can be different resources), collapsing only the
+unambiguous empty-vs-"/" root case the bug is about.
+
+**Files changed:** scan_site.py (urlparse import + dedup in _run),
+test_review_tools.py (test_scan_set_is_deduplicated), README.md (counts 325 -> 326
+via --fix), BACKLOG.md (P22 done), JOURNAL.md (this entry).
+
+**Verification:** homepage + trailing-slash -> 1 page_scan; two distinct pages -> 3;
+/a vs /a/ -> 3 (kept distinct); an exact duplicate collapses. Scanner 325 -> 326,
+all green; README resynced to 326/358 (guard exit 0); no builder change.
+
+**Learnings:** the fix belongs at the scan set, not each caller - run_review's crawl
+filter and discovery both surface the /-variant, and fixing scan_site._run covers
+every entry path at once. Choosing a precise canonical key (collapse only empty-vs-
+"/") over a blunt rstrip("/") avoids over-merging genuinely distinct paths; a
+correctness fix should not trade one wrong count for another.
+
+**Next:** P23 (run-scope rendered metrics so stale evidence is not graded current),
+P24 (contrast over background images), then P11/P12 (Low). Two Medium open, so not
+converged. No promise.
+
+## 2026-07-04 - JOURNAL rotation
+
+**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
+the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+
+**What I did:** moved 4 entries verbatim to JOURNAL-archive.md:
+- 2026-07-04 - P9: correct the trend-chart "three quarters" wording
+- 2026-07-04 - P13: stop failing forms on their submit button; check image-input alt
+- 2026-07-04 - P14: treat robots content=none as noindex (false PASS on a de-indexed page)
+- 2026-07-04 - JOURNAL rotation
+
+**Verification:** archive is append-only and unchanged above the move;
+JOURNAL.md now holds the preamble, the last 10 substantive entries, and this
+rotation note. No code or state logic touched.
+
+**Next:** P23 (run-scope rendered metrics). No promise.
+
+## 2026-07-05 - P23: run-scope rendered evidence so stale is not graded current
+
+**Task:** P23 (Medium). scan_vitals.load_metrics read metrics.json unconditionally,
+and metrics.json persists across runs, so a `--no-browser` run (or a page that fails
+capture this run) graded a prior run's Core Web Vitals as a current "lab
+measurement" - a stale Good masking a regression, the charter's forbidden
+"unmeasured thing reported as a pass".
+
+**What I did:** the metrics/manifest entries already carried captured_at_utc, so I
+added a freshness boundary rather than clearing evidence - CAPTURE.md guarantees a
+manual capture is merged, never clobbered, so clearing was not an option.
+run_review.pipeline stamps run_start at the top and passes min_capture_utc to both
+scan_site.run calls (the pre-capture scan and the post-capture rescan); scan_site
+threads it to load_rendered_snapshots (drops a stale DOM snapshot) and onto each
+page context; scan_vitals.load_metrics rejects an entry captured before the
+boundary. Standalone scan_site.py and the manual pass pass None, so any on-disk
+evidence is still used (backward compatible). ISO-8601 UTC stamps compare
+lexicographically, so the check is a string compare.
+
+**Files changed:** scan_vitals.py (load_metrics boundary + _scan reads it from
+page), scan_site.py (load_rendered_snapshots filter, run/_run threading, ctx
+injection), run_review.py (run_start stamp, both run calls, capture_and_rescan
+param), test_review_tools.py (new boundary test; fixed a lambda-arity stub and a
+fake_capture that stamped a fixed 2026-01-01), README.md (326 -> 327 via --fix),
+BACKLOG.md (P23 done), JOURNAL.md (this entry).
+
+**Verification:** stale metrics + a boundary after the stamp -> vitals info
+(captured False); no boundary or a boundary before the stamp -> measured; the
+capture+rescan pipeline test (fake capture now stamps now) still consumes the fresh
+snapshot. Scanner 326 -> 327, exec-report 32, report-charts 8 all green; README
+resynced to 327/359 (guard exit 0).
+
+**Learnings:** the right boundary was the run's start, not the scan's own timestamp
+- a scan's measured_at is AFTER a legitimately-just-captured file, so keying on it
+would reject fresh evidence; keying on run_start (shared by the pre-capture scan and
+the post-capture rescan) accepts this run's capture while rejecting last run's.
+Making the boundary an explicit parameter that defaults to None kept the standalone
+and manual-capture paths working unchanged - a freshness rule that only the
+orchestrator, which knows where the run begins, gets to impose.
+
+**Next:** P24 (contrast over background images fabricates a false violation), then
+P11/P12 (Low). One Medium open, so not converged. No promise.
+
+## 2026-07-05 - P24: do not fabricate a contrast violation over a background image
+
+**Task:** P24 (Medium, false verdict). The contrast DOM walk's bgOf assumed white
+whenever no ancestor had an opaque backgroundColor, ignoring background-image, so
+light text over a dark hero image gave ratio 1.0 and was pushed as a WCAG 1.4.3
+violation quoting the real heading - a false accessibility claim in the docx,
+fabricating a measurement against a background it could not read.
+
+**What I did:** bgOf now returns null when an ancestor has a background-image or
+gradient (painted above any color, no single color to measure); the loop skips such
+elements and counts them as inconclusive rather than grading them against an assumed
+white. check_contrast surfaces the skipped count so the omission is visible.
+
+**Files changed:** capture_rendered.py (CONTRAST_JS bgOf + loop), scan_vitals.py
+(check_contrast inconclusive surfacing), test_review_tools.py (a Python test and a
+node-gated JS test; added shutil/subprocess/time imports), README.md (327 -> 329),
+BACKLOG.md (P24, P25 done), JOURNAL.md (this entry).
+
+**Verification:** verified the JS in a real engine (node v22): text over a
+background image or gradient -> inconclusive, no violation; a genuine gray-on-white
+-> violation; white on solid black -> measurable pass. The node-gated test skips
+where node is absent (CI stays green). Scanner 327 -> 329 -> 331, exec-report 32 and
+report-charts 8 all green; README resynced.
+
+**Replenishment (open at two after P24 - audited the last two un-swept areas: the
+quarterly trend layer and common.py's HTTP core):** trends.py, report_charts.py and
+draft's trend block came back CORRECT by reproduction (quarter selection, series
+alignment with gaps, delta direction, chart axes honest/baseline-zero), as did the
+fetch cache key, header folding, registrable_domain and the TLS/DoH shapes. One
+Medium found and, this turn, also fixed (P25, a deviation from one-task-per-iteration
+that I judged better than reverting verified work): http_fetch presented a capped or
+looping redirect chain as ok=True (the loop exhausted on a 3xx and fell through to
+the success builder with body=None), so check_host_canonicalization graded a
+self-looping www host as a converged "pass". Fixed with a for/else that raises
+TooManyRedirects into the existing error builder, plus keying reachability off
+r.get("ok"); reproduced before and after.
+
+**Learnings:** P24 and P25 are the same charter breach on opposite ends of the
+stack - P24 fabricates a measurement (assumed-white background), P25 fabricates a
+success (a redirect that never terminated). Both dressed an absence of data as data:
+a computed 1.0 ratio, an ok=True with no body. The fix in both is to make the code
+say "unknown" (inconclusive; ok=False) instead of inventing a confident answer. A
+`for` loop that only sets success inside the body needs a `for/else` to handle the
+"ran out without succeeding" path - the missing else was the whole bug in P25.
+Process note: I completed P25 in the same iteration as P24 rather than only filing
+it; verified and green, so kept, but flagged.
+
+**Next:** P11 (guard the report/capture mains against a non-dict input), P12 (cap
+the DevTools read). Two Low open, zero High, zero Medium. When the backlog clears,
+the next full convergence audit can certify done. No promise.
+
+## 2026-07-05 - P11: guard the report/capture CLIs against a non-dict input JSON
+
+**Task:** P11 (Low). build_exec_report.main, draft_report_data.main and
+capture_rendered.main json.loads their input and immediately call .get on it, so a
+top-level-list JSON (a plausible hand-authoring slip, since exec_report_data.json is
+partly hand-written) produced a raw AttributeError traceback instead of a clear
+message - unlike the scan layer, which already guards this class.
+
+**What I did:** added an `if not isinstance(...dict): print(...); sys.exit(1)` guard
+right after json.loads in all three mains, each naming the offending type.
+
+**Files changed:** build_exec_report.py, draft_report_data.py, capture_rendered.py
+(the guards), test_exec_report.py (TestBuildMainInputGuard + contextlib/io/json
+imports), test_review_tools.py (TestMainInputGuards + sys import), README.md
+(counts via --fix), BACKLOG.md (P11 done; P26-P31 filed), JOURNAL.md (this entry).
+
+**Verification:** a top-level list to each main exits 1 with "must be a JSON
+object"; a valid dict still builds a docx. Scanner 331 -> 333, builder 32 -> 34,
+report-charts 8 all green; README resynced to 333/367 (guard exit 0).
+
+**Replenishment (open at one after P11 - audited the last foundational area not yet
+swept for PARSING correctness, htmlmeta.py, plus a fresh deep look at
+crawler/discovery):** the parser is CORRECT on well-formed input across every field
+a scanner grades (title, charref decoding, meta attribution, label ordering, image
+alt, the client-rendered heuristic), and the crawler's delay/cap/resume/dedup all
+hold. Six findings filed. Two Medium: P26 (JSON-LD @graph - the dominant real-world
+shape - is not read, so a structured-data-rich page reports "No JSON-LD" and loses
+an SEO pass) and P27 (registrable_domain collapses unlisted multi-label suffixes
+like com.sg/co.in to the suffix, so the same-site gate admits a DIFFERENT registrant
+- a scope/authorization charter breach on such targets). Four Low: P28 (icon button
+with a child img alt flagged empty), P29 (an interrupted/unclosed heading dropped ->
+false No H1), P30 (a multi-token role not matched to a landmark), P31 (a
+cross-subdomain crawl uses only the apex robots.txt).
+
+**Learnings:** the parser being correct on well-formed input but wrong on @graph and
+malformed headings is the through-line - htmlmeta grades what it fully understood and
+silently drops what it did not, and a silent drop becomes a confident downstream
+verdict ("No JSON-LD", "No H1"). P27 is the sharpest: a hardcoded 13-entry suffix
+list is a latent scope breach on every ccTLD it omits, and scope breaches are the
+one class where the consequence is not a wrong report but an unauthorized fetch. The
+real fix is a Public Suffix List, not a longer hardcoded list.
+
+**Next:** P26 (JSON-LD @graph) then P27 (suffix scope), then the Low P12/P28-P31.
+Two Medium open, so not converged. No promise.
+
+## 2026-07-05 - JOURNAL rotation
+
+**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
+the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+
+**What I did:** moved 4 entries verbatim to JOURNAL-archive.md:
+- 2026-07-04 - P15: grade <link> mixed content by rel, not by tag name
+- 2026-07-04 - P16: grade clickjacking headers by value, not presence
+- 2026-07-04 - JOURNAL rotation
+- 2026-07-04 - P17: grade DNSSEC on the resolver AD flag, not DNSKEY presence
+
+**Verification:** archive is append-only and unchanged above the move;
+JOURNAL.md now holds the preamble, the last 10 substantive entries, and this
+rotation note. No code or state logic touched.
+
+**Next:** P26 (JSON-LD @graph detection). No promise.
+
+## 2026-07-05 - P26: read JSON-LD types from @graph, not just the top level
+
+**Task:** P26 (Medium, false info). _collect_jsonld read @type only from the
+top-level object (or top-level list members), never from @graph, which is the
+dominant real-world shape (Yoast, RankMath, WordPress core emit `{"@context":..,
+"@graph":[{...}]}`). So a page rich in structured data reported jsonld_types == [],
+and scan_seo graded info "No JSON-LD structured data." - a confidently-wrong report
+line that also dropped a pass from the SEO grade.
+
+**What I did:** _collect_jsonld now assembles a node list of the top-level nodes
+plus each dict node's @graph members (when @graph is a list), then reads @type from
+all of them. The wrapper's own @type (often absent) and the graph members are both
+covered.
+
+**Files changed:** htmlmeta.py (_collect_jsonld), test_review_tools.py
+(test_jsonld_graph_types_are_detected), README.md (333 -> 334 via --fix), BACKLOG.md
+(P26 done), JSON-LD is parser-level so no builder change; JOURNAL.md (this entry).
+
+**Verification:** an @graph script yields its members' types; a top-level @type, a
+top-level list, an @type-as-list, and a wrapper-with-both all still work; malformed
+JSON stays []. Scanner 333 -> 334, all green; README resynced to 334/368 (guard
+exit 0).
+
+**Learnings:** the parser was correct for the shape it was written against and
+silently blind to the more common one - the same "grades what it understood, drops
+what it did not" pattern as the interrupted-heading case (P29). Structured data has
+a standard container (@graph) that the flat-scan missed; parsing a nested standard
+means following its standard nesting, not just its top level.
+
+**Next:** P27 (registrable_domain suffix scope breach - the last Medium), then the
+Low P12/P28-P31. One Medium open, so not converged. No promise.
+
+## 2026-07-05 - P27: keep multi-label ccTLD registrants apart in the same-site gate
+
+**Task:** P27 (Medium, scope breach). registrable_domain knew only 13 multi-label
+suffixes, so any other multi-label ccTLD suffix (com.sg, co.in, com.hk, ...)
+collapsed a host to the suffix itself; crawler._eligible and discover_pages then
+treated different registrants on that suffix as the same site, so on such a target
+the tool would propose or fetch a third party - a breach of "only assess sites you
+are authorized to".
+
+**What I did:** added SECOND_LEVEL_LABELS ({com, co, org, net, gov, edu, ac, mil,
+gob, go, ne, or}) and treat a two-letter alpha ccTLD preceded by one of them as a
+public suffix, so registrable_domain returns the last three labels for com.sg /
+co.in / etc. Chose the pattern over bundling a full Public Suffix List to keep the
+project stdlib-only. Over-including a second-level label errs toward
+too-conservative same-site (a coverage miss), never a scope escape, so the safe
+direction is the default.
+
+**Files changed:** common.py (SECOND_LEVEL_LABELS + registrable_domain heuristic),
+test_review_tools.py (test_registrable_domain_keeps_multilabel_cctld_registrants_
+apart), README.md (334 -> 335 via --fix), BACKLOG.md (P27 done), JOURNAL.md (this
+entry).
+
+**Verification:** com.sg/co.in/com.hk/gov.tw/com.co now keep the registrant label,
+so different registrants differ and _eligible rejects a third party while a real
+subdomain stays same-site; the existing .co.uk/.com/.co cases are unchanged. Scanner
+334 -> 335, all green; README resynced to 335/369 (guard exit 0); no builder change.
+
+**Learnings:** for a scope/authorization gate the error directions are not
+symmetric - too-aggressive collapsing fetches an unauthorized site (unacceptable),
+too-conservative merely misses a same-org page (acceptable), so the heuristic should
+lean conservative on purpose. A hardcoded enum of ccTLD suffixes is unmaintainable
+and was the whole bug; a structural rule (2-letter ccTLD + known second-level label)
+generalizes to the ones nobody listed. The complete fix is a PSL, but the pattern
+closes the realistic breach without a dependency.
+
+**Next:** the Low tail - P12 (cap the DevTools read), P28 (button child-img alt),
+P29 (dropped heading), P30 (multi-token role), P31 (cross-subdomain robots). Zero
+High, zero Medium open. When the Low clear, the next full convergence audit can
+certify done. No promise.
+
+## 2026-07-05 - P12: cap the DevTools HTTP JSON read
+
+**Task:** P12 (Low). capture_rendered._devtools_json did
+json.loads(resp.read().decode(...)) - the only remote-JSON read left unbounded
+after P6 capped RDAP/CrUX/DoH. Localhost DevTools of a self-launched Chrome, so no
+real threat, but the last gap in the "no unbounded remote-JSON read" invariant.
+
+**What I did:** added MAX_DEVTOOLS_BYTES = 2 MB and read resp.read(MAX_DEVTOOLS_
+BYTES) before json.loads.
+
+**Files changed:** capture_rendered.py (constant + capped read), test_review_tools.py
+(test_devtools_json_read_is_capped), README.md (335 -> 336 via --fix), BACKLOG.md
+(P12 done), JOURNAL.md (this entry).
+
+**Verification:** a stubbed /json/new body parses and read is called with the cap.
+Scanner 335 -> 336, all green; README resynced to 336/370 (guard exit 0); no builder
+change.
+
+**Learnings:** none new - this closes the unbounded-read class completely (every
+remote-JSON read in the project is now byte-bounded), which was the point of filing
+it even though the endpoint is trusted: an invariant is worth more when it has no
+exceptions to remember.
+
+**Next:** P28 (button child-img alt), P29 (dropped heading), P30 (multi-token role),
+P31 (cross-subdomain robots) - the parser/crawler Low tail. Zero High, zero Medium.
+No promise.
+
+## 2026-07-05 - P28: an icon button named by a child img alt is not empty
+
+**Task:** P28 (Low, false warn). The button-empty check counted a button with no
+text and no aria-label as empty, ignoring a child `<img alt>` - the accessible name
+of an icon button. So `<button><img alt="Search"></button>` incremented
+buttons_empty and scan_accessibility warned "1 button(s) have no accessible text".
+
+**What I did:** added a _button_img_alt state mirroring the anchor's
+_anchor_img_alt: the img handler records a child img's alt when _cur_button is set,
+and the button-close check treats text OR aria-label OR that img alt as an
+accessible name. A truly empty button (or one wrapping an alt-less image) still
+counts.
+
+**Files changed:** htmlmeta.py (_button_img_alt init/reset, img capture, close
+check), test_review_tools.py (test_button_accessible_name_from_child_img_alt),
+README.md (336 -> 337 via --fix), BACKLOG.md (P28 done), JOURNAL.md (this entry).
+
+**Verification:** img-alt button -> 0, alt-less-image button -> 1, text button -> 0,
+aria-label button -> 0, empty button -> 1. Scanner 336 -> 337, all green; README
+resynced to 337/371 (guard exit 0); no builder change.
+
+**Learnings:** the same accessible-name-sourcing lesson as P13, now for buttons -
+the parser already had the pattern for anchors (_anchor_img_alt) and just needed
+the parallel for buttons. An accessible name has several valid sources; a check that
+knows only some of them false-warns on the rest.
+
+**Next:** P29 (dropped interrupted/unclosed heading), P30 (multi-token role), P31
+(cross-subdomain robots). Zero High, zero Medium. No promise.
+
+## 2026-07-05 - JOURNAL rotation
+
+**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
+the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+
+**What I did:** moved 5 entries verbatim to JOURNAL-archive.md:
+- 2026-07-04 - P18: treat DMARC pct=0 as monitoring, not full enforcement
+- 2026-07-04 - P19: stop CSP false-warning strict-dynamic/nonce policies
+- 2026-07-04 - JOURNAL rotation
+- 2026-07-04 - P20: name every finding in the deliverable, no silent truncation
+- 2026-07-04 - P21: count new/resolved by defect, not by page
+
+**Verification:** archive is append-only and unchanged above the move;
+JOURNAL.md now holds the preamble, the last 10 substantive entries, and this
+rotation note. No code or state logic touched.
+
+**Next:** P29 (dropped interrupted/unclosed heading). No promise.
+
+## 2026-07-05 - P29: do not drop an interrupted or unclosed heading
+
+**Task:** P29 (Low, false verdict). handle_endtag emitted a heading only on a
+matching close, so a heading interrupted by another (nested) reset the buffer and
+lost the outer, an unclosed heading followed by a block swallowed the body into
+its buffer and never emitted, and an unclosed heading at EOF was never emitted -
+each flipping scan_seo to a false "No H1 on the page." fail on a browser-renderable
+page.
+
+**What I did:** added _flush_heading() (emit the open heading, clear state) and a
+HEADING_BREAKERS set of block-level tags that cannot legally sit inside a heading.
+It fires on a heading start (an interrupting heading is flushed first), on a
+HEADING_BREAKERS start (a block closes an unclosed heading), on a heading close
+(matched or mismatched), and in an overridden close() (an unclosed heading at end
+of document). Inline children (span/b/em) are phrasing content, so they never
+flush and a normal heading is unchanged.
+
+**Files changed:** htmlmeta.py (HEADING_BREAKERS, _flush_heading, close override,
+start/end wiring), test_review_tools.py
+(test_interrupted_or_unclosed_heading_is_not_dropped), README.md (337 -> 338 via
+--fix), BACKLOG.md (P29 done; P32-P37 filed), JOURNAL.md (this entry).
+
+**Verification:** nested h1>h2 -> both; unclosed h1 + p -> the h1; unclosed at EOF
+-> the h1; inline-children heading unchanged. Scanner 337 -> 338, all green; README
+resynced to 338/372 (guard exit 0).
+
+**Replenishment (open at two after P29 - audited the last thin surfaces: the
+builder's docx-rendering mechanics and common.py's utility helpers):** the builder's
+score-bar math, color-map fallbacks, and JSON-null tolerance are CORRECT, as are
+grade/summarize/slug_of. Three Medium and four Low filed. Medium: P32 (a string
+rank mixed with the int-999 default crashes the recommendations sort, killing the
+only deliverable on hand-authored data), P33 (a UTF-8 BOM - Notepad's Windows
+default - defeats the TARGET.txt and .env reads, silently disabling target
+resolution and the first credential; fix is encoding="utf-8-sig"). Low: P34
+(orphaned progress strip), P35 (non-string scalar contract crashes), P36 (env
+inline comments / export), P37 (normalize_url misreads host:port).
+
+**Learnings:** the parser-drop pattern recurs one last time - a heading, like
+@graph and the button alt, was recorded only for the shape the code expected and
+silently lost otherwise. P33 is the sharpest of the batch: the tool's own primary
+inputs are hand-edited on Windows, where the default editor injects a BOM, so the
+happy path can fail on the very first run for a reason nothing surfaces - a codec
+choice, not a logic bug. When the input is authored by a human on a known platform,
+match that platform's conventions.
+
+**Next:** P32 (rank-sort crash) then P33 (BOM), then the Low P30/P31/P34-P37. Two
+Medium open, so not converged. No promise.
+
+## 2026-07-05 - P32: coerce recommendation rank so a string rank cannot crash the build
+
+**Task:** P32 (Medium). The recommendations sort keyed on r.get("rank", 999) - the
+int 999 default - so a hand-authored exec_report_data.json mixing a string rank
+("1", "2") with an int or a missing rank made sorted() compare str and int and raise
+TypeError, killing the only deliverable.
+
+**What I did:** replaced the lambda with a _rank_key that returns (0, float(rank))
+or, on TypeError/ValueError, (1, 0.0), so numeric ranks sort first in value order and
+a non-numeric or absent rank sorts last - no cross-type comparison.
+
+**Files changed:** build_exec_report.py (_rank_key), test_exec_report.py
+(test_mixed_rank_types_sort_numerically_without_crashing), README.md (builder 34 ->
+35 via --fix), BACKLOG.md (P32 done), JOURNAL.md (this entry). First task of the
+new /jeffy 35 run.
+
+**Verification:** a build with ranks "10"/2/none/"1" no longer raises and the
+rendered recommendations table reads one, two, ten, none. Exec-report 34 -> 35, all
+green; scanner 338 and report-charts 8 unaffected; README resynced to 373 (guard
+exit 0).
+
+**Learnings:** the (0, value)/(1, 0.0) two-tuple key is the clean way to sort a
+mixed/optional field without a comparator - it partitions "sortable" from "not" and
+keeps the value order within the sortable group, avoiding both the crash and a magic
+sentinel like 999. Hand-authored JSON is untyped input; a numeric field can arrive
+as a string and the code must coerce, not assume.
+
+**Next:** P33 (BOM in TARGET.txt/.env reads), then the Low P30/P31/P34-P37. One
+Medium open, so not converged. No promise.
+
+## 2026-07-05 - P33: read TARGET.txt and .env as utf-8-sig so a BOM does not hide the first line
+
+**Task:** P33 (Medium). read_target_file and env_value read their files as plain
+utf-8 and matched the first line with startswith; a UTF-8 BOM (Notepad's Windows
+default) is not whitespace, so strip() leaves it and the first line becomes
+﻿https://... / ﻿SERPER_API_KEY=, failing the match. On this project's Windows
+platform, with TARGET.txt and .env as the hand-edited primary inputs, target
+auto-resolution and the first credential silently failed.
+
+**What I did:** both reads now use encoding="utf-8-sig", which strips a leading BOM
+and otherwise reads as utf-8 (env_value keeps errors="replace"). Kept the scope to
+the two named hand-edited text files; the tool-generated JSON files are
+machine-written without a BOM.
+
+**Files changed:** common.py (read_target_file, env_value encodings),
+test_review_tools.py (TestHandEditedFileReads; captured _REAL_ENV_VALUE before the
+suite's offline env_value stub), README.md (338 -> 340 via --fix), BACKLOG.md (P33
+done), JOURNAL.md (this entry).
+
+**Verification:** TARGET.txt and .env with a leading BOM resolve their first line; a
+BOM-less file still works. Scanner 338 -> 340, all green; builder 35 and
+report-charts 8 unaffected; README resynced to 340/375 (guard exit 0).
+
+**Learnings:** the test infrastructure stubs env_value suite-wide to stay offline, so
+testing the real reader needed capturing it before the stub - a reminder that a
+global test stub can hide the very function under test. And the bug itself: when the
+input is authored by a human, the codec is part of the contract - utf-8-sig, not
+utf-8, is the correct default for reading a file a person edits on Windows.
+
+**Next:** the Low tail - P30 (multi-token role), P31 (cross-subdomain robots), P34
+(orphaned progress strip), P35 (non-string scalar crashes), P36 (env inline
+comments), P37 (normalize_url host:port). Zero High, zero Medium open. When the Low
+clear, the next full convergence audit can certify done. No promise.
+
+## 2026-07-05 - P30: split a multi-token role so it matches a landmark
+
+**Task:** P30 (Low, false warn). The parser stored the raw role attribute, but ARIA
+role is a space-separated fallback list, so role="navigation menubar" was one token
+and scan_accessibility's "navigation" in roles missed it, warning "Missing
+landmark(s): nav" on a page that has a navigation role.
+
+**What I did:** the role handler now extends self.roles with a["role"].split()
+instead of appending the whole string, so each fallback token is matchable.
+
+**Files changed:** htmlmeta.py (role split), test_review_tools.py
+(test_multi_token_role_is_split_into_tokens), README.md (340 -> 341 via --fix),
+BACKLOG.md (P30 done), JOURNAL.md (this entry).
+
+**Verification:** role="navigation menubar" yields roles containing navigation and
+menubar; a single-token role is unchanged; the landmark check passes on main+nav via
+roles. Scanner 340 -> 341, all green; README resynced to 341/376 (guard exit 0).
+
+**Learnings:** same structured-field lesson - a space-separated attribute list
+(role, like rel and the CSP source list) must be tokenized, not matched whole. The
+parser was storing the wire form where the check needed the token form.
+
+**Next:** P31 (cross-subdomain robots), then P34-P37. Zero High, zero Medium. No
+promise.
+
+## 2026-07-05 - P31: honor robots.txt per authority in the crawler
+
+**Task:** P31 (Low, politeness/charter gap). crawl loaded one robots.txt from the
+target and applied it to every URL, but _eligible follows same-registrable-domain
+subdomains, so a path a subdomain's own robots.txt disallows could be crawled if the
+apex robots permitted it. Per RFC 9309 robots is scoped to one scheme+host.
+
+**What I did:** crawl now keys a RobotFileParser per origin (scheme+host) through a
+robots_for(url) cache and consults the matching parser for can_fetch on every URL;
+the per-page sleep is max(base wait, that origin's crawl-delay), so a stricter
+subdomain delay is respected too. Added _origin and _crawl_delay helpers.
+
+**Files changed:** crawler.py (_origin/_crawl_delay, per-origin robots cache in
+crawl, per-URL can_fetch, per-origin sleep), test_review_tools.py
+(test_subdomain_robots_are_honored_per_origin), README.md (341 -> 342 via --fix),
+BACKLOG.md (P31 done), JOURNAL.md (this entry).
+
+**Verification:** a link into blog.acme.example/secret disallowed by the subdomain's
+own robots is skipped (skipped_by_robots >= 1, never fetched) while /ok is collected;
+the existing single-host BFS/delay/cap tests are unchanged. Scanner 341 -> 342, all
+green; README resynced to 342/377 (guard exit 0).
+
+**Learnings:** robots.txt is per-authority, not per-crawl - the moment a crawler
+crosses to another host (even a same-org subdomain), the target's rules stop
+applying and that host's own must be fetched. Caching by origin keeps it one fetch
+per authority while staying correct and polite.
+
+**Next:** the builder/util Low tail - P34 (orphaned progress strip), P35 (non-string
+scalar crashes), P36 (env inline comments), P37 (normalize_url host:port). Zero
+High, zero Medium. No promise.
+
+## 2026-07-05 - JOURNAL rotation
+
+**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
+the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+
+**What I did:** moved 6 entries verbatim to JOURNAL-archive.md:
+- 2026-07-04 - P22: dedup the review set so one page is not scanned twice
+- 2026-07-04 - JOURNAL rotation
+- 2026-07-05 - P23: run-scope rendered evidence so stale is not graded current
+- 2026-07-05 - P24: do not fabricate a contrast violation over a background image
+- 2026-07-05 - P11: guard the report/capture CLIs against a non-dict input JSON
+- 2026-07-05 - JOURNAL rotation
+
+**Verification:** archive is append-only and unchanged above the move;
+JOURNAL.md now holds the preamble, the last 10 substantive entries, and this
+rotation note. No code or state logic touched.
+
+**Next:** P34 (orphaned progress strip). No promise.
+
+## 2026-07-05 - P34: put a progress-only strip under an Executive summary heading
+
+**Task:** P34 (Low, cosmetic). section_titles and the Executive summary heading
+gated on bottom_line or assessment, but the progress strip rendered independently on
+progress-and-not-trend. So progress-only data floated the strip under the glance
+tiles with no heading and no contents entry.
+
+**What I did:** computed progress/trend before section_titles and added
+has_exec_summary = bottom_line or assessment or (progress and not trend); both the
+section_titles entry and the rendered heading gate on it, so the strip is always
+under an Executive summary heading with a contents entry.
+
+**Files changed:** build_exec_report.py (reorder + has_exec_summary),
+test_exec_report.py (test_progress_only_renders_under_an_executive_summary_heading),
+README.md (builder 35 -> 36 via --fix), BACKLOG.md (P34 done), JOURNAL.md (this
+entry).
+
+**Verification:** progress-only data now renders "01   Executive summary" with the
+strip beneath it. Builder 35 -> 36, exec-report green; scanner 342 and report-charts
+8 unaffected; README resynced to 378 (guard exit 0). Aside: my first repro used the
+wrong scorecard.overall shape (a dict) and hit the P35 crash, confirming P35 is real.
+
+**Learnings:** the section-titles list and the render guards must agree on exactly
+what makes a section exist - here a third source of content (the strip) was gated
+differently from the heading that should introduce it. Deriving both from one
+has_exec_summary flag keeps the table of contents and the body in lockstep.
+
+**Next:** P35 (non-string scalar crashes), P36 (env inline comments), P37
+(normalize_url host:port). Zero High, zero Medium. No promise.
+
+## 2026-07-05 - P35: coerce non-string scalars in the builder so a slip does not crash
+
+**Task:** P35 (Low). Three builder sites contracted a string but crashed on a
+non-string scalar from hand-authored exec_report_data.json: add_running_header's
+" | ".join([site,...]) on a None/number site, add_cover's overall.upper() /
+BAND_FILL.get(overall) on a number or dict band, and add_run(123) on an int
+quick_wins/assessment item.
+
+**What I did:** add_run now renders "" for None and str(x) for any other scalar
+(covers quick_wins/assessment/strengths); add_cover and add_glance_tiles coerce the
+overall band to str (a number or a stray dict); the running header joins str(b) for
+each bit. Centralizing the scalar coercion in add_run fixes every text caller at
+once; the two sites that operate before add_run (.upper, join) coerce locally.
+
+**Files changed:** build_exec_report.py (add_run, add_cover overall, add_glance_tiles
+overall, running-header join), test_exec_report.py
+(test_non_string_scalars_do_not_crash_the_build), README.md (builder 36 -> 37 via
+--fix), BACKLOG.md (P35 done; P38/P39 filed, one Declined), JOURNAL.md (this entry).
+
+**Verification:** site/overall/quick_win as a number, overall as a dict, an int
+assessment item, and site as null all build without raising. Builder 36 -> 37,
+exec-report green; scanner 342 and report-charts 8 unaffected; README resynced to
+379 (guard exit 0).
+
+**Replenishment (open at two after P35 - audited the builder rendering functions and
+draft logic not yet deep-checked):** add_assessment, the trend/delta tables,
+_chip/add_data_table, the evidence loop, and draft's _assessment/_scorecard/vitals
+extraction all came back correct on 40+ mutated inputs (empty lists, dict/None
+items, one-quarter trend, errored category, 5000-char strings). One Medium: P38
+(add_key_dates_panel does label.upper() on the raw value - a missed spot in this
+same P35 class, crashing on "label": null). One Low: P39 (the evidence appendix
+crashes on a non-string code/image). Declined: draft._scorecard assuming overall is
+a dict is unreachable from machine-written scan JSON.
+
+**Learnings:** hardening a class by naming three sites leaves the fourth - P38 is the
+identical .upper()-on-raw-value bug in key_dates that P35 missed because the P29-run
+audit named only site/overall/quick_wins. The durable fix for "stringify hand-authored
+scalars" was centralizing it in add_run; the sites that transform before add_run
+(.upper, .split, Path, join) each need their own guard and are exactly where the
+misses hide. A class is only closed when every member is enumerated, not when the
+named ones are fixed.
+
+**Next:** P38 (key_dates label, Medium), then P36/P37/P39 (Low). One Medium open, so
+not converged. No promise.
+
+## 2026-07-05 - P38: coerce the key-date label so a non-string does not crash the report
+
+**Task:** P38 (Medium). add_key_dates_panel did item.get("label", "").upper() on the
+raw value while the sibling value field was str()-guarded, so a present-but-
+non-string label (null/number/dict from hand-authored exec_report_data.json) aborted
+the whole build - the missed fourth site of the P35 non-string-scalar class.
+
+**What I did:** the label now reads str(item.get("label") or "").upper(), matching
+the value field's guard. The sibling detail was already safe (it flows through the
+now-coercing add_run).
+
+**Files changed:** build_exec_report.py (key-date label coercion), test_exec_report.py
+(extended test_non_string_scalars_do_not_crash_the_build with key_dates
+None/number labels), BACKLOG.md (P38 done), JOURNAL.md (this entry). No count change
+(extended an existing test).
+
+**Verification:** key_dates label None/123/dict build without raising; a normal
+"Cert expiry" still renders as "CERT EXPIRY" in the panel's table cell. Builder 37,
+exec-report green; scanner 342 and report-charts 8 unaffected; count guard exit 0.
+
+**Learnings:** this is the exact prediction from the P35 entry - naming three sites
+left the fourth, and it was the same .upper()-on-raw-value shape. The class
+"stringify a hand-authored scalar before a string method" is now closed across
+add_run (centralized), overall (cover + tiles), the header join, and the key-date
+label; the pattern to grep for was a bare .upper()/.split()/.join()/Path() on a
+.get() result.
+
+**Next:** P36 (env inline comments/export), P37 (normalize_url host:port), P39
+(evidence code/image). Zero High, zero Medium open. When the Low clear, the next
+full convergence audit can certify done. No promise.
+
+## 2026-07-05 - P36: parse .env comments and export in env_value
+
+**Task:** P36 (Low). env_value split NAME=value and returned the value with quote
+stripping, so an unquoted inline `# comment` was returned as part of the secret and
+`export NAME=value` failed the startswith match entirely.
+
+**What I did:** env_value now strips a leading `export ` before matching the key;
+for the value, a leading quote keeps everything up to the closing quote (a literal #
+and interior spaces preserved, anything after the closing quote dropped), and an
+unquoted value ends at the first inline # comment.
+
+**Files changed:** common.py (env_value parsing), test_review_tools.py
+(test_env_value_strips_comments_and_tolerates_export, via the _REAL_ENV_VALUE
+captured before the offline stub), README.md (342 -> 343 via --fix), BACKLOG.md (P36
+done; P40-P43 filed), JOURNAL.md (this entry).
+
+**Verification:** K=v # c -> v; export K=v -> v; K="ab#cd" -> ab#cd; K="quoted" #
+note -> quoted; K= -> None. Scanner 342 -> 343, all green; README resynced to 343/380
+(guard exit 0).
+
+**Replenishment (open at two after P36 - a fresh deep look at the scanner check
+DECISIONS the early grading sweep rated correct but did not exhaustively probe, plus
+end-to-end pipeline integrity):** scan_readability, scan_tls, scan_privacy host/pixel
+matching, scan_performance weight/redirect, and the full discover->scan->draft
+pipeline + two-run delta round-trip all came back CORRECT by reproduction. Four
+findings filed. One Medium: P40 (cookie_consent false-PASSes because _consent_detected
+substring-matches CONSENT_MARKERS - "truste" hits "trusted"/"trustee" and
+"cookie-policy" hits a footer link - the substring-on-structured-data class in the
+privacy scanner). Three Low: P41 (form-action downgrade misses the HTML5 formaction
+override), P42 (empty integrity="" counted as SRI present), P43 (legacy Expires/
+s-maxage-only assets false-warn "uncached").
+
+**Learnings:** the substring-on-structured-data class - thought fully closed for
+SPF/CSP/cookies/robots - had one more member in a scanner the grading sweep rated
+"correct": consent-marker detection. Bare collision-prone tokens ("truste",
+"cookie-policy") in a substring match are the same bug wearing a privacy hat.
+"Correct on the cases probed" is not "correct"; a fresh adversarial input (innocent
+prose containing a marker substring) found what a happy-path check missed.
+
+**Next:** P40 (consent substring, Medium), then P37/P39/P41/P42/P43 (Low). One
+Medium open, so not converged. No promise.
+
+## 2026-07-05 - P40: stop consent markers substring-matching prose
+
+**Task:** P40 (Medium, false PASS). _consent_detected substring-matched
+CONSENT_MARKERS against the page, and two markers collided with everyday content:
+"truste" is inside trusted/trustee, and "cookie-policy" matches a plain footer link.
+So a tracker-laden page with no consent banner but the copy "trusted by thousands"
+graded cookie_consent pass instead of warn, inflating the privacy band.
+
+**What I did:** dropped "truste" and "cookie-policy" from CONSENT_MARKERS (TrustArc
+is still detected via trustarc.com in CMP_HOSTS; a cookie-policy link is not a
+consent mechanism) and documented that every remaining marker must be specific
+enough not to occur in prose - the survivors are hyphenated class/id names and CMP
+brand tokens.
+
+**Files changed:** scan_privacy.py (CONSENT_MARKERS 16 -> 14 + comment),
+test_review_tools.py (test_consent_markers_do_not_substring_match_prose), README.md
+(343 -> 344 via --fix), BACKLOG.md (P40 done), JOURNAL.md (this entry).
+
+**Verification:** "trusted"/"trustee"/a cookie-policy link no longer detect; a
+cookie-consent class, onetrust, the trustarc.com host, usercentrics, and cmplz still
+do. Scanner 343 -> 344, all green; README resynced to 344/381 (guard exit 0;
+CMP_HOSTS count unchanged); no builder change.
+
+**Learnings:** the substring-on-structured-data class is now closed in one more place
+the early grading sweep had rated correct - consent detection. The general rule that
+finally emerged: a substring membership test is only safe when every needle is long
+and specific enough that it cannot appear in prose; a bare five-letter token
+("truste") or a common URL path ("cookie-policy") fails that test. When the fix is to
+delete needles rather than add parsing, the win is also a simplification.
+
+**Next:** P37 (normalize_url host:port), P39 (evidence code/image), P41 (formaction),
+P42 (empty integrity), P43 (Expires caching). Zero High, zero Medium open. When the
+Low clear, the next full convergence audit can certify done. No promise.
+
+## 2026-07-05 - JOURNAL rotation
+
+**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
+the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+
+**What I did:** moved 6 entries verbatim to JOURNAL-archive.md:
+- 2026-07-05 - P26: read JSON-LD types from @graph, not just the top level
+- 2026-07-05 - P27: keep multi-label ccTLD registrants apart in the same-site gate
+- 2026-07-05 - P12: cap the DevTools HTTP JSON read
+- 2026-07-05 - P28: an icon button named by a child img alt is not empty
+- 2026-07-05 - JOURNAL rotation
+- 2026-07-05 - P29: do not drop an interrupted or unclosed heading
+
+**Verification:** archive is append-only and unchanged above the move;
+JOURNAL.md now holds the preamble, the last 10 substantive entries, and this
+rotation note. No code or state logic touched.
+
+**Next:** P37 (normalize_url host:port). No promise.
+
+## 2026-07-05 - P37: key normalize_url on the :// separator, not urlparse().scheme
+
+**Task:** P37 (Low). normalize_url added https:// only when
+`not urlparse(url).scheme`, but urlparse reads a bare host:port
+(example.com:8080) as scheme "example.com" with no host, so no scheme was added and
+host_of/slug_of returned "" - the deliverable would be named "_Executive_Report.docx".
+
+**What I did:** the guard now keys on the "://" separator (`if "://" not in url`),
+which is the real signal of a scheme, so a bare host:port gets https:// while an
+existing http://, https://, or bare host is unchanged.
+
+**Files changed:** common.py (normalize_url), test_review_tools.py
+(test_normalize_url_handles_scheme_less_host_port), README.md (344 -> 345 via --fix),
+BACKLOG.md (P37 done), JOURNAL.md (this entry).
+
+**Verification:** example.com:8080 -> https://example.com:8080 (host_of
+"example.com"); localhost:3000 -> host "localhost"; http://example.com and
+example.com unchanged. Scanner 344 -> 345, all green; README resynced to 345/382
+(guard exit 0).
+
+**Learnings:** urlparse's scheme detection is too liberal for user-typed targets - a
+dotted host with a port is a syntactically valid scheme:path to it. The intent
+("does this carry an http(s) scheme") is better answered by the literal "://" than by
+the parser, which is happy to call a hostname a scheme.
+
+**Next:** P39 (evidence code/image), P41 (formaction), P42 (empty integrity), P43
+(Expires caching). Zero High, zero Medium open. When the Low clear, the next full
+convergence audit can certify done. No promise.
+
+## 2026-07-05 - P39: coerce a non-string evidence code/image in the appendix
+
+**Task:** P39 (Low). The evidence appendix gated code on `is not None` (so a numeric
+code reached code.split -> AttributeError) and gated image on truthiness (so a
+numeric image reached Path(123) -> TypeError) - the P35 coercion gap in the two
+evidence branches.
+
+**What I did:** add_code_block iterates str(code).split (a non-string snippet
+stringifies rather than crashing), and the image branch gates on
+isinstance(item.get("image"), str) so a non-string path is skipped, not Path()'d.
+
+**Files changed:** build_exec_report.py (add_code_block str, image isinstance gate),
+test_exec_report.py (extended test_non_string_scalars_do_not_crash_the_build with
+evidence code/image), BACKLOG.md (P39 done), JOURNAL.md (this entry). No count change.
+
+**Verification:** evidence code=123 and image=123 build without raising; a normal
+code snippet and a missing image path still render. Builder 37, exec-report green;
+scanner 345 and report-charts 8 unaffected; guard exit 0.
+
+**Learnings:** two coercion shapes for the same class - code is stringified (its
+content is renderable as text) while image is gated out (a numeric "path" is
+meaningless, so skip rather than invent). The right coercion depends on whether the
+value has a sensible string form: text yes, a filesystem path no.
+
+**Next:** P41 (formaction downgrade), P42 (empty integrity), P43 (Expires caching).
+Zero High, zero Medium open. When the Low clear, the next full convergence audit can
+certify done. No promise.
+
+## 2026-07-05 - P41: detect an http:// formaction downgrade, not just form action
+
+**Task:** P41 (Low, false pass). check_form_actions scanned only `<form action=...>`,
+but a submit button/input can override the form action with formaction="http://...",
+submitting over plain HTTP while the form's own action is secure.
+
+**What I did:** added FORMACTION_RE (same (?<![-\w]) lookbehind so it stays distinct
+from action= and data-formaction) and check_form_actions now also collects any
+http:// formaction from the body into the insecure list; the note names both form
+action and button formaction.
+
+**Files changed:** scan_page_security.py (FORMACTION_RE + collection),
+test_review_tools.py (test_http_formaction_override_fails), README.md (345 -> 346 via
+--fix), BACKLOG.md (P41 done; P44-P50 filed), JOURNAL.md (this entry).
+
+**Verification:** a secure form + an http formaction -> fail with the URL listed; a
+data-formaction -> pass; existing http-action/relative cases unchanged. Scanner
+345 -> 346, all green; README resynced to 346/383 (guard exit 0).
+
+**Replenishment (open at two after P41 - a fresh adversarial pass over the scanner
+check DECISIONS not re-verified in the recent sweeps: scan_dns_email non-DMARC/DNSSEC,
+scan_http_security non-clickjacking/CSP, scan_seo non-robots):** SPF -all grading,
+MTA-STS/TLS-RPT/BIMI/MX gate, X-Content-Type-Options, title/description bands and
+heading hierarchy all came back CORRECT. Seven findings filed. Three Medium: P44
+(multiple SPF records grade pass, missing the RFC 7208 permerror that makes SPF
+non-functional), P45 (Referrer-Policy no-referrer-when-downgrade passes though it
+leaks full URLs cross-origin - only unsafe-url was flagged), P46 (the canonical check
+passes any value, so a cross-host canonical that de-indexes the page grades clean).
+Four Low: P47 (revoked DKIM empty p= counted as published), P48 (missing
+Permissions-Policy graded a hard fail, over-strict), P49 (version-banner digit
+heuristic false-warns on a CDN node id), P50 (non-responsive fixed-width viewport
+passes as mobile-friendly).
+
+**Learnings:** the grading-decision well is not dry - a fresh ADVERSARIAL angle
+(multiple records, a specific deprecated header value, a cross-host reference) still
+finds false passes in checks a happy-path sweep rated correct. The recurring shape
+across P44/P45/P46: the check grades PRESENCE or the common case and never the
+specific value that inverts the meaning - two SPF records, one deprecated
+referrer-policy token, a canonical host that is not the page host. Same
+presence-not-value lesson, three more members.
+
+**Next:** P44 (multiple SPF), P45 (referrer-policy), P46 (canonical) worst-first,
+then the Low tail. Three Medium open, so not converged. No promise.
+
+## 2026-07-05 - P44: fail on multiple SPF records (a permerror)
+
+**Task:** P44 (Medium, false pass). check_spf selected the first v=spf1 record and
+graded only it, so a domain publishing two v=spf1 records - an RFC 7208 sec 3.2
+permerror that makes a validating receiver discard SPF entirely - graded pass on the
+first record while SPF was in fact broken.
+
+**What I did:** after confirming an SPF record is present, check_spf counts the
+v=spf1 records and returns fail "Multiple SPF records published: a permerror..." when
+more than one exists; a single record (even with unrelated TXT records alongside)
+still grades by its all-mechanism.
+
+**Files changed:** scan_dns_email.py (check_spf multiple-record guard),
+test_review_tools.py (test_multiple_spf_records_are_a_permerror), README.md (346 ->
+347 via --fix), BACKLOG.md (P44 done), JOURNAL.md (this entry).
+
+**Verification:** two/three v=spf1 records -> fail (note says permerror); a single
+record (with or without an unrelated TXT alongside) -> pass; no SPF -> fail. Scanner
+346 -> 347, all green; README resynced to 347/384 (guard exit 0); no builder change.
+
+**Learnings:** the earlier SPF fix (L5, the -all token) graded the content of one
+record correctly but assumed there was one record; the count itself is a separate
+correctness property. "Grade the record" and "grade the record SET" are different
+questions, and a set-level invariant (exactly one) is invisible to a check that
+selects a representative and moves on.
+
+**Next:** P45 (referrer-policy no-referrer-when-downgrade), P46 (canonical off-host),
+then the Low tail. Two Medium open, so not converged. No promise.
+
+## 2026-07-05 - P45: warn on the full-URL-leaking referrer policies
+
+**Task:** P45 (Medium, false pass). check_referrer_policy warned only on unsafe-url,
+so no-referrer-when-downgrade - the legacy default that sends the full URL (path and
+query) to every cross-origin HTTPS destination - graded pass.
+
+**What I did:** the check now grades the effective (last) token of the
+comma-separated fallback list and warns when it is unsafe-url OR
+no-referrer-when-downgrade; the modern origin-based policies pass. Grading the last
+token also fixed a latent quirk where unsafe-url as a non-last fallback token
+false-warned.
+
+**Files changed:** scan_http_security.py (check_referrer_policy),
+test_review_tools.py (extended test_matrix), BACKLOG.md (P45 done), JOURNAL.md (this
+entry). No count change (extended a test).
+
+**Verification:** no-referrer-when-downgrade / unsafe-url -> warn; strict-origin-*,
+origin-when-cross-origin, same-origin, no-referrer -> pass; a fallback list grades by
+its last token. Scanner 347, all green; guard exit 0.
+
+**Learnings:** "present and not the one bad value" is not "safe" - there were two
+leaking policies, and the check knew only one. Grading the effective token of a
+fallback list (last-wins) is also the correct model for any header that supports a
+graceful-degradation list, which a substring test cannot express.
+
+**Next:** P46 (canonical off-host), then the Low tail (P42/P43/P47-P50). One Medium
+open, so not converged. No promise.
+
+## 2026-07-05 - JOURNAL rotation
+
+**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
+the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+
+**What I did:** moved 6 entries verbatim to JOURNAL-archive.md:
+- 2026-07-05 - P32: coerce recommendation rank so a string rank cannot crash the build
+- 2026-07-05 - P33: read TARGET.txt and .env as utf-8-sig so a BOM does not hide the first line
+- 2026-07-05 - P30: split a multi-token role so it matches a landmark
+- 2026-07-05 - P31: honor robots.txt per authority in the crawler
+- 2026-07-05 - JOURNAL rotation
+- 2026-07-05 - P34: put a progress-only strip under an Executive summary heading
+
+**Verification:** archive is append-only and unchanged above the move;
+JOURNAL.md now holds the preamble, the last 10 substantive entries, and this
+rotation note. No code or state logic touched.
+
+**Next:** P46 (canonical off-host). No promise.
+
+## 2026-07-05 - P46: fail a cross-host canonical instead of grading presence
+
+**Task:** P46 (Medium, false pass). The SEO canonical check was `pass if
+parsed["canonical"] else info` - it graded that a canonical exists, never where it
+points, so a cross-host canonical (the page telling Google to index a different
+domain and drop itself) graded clean.
+
+**What I did:** extracted _canonical_check(canonical, base) in scan_seo.py. It
+resolves the href against base (final_url) with urljoin, then compares
+registrable_domain(host_of(resolved)) to registrable_domain(host_of(base)): a
+different registrable domain fails ("points off-host to <host>; tells search engines
+to index that domain instead, dropping this page"), while a self, apex-vs-www,
+subdomain, or relative canonical stays pass and an absent canonical is info. Reused
+the shared registrable-domain same-site model (the crawler and discovery tools use
+it too), so same-org variants are not false-failed.
+
+**Files changed:** scan_seo.py (new urljoin import, _canonical_check helper, canonical
+check now calls it), test_review_tools.py (new test_canonical_check), README.md
+(count resync), BACKLOG.md (P46 done), JOURNAL.md (this entry).
+
+**Verification:** cross-host and protocol-relative off-host -> fail; self / www /
+subdomain / relative -> pass; none -> info (seven cases, all as expected). Scanner
+347 -> 348, all green; README resynced to 348/385 via --fix (guard exit 0); builder
+untouched.
+
+**Learnings:** this is the "presence-not-value" class in its purest SEO form and the
+last Medium of the P41-run replenishment. A canonical, like frame-ancestors, DMARC
+pct, and the referrer policy before it, has exactly one value that inverts its
+meaning; grading presence blesses the page that is quietly de-indexing itself. Host
+comparison must be by registrable domain, not raw host, or every legitimate
+apex-to-www canonical would false-fail.
+
+**Next:** the Low tail - P42 (empty integrity="" as SRI), P43 (Expires/s-maxage
+caching), P47 (empty DKIM p= as revoked), P48 (missing Permissions-Policy over-
+strict), P49 (version-banner CDN-id false warn), P50 (viewport width=device-width).
+Six Low remain and zero Medium; after they clear, the next iteration runs the full
+convergence audit that can certify done. Not converged this iteration. No promise.
+
+## 2026-07-05 - P42: require a real hash token before crediting SRI
+
+**Task:** P42 (Low, false pass). scan_page_security INTEGRITY_RE matched the bare
+attribute name (integrity\s*=), so a cross-origin `<script src=... integrity="">` -
+empty metadata, no protection - graded pass instead of warn.
+
+**What I did:** tightened INTEGRITY_RE to
+`(?<![-\w])integrity\s*=\s*["']?\s*sha(?:256|384|512)-` (case-insensitive). It now
+requires an actual SRI hash token, so integrity="" and any non-hash value read as
+missing SRI while a genuine sha256/384/512- value still passes. The quote is optional
+and leading whitespace inside it is allowed; the (?<![-\w]) lookbehind still keeps it
+off data-integrity=.
+
+**Files changed:** scan_page_security.py (INTEGRITY_RE + comment), test_review_tools.py
+(new test_sri_empty_integrity_value_warns), README.md (count resync), BACKLOG.md (P42
+done), JOURNAL.md (this entry).
+
+**Verification:** seven direct cases plus the end-to-end test - empty, non-hash, and
+data-integrity decoy -> warn; sha256/sha384/sha512- (incl. a leading space in the
+value) -> pass. Scanner 348 -> 349, all green; README resynced to 349/386 (guard exit
+0); builder untouched.
+
+**Learnings:** the "presence-not-value" class reaches into regex matchers too - a
+pattern that stops at the attribute name credits an empty or garbage value exactly
+like a real one. Requiring the value's shape (the sha-prefix) at the regex, rather
+than matching then validating in code, keeps the check in one place and closes the
+decoy (data-integrity) at the same time.
+
+**Next:** P43 (Expires/s-maxage-only assets false-warned uncached). Five Low remain,
+zero Medium. Not converged. No promise.
+
+## 2026-07-05 - P43: credit Expires and s-maxage as caching lifetimes
+
+**Task:** P43 (Low, false warn). The asset-caching check read only Cache-Control
+max-age/immutable, so an asset whose freshness is a bare Expires: header (Apache
+mod_expires) or an s-maxage directive scored uncached; a page of such assets warned
+"repeat visits redownload them", which is factually wrong.
+
+**What I did:** _measure now captures the Expires header. _asset_caching_check credits
+a usable lifetime on immutable, max-age>0, s-maxage>0, OR a still-future Expires -
+parsed with email.utils.parsedate_to_datetime and compared to datetime.now(UTC), so a
+past date or the common Expires: 0 stays stale (not credited). Cache-Control
+no-store/no-cache still override any Expires, matching browser precedence. Refactored
+_cache_max_age onto a shared _cc_seconds(cc, directive) helper so max-age and s-maxage
+parse through one code path; a (?<![-\w]) lookbehind keeps them distinct (s-maxage
+never reads as max-age and vice versa).
+
+**Files changed:** scan_performance.py (datetime/email.utils imports, _measure
+captures expires, _cc_seconds helper, _future_expires helper, _asset_caching_check
+lifetime logic), test_review_tools.py (new test_expires_and_s_maxage_count_as_caching_
+lifetime), README.md (count resync), BACKLOG.md (P43 done), JOURNAL.md (this entry).
+
+**Verification:** six direct cases plus the test - future Expires (no CC) and s-maxage
+only -> pass; past Expires, Expires: 0, and no-store+future-Expires -> warn; the no-CC
+no-Expires regression still warns. _cache_max_age("s-maxage=100") stays None (not
+confused). Scanner 349 -> 350, all green; README resynced to 350/387 (guard exit 0);
+builder untouched.
+
+**Learnings:** a false warn from measuring only one of several equivalent signals -
+HTTP has three freshness mechanisms and the check knew one. Expires needs a real
+time comparison, not mere presence (Expires: 0 is the standard "already stale"
+sentinel), so "has an Expires header" would have been its own presence-not-value
+trap. Routing both delta-seconds directives through one helper avoided duplicating
+the list-join and lookbehind logic.
+
+**Next:** P47 (empty DKIM p= counted as a published key, should be revoked). Four Low
+remain, zero Medium. Not converged. No promise.
+
+## 2026-07-05 - P47: treat an empty DKIM p= as a revoked key
+
+**Task:** P47 (Low, false pass). _is_dkim_record returned True on any p= tag,
+including an empty value, but RFC 6376 sec 3.6.1 defines an empty p= as a revoked
+key. So a selector answering v=DKIM1; p= graded pass "DKIM key published".
+
+**What I did:** _is_dkim_record now scans every tag instead of returning on the first
+match, and returns False the instant it sees a p= whose value is empty or whitespace,
+so a revoking p= vetoes a preceding v=DKIM1 or k= (order-independent). A non-empty
+p=/k=/v=DKIM1 still marks a published key, and the ';'-boundary tag split still keeps
+a base64 blob that merely contains "p=" from masquerading as a key.
+
+**Files changed:** scan_dns_email.py (_is_dkim_record), test_review_tools.py (new
+test_dkim_empty_p_is_revoked_not_published), README.md (count resync), BACKLOG.md
+(P47 done), JOURNAL.md (this entry).
+
+**Verification:** eight direct cases - empty p=, whitespace p=, p-before-v, k=+empty-p
+-> False; real key (either tag order), k=-only -> True; the google-site-verification
+substring decoy stays False; and end to end a revoked-only selector grades info, not
+pass. Scanner 350 -> 351, all green; README resynced to 351/388 (guard exit 0);
+builder untouched.
+
+**Learnings:** the early-return was the trap - a first-match scan cannot express "this
+later tag revokes what an earlier tag claimed". Deciding after reading all tags is the
+same shape the SPF multi-record and canonical fixes needed: the meaning of a record is
+a property of the whole record, not of its first interesting token.
+
+**Next:** P48 (missing Permissions-Policy graded a hard fail, over-strict). Three Low
+remain, zero Medium. Not converged. No promise.
+
+## 2026-07-05 - P48: grade an absent Permissions-Policy as info, not a hard fail
+
+**Task:** P48 (Low, over-strict false fail). An absent Permissions-Policy routed
+through check_simple_header's fail path, scoring 0.0 - equal weight to missing HSTS -
+though Mozilla Observatory does not score it and most hardened sites omit it, so a
+clean site could be pushed from Adequate to Weak in the CEO report.
+
+**What I did:** added an absent_verdict parameter to check_simple_header (default
+"fail", so X-Content-Type-Options and every other caller are unchanged) and the
+permissions_policy registry entry now passes "info" with a note that it is an
+advanced, optional header major scorers do not penalize.
+
+**Files changed:** scan_http_security.py (check_simple_header signature + the
+permissions_policy wiring), test_review_tools.py (new test), README.md (count resync),
+BACKLOG.md (P48 done + P51/P52 filed), JOURNAL.md (this entry).
+
+**Verification:** end to end - absent Permissions-Policy -> info while absent
+X-Content-Type-Options still -> fail; a present policy -> pass. Scanner 351 -> 352, all
+green; README resynced to 352/389 (guard exit 0); builder untouched.
+
+**Learnings:** the mirror image of the presence-not-value class - here a check was too
+harsh, not too lax. The fix is a per-call absent_verdict, not a global default change,
+because absence means different things per header (missing X-Content-Type-Options is a
+real gap; missing Permissions-Policy is not).
+
+**Replenishment (P48-run partial audit):** completing P48 left two open tasks (below
+the floor of three), so I audited the least-recently-scored dimensions - the
+orchestration/scope tools and the report/trend builder (the P41 run had swept scanner
+grading). A general-purpose auditor swept them read-only; I reproduced each finding
+myself before filing. crawler/trends/report_charts/run_review were clean. Two Medium
+filed: P51 (discover_pages fetches off-domain hosts named by the target's own
+robots.txt/sitemap-index, no same-domain guard - a scope-boundary gap on the default
+path; reproduced two off-domain fetches with a stubbed http_fetch; same class as P27)
+and P52 (the "Core Web Vitals all in the Good range" strength fires on a lab TBT
+capture - TBT is not a CWV - and on a single partial metric; reproduced both, and the
+overstated string also leaks into bottom_line's "strongest area").
+
+**Next:** P51 (discover_pages off-domain sitemap fetch), the higher-impact of the two
+new Medium. Two Medium and two Low now open; the fresh audit reopened Medium findings,
+so convergence is further off, correctly. Not converged. No promise.
+## 2026-07-05 - JOURNAL rotation
+
+**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
+the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+
+**What I did:** moved 6 entries verbatim to JOURNAL-archive.md:
+- 2026-07-05 - P35: coerce non-string scalars in the builder so a slip does not crash
+- 2026-07-05 - P38: coerce the key-date label so a non-string does not crash the report
+- 2026-07-05 - P36: parse .env comments and export in env_value
+- 2026-07-05 - P40: stop consent markers substring-matching prose
+- 2026-07-05 - JOURNAL rotation
+- 2026-07-05 - P37: key normalize_url on the :// separator, not urlparse().scheme
+
+**Verification:** archive is append-only and unchanged above the move; JOURNAL.md
+now holds the preamble, the last 10 substantive entries, and this rotation note.
+No code or state logic touched.
+
+**Next:** P51 (discover_pages off-domain sitemap fetch). No promise.
+
+## 2026-07-05 - P51: fetch only same-domain sitemaps in discover_pages
+
+**Task:** P51 (Medium, scope-boundary gap). discover_pages fetched the robots.txt
+Sitemap: URL and every sitemapindex <loc> child with no same-domain guard, so a target
+whose robots/sitemap named another host made the default scoping helper contact a site
+the operator never authorized (an SSRF-flavored angle, since that URL is
+attacker-influenceable). The crawler already gates every fetch via _eligible; discover
+did not, though its output was domain-filtered.
+
+**What I did:** _collect_sitemap_urls now takes the target registrable domain and
+fetches only same-domain sitemaps via a shared _same_site(url, domain) helper. It
+filters the robots.txt Sitemap: candidates to on-domain ones, falls back to the
+conventional same-domain /sitemap.xml when none is on-domain (an off-domain advertised
+sitemap becomes a coverage miss, never a scope escape), and skips any off-domain
+sitemapindex child. _internal_nav_links now reuses the same helper (DRY).
+
+**Files changed:** discover_pages.py (_same_site helper, _collect_sitemap_urls domain
+param + guards, discover call site, _internal_nav_links reuse), test_review_tools.py
+(new test_sitemap_collection_never_fetches_off_domain), README.md (count resync),
+BACKLOG.md (P51 done), JOURNAL.md (this entry).
+
+**Verification:** reproduced the original leak, then confirmed the fix - an off-domain
+robots Sitemap plus a third-party sitemapindex child yields zero off-domain fetches,
+while the www child on the same registrable domain is still read; the no-robots
+default and a www advertised sitemap also stay on-domain. Scanner 352 -> 353, all
+green; README resynced to 353/390 (guard exit 0); builder untouched.
+
+**Learnings:** the scope guard has to sit at the FETCH, not the output. discover
+already domain-filtered its proposed set, which hid the escape - the damage is the
+request itself, not what survives into the report. Same lesson as P27/P31: authorization
+is enforced per outbound request, and erring conservative (a same-domain fallback) is
+the charter-correct tradeoff.
+
+**Next:** P52 (the "Core Web Vitals all Good" strength fires on a lab TBT capture and a
+partial metric set). One Medium and two Low remain, zero High. Not converged. No
+promise.
+
+## 2026-07-05 - P52: gate the CWV strength on a complete field capture
+
+**Task:** P52 (Medium, misleading claim). The report inserted "Core Web Vitals all in
+the Good range" whenever every measured vitals metric rated Good, but the lab branch
+measures TBT (not a CWV; the interactivity CWV is INP, never in lab) and only measured
+metrics are included, so a lab capture or a single partial field metric produced the
+claim.
+
+**What I did:** _web_vitals now returns a complete flag (len(metrics) == 3 - all
+expected metrics for the source were measured), keeping the full-set knowledge where
+the specs live. _assessment inserts the strength only when complete AND all Good, and
+phrases it by source: "Core Web Vitals all in the Good range" for a field (CrUX)
+capture, "Lab performance metrics all in the Good range" for a lab capture.
+
+**Files changed:** draft_report_data.py (_web_vitals complete flag, _assessment gate +
+source-based phrasing), test_review_tools.py (new test), README.md (count resync),
+BACKLOG.md (P52 done + P53-P55 filed), JOURNAL.md (this entry).
+
+**Verification:** field all-3 Good -> CWV string; partial field -> no claim; lab
+all-Good -> lab phrasing, not CWV; field with one metric not Good -> no claim. Scanner
+353 -> 354, builder 37 green (consumes the dict with the new key); README resynced to
+354/391 (guard exit 0).
+
+**Learnings:** a partial measurement summarized as a total is a quiet lie - all() over
+a filtered subset is always "complete" for whatever survived the filter. The honest
+guard is "every expected metric was measured AND all pass", and the label must name
+what was actually measured (lab metrics, not Core Web Vitals).
+
+**Replenishment (P52-run partial audit):** completing P52 left two open (below the
+floor of three), so I audited the least-recently-scored surfaces - the HTML parser, the
+docx builder, and the capture tier. A general-purpose auditor swept them read-only; I
+reproduced every finding myself before filing. scan_vitals was clean. Filed P53
+(Medium: an unclosed <title> makes htmlmeta swallow the document body under 3.13
+RCDATA, shipping false no-H1/no-links/no-images verdicts as MEASURED, since the page is
+not marked inconclusive - reproduced closed vs unclosed: 1/1/1 -> 0/0/0), P54 (Medium:
+two remaining non-string-scalar crash sites in the builder - scorecard detail via
+re.sub, report_label via .upper() - both reproduced aborting the build; the P35 class),
+and P55 (Low: capture snapshot filenames oscillate home.html/home-2.html across runs,
+orphaning files - internal evidence hygiene, the deliverable stays correct).
+
+**Next:** P53 (htmlmeta unclosed-title body loss), the higher-impact new Medium (it
+corrupts report correctness on real malformed pages, which the operator does not
+control). Two Medium and three Low now open, zero High. The fresh audit reopened
+Medium findings, so convergence is further off, correctly. Not converged. No promise.
+
+## 2026-07-05 - P53: recover the body when an unclosed title swallows it
+
+**Task:** P53 (Medium, wrong verdicts shipped as measured). Under Python 3.13 an
+unclosed <title> parses the rest of the document as RCDATA, so headings/anchors/images/
+landmarks after it were dropped and a false "no H1 / no links / no images" shipped as a
+measured fact - and because the swallowed text kept the page word-heavy,
+render_assessment did NOT mark it inconclusive, defeating the safeguard against reading
+an empty body as clean.
+
+**What I did:** parse_html now detects the unclosed-title case (title None with a
+non-empty RCDATA _title_buf), recovers the real title as the text before the first "<",
+then reparses the swallowed markup (from that "<" on) with a fresh _Extractor and folds
+it in via a new _merge_extractors helper. The merge extends the structural lists and
+unions the sets/counters; word_count is left to the first parse (it already counted the
+swallowed text as data, so adding the reparse would double it). Because the body was
+never interpreted in the first parse, the collections combine without overlap.
+
+**Files changed:** htmlmeta.py (_merge_extractors helper, unclosed-title reparse in
+parse_html), test_review_tools.py (new test_unclosed_title_does_not_swallow_the_body),
+README.md (count resync), BACKLOG.md (P53 done), JOURNAL.md (this entry).
+
+**Verification:** a closed and an unclosed title yield identical title, lang, headings,
+anchors, images, landmarks, and jsonld (1/1/1 in both, was 0/0/0); a title unclosed at
+EOF still works; closed-title, empty-title, and no-title cases are unchanged. Scanner
+354 -> 355, builder 37 green; README resynced to 355/392 (guard exit 0).
+
+**Learnings:** a bug that disables a safety net is worse than one the net was built to
+catch - the swallowed body kept word_count high, so the "sparse -> inconclusive"
+guard read the page as fully rendered and graded the false zeros as measured. The fix
+had to be a reparse-and-merge, not a patch to the tag handlers, because RCDATA means
+the handlers never run for the swallowed span; the meaning is only recoverable by
+feeding that span through the parser a second time.
+
+**Next:** P54 (two remaining non-string-scalar crash sites in the builder). One Medium
+and three Low remain, zero High. Not converged. No promise.
+
+## 2026-07-05 - P54: coerce the last two non-string scalars in the builder
+
+**Task:** P54 (Medium, deliverable crash). Two spots the P35 coercion sweep missed hard-
+crashed the build on a hand-edited exec_report_data.json: a numeric scorecard-row detail
+hit re.sub (TypeError), and a numeric report_label hit .upper() (AttributeError).
+
+**What I did:** coerced both with the codebase str(... or "") idiom - detail = str(row.
+get("detail") or "") at the assignment, so both the re.sub score-suffix strip and the
+cell render get a string; label = (str(data.get("report_label") or "") or "EXECUTIVE
+REPORT").upper().
+
+**Files changed:** build_exec_report.py (detail coercion at :916, report_label at :301),
+test_exec_report.py (extended test_non_string_scalars_do_not_crash_the_build), BACKLOG.md
+(P54 done), JOURNAL.md (this entry). No count change (extended an existing test).
+
+**Verification:** both crash inputs now build; a string report_label still uppercases to
+the gold badge; a detail's "(score N)" suffix is still stripped. Builder 37, exec-report
+green; scanner 355 and README total 392 unaffected (guard exit 0).
+
+**Learnings:** the non-string-scalar class is closed only when every consumer of a
+hand-edited scalar coerces - re.sub and .upper() are two more "must be a string" call
+shapes alongside the split()/Path()/join already fixed. Coercing at the point of
+assignment (detail) rather than at each use covers every downstream path at once.
+
+**Next:** the Low tail - P49 (version-banner CDN-id false warn), P50 (viewport
+width=device-width), P55 (snapshot filename churn). Zero High, zero Medium open. When
+the Low clear, the next iteration can run the full convergence audit that certifies
+done. Not converged. No promise.
+
+## 2026-07-05 - P49: require a dotted version before the version-banner warn
+
+**Task:** P49 (Low, false warn). check_disclosure set reveals_version = any digit in the
+banner, so a CDN node id (Akamai "ECAcc (nyd/D179)") warned "version banners present".
+
+**What I did:** added VERSION_RE = re.compile(r"\b\d+(?:\.\d+)+\b") - a dotted numeric
+token of two-plus components - and reveals_version = bool(VERSION_RE.search(val)), so a
+bare integer in a node id or build hash no longer reads as a version while real dotted
+versions (nginx/1.25.3, Apache/2.4.52, IIS/10.0, PHP/8.1.2, x-aspnet-version 4.0.30319)
+still warn. Added import re.
+
+**Files changed:** scan_http_security.py (import re, VERSION_RE, check_disclosure),
+test_review_tools.py (extended test_disclosure), BACKLOG.md (P49 done + P56-P60 filed),
+JOURNAL.md (this entry). No count change (extended a test).
+
+**Verification:** Akamai node id and ASP.NET name -> info; nginx/1.25.3, IIS/10.0 ->
+warn; empty -> pass. Scanner 355, all green; README total 392 (guard exit 0).
+
+**Learnings:** the presence-not-value shape once more - "has a digit" is not "has a
+version"; the value that matters is a version-SHAPED token, which a dotted-numeric
+regex captures and a character-class test cannot.
+
+**Replenishment (P49-run partial audit):** completing P49 left two open (below three),
+so I audited the least-recently-swept surfaces - the network/parse core (common) and the
+scanners the P41 grading sweep skipped (scan_tls, scan_accessibility, scan_links,
+scan_design, scan_readability). An auditor swept them read-only; I reproduced every
+finding myself. common and scan_readability were clean. Filed FOUR Medium, all the
+presence-not-value / raw-text-match class in files the earlier sweep never reached: P56
+(scan_links grades commented-out http markup as active mixed content - a FABRICATED
+security fail), P57 (a dangling aria-labelledby counts as a real accessible name, so an
+unlabeled control grades "all labeled"), P58 (the image-dimension check accepts any
+"width" substring, so a max-width:100% responsive image false-passes the layout-shift
+check), P59 (any CAA record grades "restricts issuance", even an iodef-only record that
+restricts nothing) - plus one Low, P60 (a far-future cert notAfter crashes gmtime on
+Windows, aborting the TLS scan; low reachability).
+
+**Next:** P56 (scan_links fabricated mixed-content fail), the most impactful new Medium
+(it fabricates a graded security vulnerability, the charter's cardinal sin). Four Medium
+and three Low now open, zero High. The fresh sweep of previously-unaudited files reopened
+Medium findings, so convergence is further off, correctly. Not converged. No promise.

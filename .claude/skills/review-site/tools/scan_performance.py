@@ -16,6 +16,8 @@ Usage:
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlparse
 
 import common
@@ -88,17 +90,45 @@ def _measure(resource):
     length = common.header_value(headers, "content-length")
     size = int(length) if length and str(length).isdigit() else None
     return {**resource, "bytes": size, "status": res.get("final_status"),
-            "cache_control": headers.get("cache-control")}
+            "cache_control": headers.get("cache-control"),
+            "expires": common.header_value(headers, "expires")}
 
 
-def _cache_max_age(cc):
-    """max-age seconds from a Cache-Control value, or None when absent."""
+def _cc_seconds(cc, directive):
+    """Seconds from a Cache-Control delta-seconds directive (max-age, s-maxage),
+    or None when absent. The (?<![-\\w]) lookbehind keeps max-age from matching
+    inside another token and keeps the two directives distinct."""
     if not cc:
         return None
     if isinstance(cc, list):
         cc = ", ".join(cc)
-    m = re.search(r"max-age\s*=\s*(\d+)", cc, re.I)
+    m = re.search(rf"(?<![-\w]){re.escape(directive)}\s*=\s*(\d+)", cc, re.I)
     return int(m.group(1)) if m else None
+
+
+def _cache_max_age(cc):
+    """max-age seconds from a Cache-Control value, or None when absent."""
+    return _cc_seconds(cc, "max-age")
+
+
+def _future_expires(expires):
+    """True if an Expires header names a still-future instant. A malformed or
+    past Expires (including the common Expires: 0) is already stale, so it is
+    not a usable caching lifetime. Expires is the HTTP/1.0 freshness mechanism,
+    honored by browsers when Cache-Control max-age is absent."""
+    if not expires:
+        return False
+    if isinstance(expires, list):
+        expires = expires[-1]
+    try:
+        exp = parsedate_to_datetime(expires)
+    except (TypeError, ValueError):
+        return False
+    if exp is None:
+        return False
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    return exp > datetime.now(timezone.utc)
 
 
 def _asset_caching_check(measured, inconclusive):
@@ -115,8 +145,13 @@ def _asset_caching_check(measured, inconclusive):
         cc = r.get("cache_control")
         low = (", ".join(cc) if isinstance(cc, list) else cc or "").lower()
         max_age = _cache_max_age(cc)
-        cached = (("immutable" in low or (max_age is not None and max_age > 0))
-                  and "no-store" not in low and "no-cache" not in low)
+        s_maxage = _cc_seconds(cc, "s-maxage")
+        has_lifetime = ("immutable" in low
+                        or (max_age is not None and max_age > 0)
+                        or (s_maxage is not None and s_maxage > 0)
+                        or _future_expires(r.get("expires")))
+        # Cache-Control no-store/no-cache override any Expires, matching browsers.
+        cached = has_lifetime and "no-store" not in low and "no-cache" not in low
         if not cached:
             uncached.append(r["url"])
     if len(uncached) * 2 > len(ok_assets):

@@ -10,6 +10,7 @@ Usage:
     python scan_http_security.py <url> [output.json]
 """
 
+import re
 import sys
 from urllib.parse import urljoin, urlparse
 
@@ -81,10 +82,14 @@ def check_hsts(headers):
             **_verdict(verdict, note)}
 
 
-def check_simple_header(headers, name, expected=None, fail_note="Header missing."):
+def check_simple_header(headers, name, expected=None, absent_note="Header missing.",
+                        absent_verdict="fail"):
+    # absent_verdict lets an optional header (one no major scorer penalizes, e.g.
+    # Permissions-Policy) grade its absence as info rather than a hard fail, while
+    # a genuinely expected header (X-Content-Type-Options) keeps the fail default.
     val = common.header_value(headers, name)
     if not val:
-        return {"present": False, "value": None, **_verdict("fail", fail_note)}
+        return {"present": False, "value": None, **_verdict(absent_verdict, absent_note)}
     if expected and expected.lower() not in val.lower():
         return {"present": True, "value": val,
                 **_verdict("warn", f"Present but expected to contain '{expected}'.")}
@@ -95,9 +100,15 @@ def check_referrer_policy(headers):
     val = common.header_value(headers, "referrer-policy")
     if not val:
         return {"present": False, "value": None, **_verdict("fail", "No Referrer-Policy set.")}
-    if "unsafe-url" in val.lower():
+    # A comma-separated value is a fallback list; the browser uses the last token it
+    # supports, so grade the effective (last) one. Both unsafe-url and the legacy
+    # default no-referrer-when-downgrade send the full URL (path and query) to
+    # cross-origin destinations - the leak the modern strict-origin-* default fixed.
+    effective = val.split(",")[-1].strip().lower()
+    if effective in ("unsafe-url", "no-referrer-when-downgrade"):
         return {"present": True, "value": val,
-                **_verdict("warn", "Referrer-Policy is unsafe-url; full URLs leak to all destinations.")}
+                **_verdict("warn", f"Referrer-Policy {effective} leaks full URLs (path and query) "
+                                   "to cross-origin destinations.")}
     return {"present": True, "value": val, **_verdict("pass", "Present.")}
 
 
@@ -261,12 +272,18 @@ def check_security_txt(base):
                                "a vulnerability-disclosure channel.")}
 
 
+# A software version is a dotted numeric token (nginx/1.25.3, PHP/8.1.2, IIS/10.0),
+# not any digit: a bare integer in a CDN node id (Akamai "ECAcc (nyd/D179)") or a
+# build hash is not a version banner, so require at least two numeric components.
+VERSION_RE = re.compile(r"\b\d+(?:\.\d+)+\b")
+
+
 def check_disclosure(headers):
     findings = {}
     for name in ("server", "x-powered-by", "x-aspnet-version", "x-generator"):
         val = common.header_value(headers, name)
         if val:
-            has_version = any(ch.isdigit() for ch in val)
+            has_version = bool(VERSION_RE.search(val))
             findings[name] = {"value": val, "reveals_version": has_version}
     if not findings:
         return {"banners": {}, **_verdict("pass", "No version-revealing banners observed.")}
@@ -307,7 +324,8 @@ def _scan(url):
         "referrer_policy": header_check(check_referrer_policy, headers),
         "permissions_policy": header_check(
             check_simple_header, headers, "Permissions-Policy", None,
-            "No Permissions-Policy set."),
+            "No Permissions-Policy set; an advanced, optional header that major "
+            "scorers (Mozilla Observatory) do not penalize.", "info"),
         "cookies": header_check(check_cookies, headers),
         "information_disclosure": header_check(check_disclosure, headers),
         "security_txt": check_security_txt(res.get("final_url") or url),

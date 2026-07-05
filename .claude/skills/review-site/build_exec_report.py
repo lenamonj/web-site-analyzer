@@ -99,7 +99,9 @@ _RPR_AFTER_SPACING = ("w:w", "w:kern", "w:position", "w:sz", "w:szCs",
 
 def add_run(paragraph, text, size=10, bold=False, color=BODY_RGB, italic=False,
             font=BODY_FONT, letter_spacing=None):
-    run = paragraph.add_run(text)
+    # Tolerate a non-string value from hand-authored report data: None is an empty
+    # run, any other scalar is stringified rather than crashing the build.
+    run = paragraph.add_run("" if text is None else str(text))
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
@@ -296,7 +298,7 @@ def add_cover(document, data, section_titles):
     # An optional report_label ("SAMPLE REPORT") replaces the kicker's second
     # half and gets an unmissable gold badge, so a demonstration copy can
     # never be mistaken for a client deliverable.
-    label = (data.get("report_label") or "EXECUTIVE REPORT").upper()
+    label = (str(data.get("report_label") or "") or "EXECUTIVE REPORT").upper()
     kicker = document.add_paragraph()
     kicker.paragraph_format.space_after = Pt(10)
     add_run(kicker, f"WEBSITE REVIEW  /  {label}", size=9,
@@ -317,6 +319,7 @@ def add_cover(document, data, section_titles):
 
     overall = (data.get("scorecard") or {}).get("overall")
     if overall:
+        overall = str(overall)  # tolerate a non-string band from hand-authored data
         posture = document.add_paragraph()
         posture.paragraph_format.space_after = Pt(16)
         add_run(posture, "OVERALL POSTURE   ", size=9, bold=True,
@@ -383,7 +386,7 @@ def add_running_header(document, site, date, label=None):
     borders.append(bottom)
     p_pr.insert_element_before(borders, *_PPR_AFTER_PBDR)
     bits = [site, label or "Website Review"] + ([date] if date else [])
-    add_run(para, "   |   ".join(bits), size=8, color=MUTED_RGB)
+    add_run(para, "   |   ".join(str(b) for b in bits), size=8, color=MUTED_RGB)
     # Content page numbering starts at 1 (the cover is page 0, unnumbered).
     pg = OxmlElement("w:pgNumType")
     pg.set(qn("w:start"), "0")
@@ -508,7 +511,7 @@ def add_glance_tiles(document, data):
     recs = data.get("recommendations", [])
     scorecard = data.get("scorecard") or {}
     rows = scorecard.get("rows", [])
-    overall = scorecard.get("overall") or "Not measured"
+    overall = str(scorecard.get("overall") or "Not measured")  # tolerate a non-string band
 
     scope = data.get("scope") or {}
     if scope.get("pages_reviewed"):
@@ -601,7 +604,7 @@ def add_key_dates_panel(document, key_dates):
         cell.text = ""
         p1 = cell.paragraphs[0]
         p1.paragraph_format.space_after = Pt(2)
-        add_run(p1, item.get("label", "").upper(), size=8, bold=True,
+        add_run(p1, str(item.get("label") or "").upper(), size=8, bold=True,
                 color=MUTED_RGB, letter_spacing=12)
         p2 = cell.add_paragraph()
         p2.paragraph_format.space_after = Pt(2)
@@ -772,7 +775,7 @@ def add_code_block(document, code, highlight=None):
     cell = table.rows[0].cells[0]
     shade_cell(cell, CODE_FILL_HEX)
     cell.text = ""
-    for idx, line in enumerate(code.split("\n")):
+    for idx, line in enumerate(str(code).split("\n")):  # tolerate a non-string snippet
         para = cell.paragraphs[0] if idx == 0 else cell.add_paragraph()
         para.paragraph_format.space_before = Pt(0)
         para.paragraph_format.space_after = Pt(0)
@@ -842,11 +845,16 @@ def build(data, out_path, chart_dir=None):
     assessment = data.get("assessment")
     scorecard = data.get("scorecard")
     web_vitals = data.get("web_vitals")
-    section_titles = []
-    if bottom_line or assessment:
-        section_titles.append("Executive summary")
     progress = data.get("progress") or {}
     trend = progress.get("trend")
+    # The progress strip (progress without a full quarterly trend chart) belongs to
+    # the Executive summary, so that section exists whenever the strip renders -
+    # otherwise progress-only data floats a strip under the glance tiles with no
+    # heading or contents entry.
+    has_exec_summary = bool(bottom_line or assessment or (progress and not trend))
+    section_titles = []
+    if has_exec_summary:
+        section_titles.append("Executive summary")
     if trend:
         section_titles.append("Progress this quarter")
     if scorecard and scorecard.get("rows"):
@@ -875,7 +883,7 @@ def build(data, out_path, chart_dir=None):
     add_glance_tiles(document, data)
 
     # Executive summary: bottom line, progress, then strengths vs priorities
-    if bottom_line or assessment:
+    if has_exec_summary:
         section_heading(document, "Executive summary",
                         number_of.get("Executive summary"))
     if bottom_line:
@@ -905,7 +913,7 @@ def build(data, out_path, chart_dir=None):
                 set_cell_text(cells[0], row.get("category", ""), size=9, bold=True)
                 band = row.get("band", "Not measured")
                 _chip(cells[1], band, BAND_FILL.get(band, BAND_FILL["Not measured"]))
-                detail = row.get("detail", "")
+                detail = str(row.get("detail") or "")
                 if has_scores:
                     score = row.get("score")
                     if isinstance(score, (int, float)):
@@ -959,8 +967,15 @@ def build(data, out_path, chart_dir=None):
                        [Inches(0.85), Inches(1.0), Inches(3.6), Inches(1.55)],
                        [finding_row(f) for f in findings])
 
-    # Preferred recommendations, by rank
-    recs = sorted(data.get("recommendations", []), key=lambda r: r.get("rank", 999))
+    # Preferred recommendations, by rank. Coerce to a numeric key so a hand-authored
+    # string rank ("1", "2") mixed with an int or a missing rank never makes sorted()
+    # compare str and int and crash the build; a non-numeric or absent rank sorts last.
+    def _rank_key(r):
+        try:
+            return (0, float(r.get("rank")))
+        except (TypeError, ValueError):
+            return (1, 0.0)
+    recs = sorted(data.get("recommendations", []), key=_rank_key)
     if recs:
         section_heading(document, "Preferred recommendations",
                         number_of.get("Preferred recommendations"))
@@ -1030,7 +1045,7 @@ def build(data, out_path, chart_dir=None):
             add_run(cap, item.get("caption", ""), size=9.5, bold=True)
             if item.get("code") is not None:
                 add_code_block(document, item["code"], item.get("highlight"))
-            elif item.get("image"):
+            elif isinstance(item.get("image"), str):  # a non-string path is skipped, not Path()'d
                 img = item["image"]
                 if Path(img).exists():
                     try:

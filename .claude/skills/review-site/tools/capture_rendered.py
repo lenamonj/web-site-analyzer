@@ -551,7 +551,13 @@ def capture_pages(slug, plan, session_factory=None, browser=None, out_dir=None,
                 if url in dom_pages:
                     html = session.evaluate("document.documentElement.outerHTML")
                     if isinstance(html, str) and html.strip():
-                        filename = snapshot_filename(url, taken)
+                        # Reuse this URL's existing snapshot slot on a refresh; only a
+                        # URL new to the manifest allocates a name. Otherwise taken
+                        # (seeded from the manifest, which already holds this URL's own
+                        # file) would push it to a new name each run, oscillating the
+                        # filename and orphaning the prior snapshot on disk.
+                        filename = (manifest["pages"].get(url, {}).get("file")
+                                    or snapshot_filename(url, taken))
                         (base / filename).write_text(html[:MAX_SNAPSHOT_CHARS],
                                                      encoding="utf-8")
                         manifest["pages"][url] = {"file": filename,

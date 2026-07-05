@@ -107,11 +107,33 @@ def _check_one(url, page_host):
     return out
 
 
+def _strip_comments(html):
+    """Remove HTML comments before matching so a resource referenced only inside
+    <!-- ... --> (which no browser fetches) is not miscounted as mixed content. A
+    linear string scan, not a lazy <!--.*?--> regex, which backtracks
+    catastrophically on many unclosed '<!--' (ReDoS; cf. the N6 sitemap fix)."""
+    if "<!--" not in html:
+        return html
+    out, i = [], 0
+    while True:
+        start = html.find("<!--", i)
+        if start == -1:
+            out.append(html[i:])
+            break
+        out.append(html[i:start])
+        end = html.find("-->", start + 4)
+        if end == -1:
+            break  # an unclosed comment runs to end of document; a browser ignores it
+        i = end + 3
+    return "".join(out)
+
+
 def _mixed_content(html, is_https):
     if not is_https or not html:
         return {"count": 0, "items": [], "verdict": "info" if not is_https else "pass",
                 "note": ("Page not served over HTTPS; mixed content not applicable."
                          if not is_https else "No insecure http resources referenced.")}
+    html = _strip_comments(html)
     found, seen = [], set()
     for tag, url in MIXED_RE.findall(html):
         key = (tag.lower(), url)

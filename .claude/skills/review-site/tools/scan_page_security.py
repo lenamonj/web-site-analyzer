@@ -35,8 +35,14 @@ FORM_RE = common.tag_attrs_re("form")
 SRC_RE = re.compile(r"""(?<![-\w])src\s*=\s*["']([^"']+)["']""", re.I)
 HREF_RE = re.compile(r"""(?<![-\w])href\s*=\s*["']([^"']+)["']""", re.I)
 ACTION_RE = re.compile(r"""(?<![-\w])action\s*=\s*["']([^"']+)["']""", re.I)
+# A submit button/input can override the form's action with formaction=; the
+# (?<![-\w]) lookbehind keeps it distinct from action= and from data-formaction.
+FORMACTION_RE = re.compile(r"""(?<![-\w])formaction\s*=\s*["'](http://[^"']+)""", re.I)
 REL_RE = re.compile(r"""(?<![-\w])rel\s*=\s*["']([^"']*)["']""", re.I)
-INTEGRITY_RE = re.compile(r"(?<![-\w])integrity\s*=", re.I)
+# SRI protects only when the attribute carries a real hash token (sha256/384/512-
+# base64). An empty integrity="" is no protection, so require the value, not the
+# mere attribute name; the (?<![-\w]) lookbehind keeps it off data-integrity=.
+INTEGRITY_RE = re.compile(r"""(?<![-\w])integrity\s*=\s*["']?\s*sha(?:256|384|512)-""", re.I)
 # on<event>= attributes (onclick, onload, ...). Word boundary keeps this from
 # matching words like "money=" inside attribute values.
 INLINE_HANDLER_RE = re.compile(r"\son[a-z]+\s*=\s*[\"']", re.I)
@@ -98,10 +104,14 @@ def check_form_actions(body, base, inconclusive):
         m = ACTION_RE.search(attrs)
         if m and m.group(1).strip().lower().startswith("http://"):
             insecure.append(m.group(1))
+    # A submit button/input formaction overrides the form action, so an http://
+    # formaction is a downgrade even when the form's own action is secure.
+    insecure += [m.group(1) for m in FORMACTION_RE.finditer(body)]
     if insecure:
         return {"verdict": "fail", "count": len(forms), "insecure_actions": insecure[:MAX_EXAMPLES],
-                "note": (f"{len(insecure)} form(s) on this HTTPS page submit to plain http://; "
-                         "submitted data would leave the page unencrypted.")}
+                "note": (f"{len(insecure)} insecure http:// submission target(s) (form action or "
+                         "button formaction) on this HTTPS page; submitted data would leave the "
+                         "page unencrypted.")}
     return {"verdict": "pass", "count": len(forms),
             "note": f"All {len(forms)} form(s) submit over HTTPS or relative URLs."}
 

@@ -40,7 +40,7 @@ IMG_RE = common.tag_attrs_re("img")
 SRC_RE = re.compile(r"""(?<![-\w])src\s*=\s*["']([^"']+)["']""", re.I)
 WIDTH_ATTR_RE = re.compile(r"(?<![-\w])width\s*=", re.I)
 HEIGHT_ATTR_RE = re.compile(r"(?<![-\w])height\s*=", re.I)
-STYLE_DIM_RE = re.compile(r"""(?<![-\w])style\s*=\s*["'][^"']*(width|aspect-ratio)""", re.I)
+STYLE_ATTR_RE = re.compile(r"""(?<![-\w])style\s*=\s*["']([^"']*)""", re.I)
 
 GENERIC_FONTS = {
     "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
@@ -159,6 +159,20 @@ def check_font_families(body, parsed, base):
             "note": "No explicit non-generic font-family declarations found."}
 
 
+def _style_reserves_space(attrs):
+    """True if an inline style declares enough to reserve the image box before load
+    (so it does not shift layout). Grade the declared PROPERTIES, not a 'width'
+    substring: max-width/min-width reserve nothing, and a bare width with no height
+    (a percentage width) also reserves no vertical space. The box is reserved by an
+    explicit width AND height, or by aspect-ratio (which fixes the proportion)."""
+    m = STYLE_ATTR_RE.search(attrs)
+    if not m:
+        return False
+    props = {decl.split(":", 1)[0].strip().lower()
+             for decl in m.group(1).split(";") if ":" in decl}
+    return "aspect-ratio" in props or ("width" in props and "height" in props)
+
+
 def check_image_dimensions(body, inconclusive):
     if inconclusive:
         return {"verdict": "info",
@@ -169,7 +183,7 @@ def check_image_dimensions(body, inconclusive):
     missing = []
     for attrs in imgs:
         has_dims = (WIDTH_ATTR_RE.search(attrs) and HEIGHT_ATTR_RE.search(attrs)) \
-            or STYLE_DIM_RE.search(attrs)
+            or _style_reserves_space(attrs)
         if not has_dims:
             m = SRC_RE.search(attrs)
             missing.append(m.group(1) if m else "(no src)")

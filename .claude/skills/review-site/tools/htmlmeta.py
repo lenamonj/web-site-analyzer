@@ -120,7 +120,9 @@ class _Extractor(HTMLParser):
         if tag in LANDMARK_TAGS:
             self.landmarks.add(tag)
         if "role" in a:
-            self.roles.append(a["role"])
+            # role is a space-separated list of fallback role tokens; split it so a
+            # multi-token value like "navigation menubar" still matches "navigation".
+            self.roles.extend(a["role"].split())
         if a.get("id"):
             self.ids.add(a["id"])
         if tag == "a" and a.get("name"):
@@ -287,6 +289,23 @@ def _meta_lookup(metas, key, attr="name"):
     return None
 
 
+def _merge_extractors(dst, src):
+    """Fold a reparse (src) of an unclosed-title RCDATA remainder into dst. The
+    swallowed markup was never interpreted in dst (it arrived as title text), so
+    dst holds no body structure and the collections combine without overlap.
+    word_count is left to dst: dst already counted the swallowed text as data, so
+    adding src's count would double it."""
+    for attr in ("metas", "links", "anchors", "headings", "images",
+                 "form_controls", "roles", "jsonld_types"):
+        getattr(dst, attr).extend(getattr(src, attr))
+    for attr in ("labels_for", "landmarks", "ids"):
+        getattr(dst, attr).update(getattr(src, attr))
+    dst.positive_tabindex += src.positive_tabindex
+    dst.buttons_empty += src.buttons_empty
+    if dst.html_lang is None:
+        dst.html_lang = src.html_lang
+
+
 def parse_html(html):
     """Return a structured dict of everything the scanners need from one page."""
     p = _Extractor()
@@ -296,9 +315,21 @@ def parse_html(html):
     except Exception:
         pass  # malformed markup should degrade, not crash the scan
     if p.title is None and p._title_buf:
-        # Unclosed <title>: RCDATA buffering hands us the rest of the document
-        # as text. Real title text ends where markup starts.
-        p.title = "".join(p._title_buf).split("<", 1)[0].strip()
+        # An unclosed <title> makes HTMLParser buffer the rest of the document as
+        # RCDATA title text (tags never interpreted), so the real title ends where
+        # the first markup starts and every element after it was lost. Recover the
+        # title, then reparse the swallowed markup so structural extraction is not
+        # silently zeroed and shipped as a measured "no H1 / no links / no images".
+        head, sep, rest = "".join(p._title_buf).partition("<")
+        p.title = head.strip()
+        if sep:
+            tail = _Extractor()
+            try:
+                tail.feed(sep + rest)
+                tail.close()
+            except Exception:
+                pass
+            _merge_extractors(p, tail)
 
     canonical = next((l.get("href") for l in p.links if l.get("rel", "").lower() == "canonical"), None)
     hreflangs = [{"lang": l.get("hreflang"), "href": l.get("href")}

@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/github/license/lenamonj/web-site-analyzer)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/scanner%20dependencies-zero-2ea44f)
-![Tests](https://img.shields.io/badge/tests-372%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-400%20passing-2ea44f)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Scope](https://img.shields.io/badge/scope-passive%20%26%20external-orange)
 ![Rendered evidence](https://img.shields.io/badge/rendered%20evidence-headless%20Chrome%20DevTools-blueviolet)
@@ -226,17 +226,17 @@ Environment (via env or a git-ignored `.env` at the repo root): `CRUX_API_KEY` o
 
 ## Tests and CI
 
-Three offline suites, no network, run in about a second - the scanner and builder suites are 372 tests total, and a report-charts suite adds 8 more:
+Three offline suites, no network, run in about a second - the scanner and builder suites are 400 tests total, and a report-charts suite adds 8 more:
 
 ```
 cd .claude/skills/review-site/tools
-python -m unittest test_review_tools        # 338 tests: parsers, graders, tool contract, pipeline, capture
+python -m unittest test_review_tools        # 363 tests: parsers, graders, tool contract, pipeline, capture
 cd ..
-python -m unittest test_exec_report         # 34 tests: the docx builder (needs python-docx)
+python -m unittest test_exec_report         # 37 tests: the docx builder (needs python-docx)
 python -m unittest test_report_charts       # 8 tests: the quarterly-trend chart renderer (needs matplotlib)
 ```
 
-The scanner suite drives the HTML parser, every grading function, the tool contract across the whole registry (every registered tool is swept for result shape, category stamping, and no-raise-on-network-failure), the full pipeline with stubbed network primitives, and the browser tier with crafted WebSocket bytes and a fake DevTools session (including the RFC 6455 accept-key test vector). Network primitives are stubbed suite-wide so no test can ever reach a real network or read a real key.
+The scanner suite drives the HTML parser, every grading function, the tool contract across the whole registry (every registered tool is swept for result shape, category stamping, and no-raise-on-network-failure), the full pipeline with stubbed network primitives, and the browser tier with crafted WebSocket bytes and a fake DevTools session (including the RFC 6455 accept-key test vector). The CrUX API call, the credential reader, and RDAP are stubbed suite-wide at import; the HTTP fetch, TLS, and DoH primitives are stubbed per test, so the suite reaches no real network and reads no real key.
 
 [GitHub Actions](https://github.com/lenamonj/web-site-analyzer/actions) runs all three suites on every push across Ubuntu and Windows, on Python 3.10 and 3.13.
 
@@ -258,7 +258,7 @@ The scanner suite drives the HTML parser, every grading function, the tool contr
 CLAUDE.md                                  Project context and output contract
 TARGET.txt                                 The URL to analyze (edit this to retarget)
 LICENSE                                    MIT
-.github/workflows/ci.yml                   Both test suites, ubuntu + windows, py3.10 + 3.13
+.github/workflows/ci.yml                   All three test suites + README-count guard, ubuntu + windows, py3.10 + 3.13
 .claude/
   settings.json                            Permission allowlist for the skill
   skills/review-site/
@@ -279,7 +279,7 @@ LICENSE                                    MIT
       scan_site.py                         Orchestrator + scorecard, writes the evidence JSON
       draft_report_data.py                 Drafts report data incl. executive summary and action plan
       run_review.py                        One command: discover, scan, capture, re-scan, draft
-      test_review_tools.py                 Offline scanner suite (338 tests)
+      test_review_tools.py                 Offline scanner suite (363 tests)
       CAPTURE.md                           Manual browser-capture reference (fallback path)
 planning/
   _evidence/                               Scan JSON, digests, ledgers, rendered snapshots (internal)

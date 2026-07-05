@@ -51,6 +51,13 @@ def check_spf(domain):
     if not spf:
         return {"present": False, "record": None,
                 "verdict": "fail", "note": "No SPF record. Sender spoofing is easier."}
+    # More than one v=spf1 record is a permerror (RFC 7208 sec 3.2): a validating
+    # receiver discards SPF entirely, so a second record (a vendor include added
+    # alongside the first, say) silently disables sender authentication.
+    if sum(r.lower().startswith("v=spf1") for r in records) > 1:
+        return {"present": True, "record": spf, "verdict": "fail",
+                "note": ("Multiple SPF records published: a permerror, so receivers ignore "
+                         "SPF entirely and spoofing is unblocked.")}
     low = spf.lower()
     # The 'all' mechanism is a standalone space-separated term (normally last),
     # not any occurrence of the substring; match it as a whole token so a domain
@@ -104,18 +111,24 @@ def check_dmarc(domain):
 
 
 def _is_dkim_record(record):
-    """A TXT record is a DKIM key record if it declares v=DKIM1 or carries a key
-    (k=) or public-key (p=) tag, matched at ';'-tag boundaries so a base64 blob
-    that merely contains 'p=' as a substring does not masquerade as one."""
+    """A TXT record publishes a usable DKIM key if it declares v=DKIM1 or carries
+    a key (k=) or public-key (p=) tag, matched at ';'-tag boundaries so a base64
+    blob that merely contains 'p=' as a substring does not masquerade as one. An
+    explicitly empty p= means the key has been revoked (RFC 6376 sec 3.6.1), so
+    such a record does not count as a published key; scan every tag rather than
+    return on the first, so a revoking p= vetoes a preceding v=DKIM1."""
+    is_dkim = False
     for part in record.split(";"):
         part = part.strip()
         if "=" not in part:
             continue
         key, val = part.split("=", 1)
         key = key.strip().lower()
+        if key == "p" and not val.strip():
+            return False
         if key in ("p", "k") or (key == "v" and val.strip().lower() == "dkim1"):
-            return True
-    return False
+            is_dkim = True
+    return is_dkim
 
 
 def check_dkim(domain):
