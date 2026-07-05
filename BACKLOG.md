@@ -1498,6 +1498,13 @@ the Later section).
   test_far_future_cert_expiry_does_not_abort_the_scan (notAfter year 9999 -> scan ok,
   expiry pass, expires_on None; a 2027 cert still formats expires_on "2027-08-29"). Scanner
   360 -> 361; README resynced to 361/398 (guard exit 0); no builder change.
+  Follow-up (CI portability): the first version of the test asserted expires_on IS None on
+  the far-future case, which only holds on Windows (gmtime raises past ~year 3000); on
+  Linux gmtime formats the date, so the Ubuntu CI legs failed. Rewrote the test to force
+  the raising-gmtime branch explicitly (stub tls.time.gmtime to raise -> expires_on None,
+  deterministic on any platform) and to accept expires_on None-or-str on the real
+  far-future date. The production guard was already correct cross-platform; only the test
+  over-asserted a Windows detail. All three suites green locally on Windows.
 - [x] **P62 (done, S)** Two inaccurate statements in README.md. (a) README.md:239 said
   "Network primitives are stubbed suite-wide so no test can ever reach a real network or
   read a real key", but only http_post_json, env_value, and rdap_domain are stubbed at

@@ -434,3 +434,35 @@ manufacture marginal ones to pad the backlog.
 
 **Next:** P63 (the cover-contents "in_order" test checks membership, not order). Zero High,
 zero Medium; two Low remain (P63, P66). Not converged. No promise.
+
+## 2026-07-05 - CI portability fix: the P60 test asserted a Windows-only outcome
+
+**Task:** post-push CI triage. GitHub Actions on cf8fe5b went red on both Ubuntu legs
+(py3.10 + py3.13) while both Windows legs passed - a platform split that pointed straight
+at the P60 change. The P60 test asserted expires_on IS None for a far-future (year 9999)
+cert, which only holds on Windows, where time.gmtime raises OSError past ~year 3000; on
+Linux (64-bit time_t) gmtime formats "9999-12-31", so assertIsNone failed.
+
+**What I did:** rewrote test_far_future_cert_expiry_does_not_abort_the_scan to be
+platform-agnostic and to cover the guard deterministically: it stubs tls.time.gmtime to
+raise (forcing the except branch on any OS -> expires_on None, scan still grades), and on
+the real far-future date it asserts only the invariant (scan ok, expiry pass, expires_on
+None-or-str). A normal 2027 cert still formats "2027-08-29" everywhere. The production
+guard (the try/except in scan_tls) was already correct on both platforms; only the test
+over-asserted a Windows implementation detail.
+
+**Files changed:** test_review_tools.py (the P60 test), BACKLOG.md (P60 follow-up note),
+JOURNAL.md (this entry). No production-code change.
+
+**Verification:** all three suites green locally on Windows (scanner 363, builder 37,
+report-charts 8; guard in sync). The forced-raise branch now exercises the guard on Linux
+too, and the far-future assertion accepts either platform's expires_on.
+
+**Learnings:** "tested on Windows, green" is not "cross-platform green" - a test that
+asserts the RESULT of a platform-specific failure (gmtime raising) bakes the platform into
+the assertion. The durable fix is to force the failure mode under test explicitly (stub
+the raising call) rather than rely on the host OS to produce it, so the guard is covered
+on every matrix cell. CI caught exactly the gap a Windows-only local run could not.
+
+**Next:** resume the loop at P63. Zero High, zero Medium; two Low remain. Not converged.
+No promise.

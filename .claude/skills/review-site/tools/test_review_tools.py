@@ -886,10 +886,12 @@ class TestTlsAndDns(unittest.TestCase):
             break
 
     def test_far_future_cert_expiry_does_not_abort_the_scan(self):
-        # P60: on Windows time.gmtime raises OSError past ~year 3000, so a
-        # pathological far-future notAfter must degrade (drop the display date),
-        # not crash the whole TLS scan. days_left is plain arithmetic, so the
-        # verdict still holds and a normal cert still formats its date.
+        # P60: a far-future notAfter must not abort the TLS scan. On Windows
+        # time.gmtime raises OSError past ~year 3000 and the guard drops the
+        # display date; on Linux (64-bit time_t) gmtime formats it. Either way the
+        # scan completes and grades (days_left is plain arithmetic). Assert that
+        # platform-agnostic invariant, and force the raising-gmtime branch
+        # explicitly so the guard is covered on every platform, not just Windows.
         def info_with(not_after):
             return lambda host, *a, **k: {
                 "ok": True, "error": None, "protocol": "TLSv1.3", "alpn": "h2",
@@ -898,21 +900,36 @@ class TestTlsAndDns(unittest.TestCase):
                          "issuer": ((("commonName", "CA"),),),
                          "subjectAltName": (("DNS", "example.com"),),
                          "notAfter": not_after}}
+
+        def boom(*a):
+            raise OSError(22, "Invalid argument")  # the Windows gmtime failure shape
+
         orig_info, orig_probe, orig_doh = common.tls_info, tls._probe_legacy, common.doh_query
+        orig_gmtime = tls.time.gmtime
         common.doh_query = lambda name, rtype, *a, **k: {
             "ok": True, "error": None, "answers": [], "raw": []}
         tls._probe_legacy = lambda host, *a, **k: {"verdict": "info", "note": "stub"}
         try:
             common.tls_info = info_with("Dec 31 23:59:59 9999 GMT")
-            r = tls.scan("https://example.com")  # must not raise
+            # Guard branch, deterministic on any platform: gmtime raises -> the
+            # display date is dropped to None, the scan still grades, never crashes.
+            tls.time.gmtime = boom
+            r = tls.scan("https://example.com")
+            tls.time.gmtime = orig_gmtime
             self.assertTrue(r["ok"])
             self.assertEqual(r["checks"]["expiry"]["verdict"], "pass")  # huge days_left
             self.assertIsNone(r["expires_on"])  # display date dropped, not fabricated
-            common.tls_info = info_with("Aug 29 21:41:26 2027 GMT")
+            # Real gmtime on the same far-future date: the scan still completes and
+            # grades; expires_on is the formatted date (Linux) or None (Windows).
             r2 = tls.scan("https://example.com")
-            self.assertEqual(r2["expires_on"], "2027-08-29")  # normal date still formats
+            self.assertTrue(r2["ok"])
+            self.assertTrue(r2["expires_on"] is None or isinstance(r2["expires_on"], str))
+            # a normal cert still formats its date on every platform.
+            common.tls_info = info_with("Aug 29 21:41:26 2027 GMT")
+            self.assertEqual(tls.scan("https://example.com")["expires_on"], "2027-08-29")
         finally:
             common.tls_info, tls._probe_legacy, common.doh_query = orig_info, orig_probe, orig_doh
+            tls.time.gmtime = orig_gmtime
 
 
 class TestScorecard(unittest.TestCase):
