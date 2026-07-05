@@ -407,6 +407,24 @@ class TestSecurityChecks(unittest.TestCase):
         none = {"content-security-policy": ["default-src 'self'", "upgrade-insecure-requests"]}
         self.assertEqual(sec.check_clickjacking(none)["verdict"], "fail")
 
+    def test_clickjacking_intersects_conflicting_csp_headers(self):
+        # S7: each CSP header is a separately enforced policy (the browser applies
+        # their intersection), so a permissive frame-ancestors in one header cannot
+        # undo a restrictive one in another. A '*' plus a 'none'/'self' is PROTECTED;
+        # first-header-wins fabricated a fail here.
+        for headers in (
+            {"content-security-policy": ["frame-ancestors *", "frame-ancestors 'none'"]},
+            {"content-security-policy": ["frame-ancestors 'none'", "frame-ancestors *"]},
+            {"content-security-policy": ["frame-ancestors *",
+                                         "script-src 'self'; frame-ancestors 'self'"]},
+        ):
+            self.assertEqual(sec.check_clickjacking(headers)["verdict"], "pass", headers)
+        # a single permissive '*' is still an ineffective fail; genuinely absent fails
+        self.assertEqual(sec.check_clickjacking(
+            {"content-security-policy": "frame-ancestors *"})["verdict"], "fail")
+        self.assertEqual(sec.check_clickjacking(
+            {"content-security-policy": "default-src 'self'"})["verdict"], "fail")
+
     def test_cookies(self):
         one = sec._parse_cookies({"set-cookie": "sid=1; Secure; HttpOnly; SameSite=Lax"})
         self.assertEqual(one[0], {"name": "sid", "secure": True, "http_only": True, "same_site": "lax"})
@@ -702,6 +720,36 @@ class TestLinkChecks(unittest.TestCase):
         self.assertEqual(links._classify(200), "ok")
         self.assertEqual(links._classify(None), "unreachable")
 
+    def test_head_5xx_falls_back_to_get_before_calling_a_link_broken(self):
+        # S2: a server that errors on HEAD (a 5xx from a backend that throws on an
+        # unimplemented HEAD) but serves GET fine must not be a fabricated broken
+        # link. HEAD-500/GET-200 -> ok; 500 on both -> broken; a 404 on HEAD stays
+        # broken WITHOUT a wasted GET.
+        orig = common.http_fetch
+        calls = []
+
+        def stub(head_status, get_status):
+            def _f(url, *a, **k):
+                method = k.get("method", "GET")
+                calls.append(method)
+                status = head_status if method == "HEAD" else get_status
+                return {"final_status": status, "hops": [{"url": url, "status": status}],
+                        "final_url": url, "error": None}
+            return _f
+        try:
+            common.http_fetch = stub(500, 200)
+            self.assertEqual(links._check_one("https://x/a", "x")["state"], "ok")
+            self.assertIn("GET", calls)          # the fallback fired
+            calls.clear()
+            common.http_fetch = stub(500, 500)
+            self.assertEqual(links._check_one("https://x/a", "x")["state"], "broken")
+            calls.clear()
+            common.http_fetch = stub(404, 200)
+            self.assertEqual(links._check_one("https://x/a", "x")["state"], "broken")
+            self.assertNotIn("GET", calls)       # no wasted GET on a 404 HEAD
+        finally:
+            common.http_fetch = orig
+
     def test_mixed_content(self):
         active = '<html><body><script src="http://cdn.example/a.js"></script></body></html>'
         self.assertEqual(links._mixed_content(active, True)["verdict"], "fail")
@@ -973,6 +1021,26 @@ class TestTlsAndDns(unittest.TestCase):
             # a single record (with an unrelated TXT alongside) still grades normally
             dns._txt_records = lambda name: (["v=spf1 -all", "google-site-verification=x"], ok)
             self.assertEqual(dns.check_spf("example.com")["verdict"], "pass")
+        finally:
+            dns._txt_records = orig
+
+    def test_mta_sts_tls_rpt_bimi_do_not_assert_absence_on_a_failed_lookup(self):
+        # S6: when the TXT lookup itself fails, the note must say "could not be
+        # determined", not assert the record is absent (a charter-spirit fabrication
+        # like check_spf already avoids). A successful empty lookup still says "no".
+        orig = dns._txt_records
+        try:
+            dns._txt_records = lambda name: ([], {"ok": False, "error": "SERVFAIL"})
+            for check in (dns.check_mta_sts, dns.check_tls_rpt, dns.check_bimi):
+                r = check("example.com", True)
+                self.assertEqual(r["verdict"], "info")
+                self.assertIsNone(r["present"])
+                self.assertIn("could not be determined", r["note"])
+            # a successful lookup returning no record still reports genuine absence
+            dns._txt_records = lambda name: ([], {"ok": True, "error": None})
+            r = dns.check_mta_sts("example.com", True)
+            self.assertFalse(r["present"])
+            self.assertIn("No MTA-STS record", r["note"])
         finally:
             dns._txt_records = orig
 
@@ -1383,19 +1451,27 @@ class TestScannerCharter(unittest.TestCase):
         allowed, tools_dir = self._allowed()
         # brotli is an explicitly-allowed OPTIONAL import (common.py guards it in a
         # try/except, so the stdlib-only claim holds functionally); any OTHER
-        # third-party import is a violation. Q10: also scan the shared modules every
-        # scanner imports (common/htmlmeta/registry), not just scan_*.py, so a new
-        # REQUIRED third-party import in the shared core cannot ship green.
+        # third-party import is a violation. S8: scan EVERY non-test tools/*.py, not
+        # just scan_*.py + the shared core - the README/CLAUDE.md "zero dependency"
+        # claim spans the whole tools/ tree (capture_rendered, crawler, triage,
+        # run_review, discover_pages, draft_report_data, trends, check_readme_counts),
+        # so a required third-party import anywhere in it must not ship green.
         allowed = allowed | {"brotli"}
-        paths = sorted(tools_dir.glob("scan_*.py")) + [
-            tools_dir / m for m in ("common.py", "htmlmeta.py", "registry.py")]
+        paths = [p for p in sorted(tools_dir.glob("*.py")) if not p.name.startswith("test_")]
+        # Coverage guard: the orchestration files S8 added must actually be scanned,
+        # or widening the glob would be silently undone by a future refactor.
+        covered = {p.name for p in paths}
+        for name in ("capture_rendered.py", "crawler.py", "run_review.py",
+                     "discover_pages.py", "draft_report_data.py", "trends.py",
+                     "triage.py", "check_readme_counts.py"):
+            self.assertIn(name, covered)
         offenders = {}
         for path in paths:
             ext = self._external_imports(path, allowed)
             if ext:
                 offenders[path.name] = ext
         self.assertEqual(offenders, {},
-                         f"non-stdlib/non-local imports in the scanner suite: {offenders}")
+                         f"non-stdlib/non-local imports in the tools tree: {offenders}")
 
     def test_guard_would_catch_a_third_party_import(self):
         # Q17: prove the guard is not vacuous by calling the REAL _external_imports
@@ -4149,15 +4225,20 @@ class TestDraftReportData(unittest.TestCase):
             self.assertIn(url, f["evidence"])
         self.assertNotIn("more", f["evidence"])
 
-    def test_finding_evidence_ceiling_points_at_the_full_list(self):
+    def test_finding_evidence_names_every_page_even_at_crawl_scale(self):
+        # S9: the "name every subject" rule is absolute - a finding affecting many
+        # pages (a crawl-scale run) enumerates EVERY affected page, never truncated
+        # behind "+N more" or a pointer to the scan summary.
         scan = json.loads(json.dumps(self.SCAN))
         pages = [f"https://x/p{i}" for i in range(50)]
         scan["issues_grouped"] = {"fail": [
             {"scan": "a11y", "check": "landmarks", "verdict": "fail",
              "note": "Missing landmarks.", "pages": pages}], "warn": []}
         f = drpt.draft(scan)["findings"][0]
-        self.assertIn("https://x/p39", f["evidence"])
-        self.assertIn("and 10 more listed in example-com_scan_summary.md", f["evidence"])
+        for url in pages:
+            self.assertIn(url, f["evidence"])
+        self.assertNotIn("more", f["evidence"])
+        self.assertNotIn("scan_summary.md", f["evidence"])
 
     def test_plan_affects_names_urls_for_small_page_sets(self):
         scan = json.loads(json.dumps(self.SCAN))

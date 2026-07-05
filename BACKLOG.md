@@ -18,6 +18,13 @@ every prior narrow sweep skipped because it audited the LOCAL regexes (MIXED_RE,
 STYLE_BLOCK_RE) that were each individually fixed, never the factory they all delegate to. One
 High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Phase S).
 
+RESOLUTION (2026-07-05): S1 fixed in loop iteration 15; S2-S9 fixed in a manual pass (user asked
+to clear them directly, not via jeffy). All nine now done. S3 turned out broader than filed (the
+_as_rows bare-string-field bug affects findings/recommendations/action_plan/evidence too) and S9
+was decided as an absolute rule (drop the cap, enumerate every page). Suites green at scanner 385,
+builder 43, charts 8; README guard in sync at 428. A fresh certifying full audit has NOT been re-run
+since, so convergence is not yet formally established - that is the next run's job.
+
 ### Now (High)
 - [x] **S1 (done, M)** FABRICATED VERDICT: the shared `tag_attrs_re` factory used `\b`, which
   matches at the name->hyphen boundary, so hyphenated custom elements are parsed as their bare-tag
@@ -50,7 +57,7 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   page is "info" (honest "no forms"), which satisfies the "info/pass (not fail)" acceptance.
 
 ### Next (Medium)
-- [ ] **S2 (todo, M)** FABRICATED broken-link fail: scan_links._check_one retries GET only when the
+- [x] **S2 (done, M)** FABRICATED broken-link fail: scan_links._check_one retries GET only when the
   HEAD status is in (405, 501, None), so a link that returns 5xx to HEAD but serves fine on GET is
   classified "broken" and rolls up to a link_health FAIL. scan_links.py:96 (the GET-retry guard)
   and _classify (500 <= status < 600 -> "broken"). Reproduced (mine): the GET-retry guard is
@@ -61,7 +68,11 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   405 or 500 <= status < 600). Accept: a stubbed link returning 500 on HEAD and 200 on GET is NOT
   classified broken; a link that 500s on BOTH stays broken; a 404 stays broken without a wasted
   GET; suite green.
-- [ ] **S3 (todo, S)** Builder silently corrupts the deliverable when a list-valued field is given
+  Done (manual pass, not jeffy): the GET-retry guard is now `status is None or status == 405 or
+  (500 <= status < 600)`. Added test_head_5xx_falls_back_to_get_before_calling_a_link_broken
+  (HEAD-500/GET-200 -> ok, fallback fired; 500 on both -> broken; 404 on HEAD -> broken, no wasted
+  GET). Scanner suite green.
+- [x] **S3 (done, S)** Builder silently corrupts the deliverable when a list-valued field is given
   a bare string: quick_wins (build_exec_report.py:1064-1070) and assessment strengths/weaknesses
   (build_exec_report.py:678-698) iterate `for item in ...` without the _as_rows/list normalization
   used elsewhere, so a str (which is iterable) yields ONE BULLET PER CHARACTER with exit 0.
@@ -72,7 +83,13 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   iterating (mirror _as_rows, whose own docstring already names quick_wins as a string list). Accept:
   quick_wins/strengths/weaknesses given a bare string render as ONE bullet with the full text; a
   list still renders one bullet per item; builder suite green.
-- [ ] **S4 (todo, S)** Builder raw-tracebacks on a non-dict container where a dict is expected:
+  Done (manual pass): BROADER than filed - _as_rows itself iterated a bare-string FIELD per
+  character too, so findings/recommendations/action_plan/evidence shared the corruption, not just
+  the string-bullet fields. Fixed at both roots: added _as_str_list (quick_wins normalized in the
+  data block; strengths/weaknesses in add_assessment) and guarded _as_rows with `if isinstance(
+  items, str): items = [items]`. Added test_bare_string_list_field_renders_one_item_not_per_
+  character. Builder suite green.
+- [x] **S4 (done, S)** Builder raw-tracebacks on a non-dict container where a dict is expected:
   build_exec_report.py:902 `scorecard.get("rows")` (scorecard from data.get, unguarded), same class
   at 890-891 (progress.trend), 904 (web_vitals.metrics), 907 (key_dates.items), 678 (assessment.
   strengths). The isinstance(...) normalization guards at 863-867 prove non-dict input was
@@ -84,7 +101,11 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   not a dict at read time, mirroring the existing normalization guards. Accept: scorecard/progress/
   web_vitals/key_dates/assessment given a list or scalar produce a clean build (section skipped or
   empty), never a raw AttributeError; a valid dict still renders; builder suite green.
-- [ ] **S5 (todo, S)** Builder raw-tracebacks on a non-finite score: set_score_bar_cell does
+  Done (manual pass): after the list-field normalization block, coerce each container field to {}
+  when present-and-not-a-dict (`for _key in (...): if _key in data and not isinstance(data[_key],
+  dict): data[_key] = {}`), so every downstream .get()/truthiness guard sees a dict and the section
+  is skipped. Added test_non_dict_container_field_skips_section_not_crash. Builder suite green.
+- [x] **S5 (done, S)** Builder raw-tracebacks on a non-finite score: set_score_bar_cell does
   `round(score * SCORE_BAR_SEGMENTS)` and `round(nan)` raises ValueError, `round(inf)` raises
   OverflowError. build_exec_report.py:740. The isinstance(score,(int,float)) gates at 951/961 treat
   NaN/Inf as valid numbers, so they reach 740. Reproduced (mine): `{"scorecard":{"overall":"Weak",
@@ -95,9 +116,13 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   and math.isfinite(score)`), else render "not measured" like the existing non-numeric branch at
   967. Accept: a NaN or Infinity score renders "not measured" instead of crashing; a finite score
   still draws the bar; builder suite green.
+  Done (manual pass): added a module-level _finite_number(x) helper (isinstance int/float and
+  math.isfinite) and gated both the has_scores roll-up and the per-row score check on it, so a
+  NaN/Inf falls to the existing "not measured" branch. import math added. Added
+  test_non_finite_score_renders_not_measured_not_crash (nan, +inf, -inf). Builder suite green.
 
 ### Later (Low)
-- [ ] **S6 (todo, S)** scan_dns_email MTA-STS / TLS-RPT / BIMI notes state a definitive absence on
+- [x] **S6 (done, S)** scan_dns_email MTA-STS / TLS-RPT / BIMI notes state a definitive absence on
   a FAILED DoH TXT lookup: check_mta_sts/check_tls_rpt/check_bimi do `records, _ = _txt_records(...)`
   and discard the ok flag, so a lookup failure (records==[]) prints e.g. "No MTA-STS record; SMTP
   delivery accepts silent TLS downgrade" as fact. scan_dns_email.py:205-209, 232-238, 247-253.
@@ -106,7 +131,11 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   succeed, say "could not determine" instead of "no record". Accept: with a stubbed failing TXT
   lookup the note does not assert absence; with a real empty result it still says "no record"; suite
   green.
-- [ ] **S7 (todo, S)** scan_http_security CSP parser is first-header-wins across separate CSP
+  Done (manual pass): all three now capture `records, res = _txt_records(...)` and, when not
+  res["ok"], return present None + verdict info + "lookup failed (...); presence could not be
+  determined" - the same pattern check_spf already used. Added
+  test_mta_sts_tls_rpt_bimi_do_not_assert_absence_on_a_failed_lookup. Scanner suite green.
+- [x] **S7 (done, S)** scan_http_security CSP parser is first-header-wins across separate CSP
   headers, but browsers enforce EVERY CSP header (intersection). scan_http_security.py:144-156
   (_parse_csp joins a header list with "; "). Reproduced by Slice A: `check_clickjacking(
   {'content-security-policy': ["frame-ancestors *", "frame-ancestors 'none'"]})` -> verdict "fail"
@@ -114,7 +143,12 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   conflicting frame-ancestors is a contrived config, low real-world incidence. Fix: model multiple
   CSP headers as the intersection of their directives, not a naive join. Accept: two CSP headers
   where either supplies frame-ancestors 'none'/'self' -> not a clickjacking fail; suite green.
-- [ ] **S8 (todo, S)** The stdlib-only charter guard test covers only scan_*.py + common/htmlmeta/
+  Done (manual pass): added _csp_policies(value) that parses each CSP header as its own policy;
+  check_clickjacking now collects frame-ancestors across ALL policies and treats framing as
+  protected if ANY policy restricts it (fa_present / fa_protects), the intersection the browser
+  enforces. check_csp's script analysis is unchanged (out of scope). Added
+  test_clickjacking_intersects_conflicting_csp_headers. Scanner suite green.
+- [x] **S8 (done, S)** The stdlib-only charter guard test covers only scan_*.py + common/htmlmeta/
   registry, but the README/CLAUDE.md "zero dependency" claim spans the whole tools/ tree
   (capture_rendered, crawler, triage, run_review, discover_pages, draft_report_data, trends,
   check_readme_counts). tools/test_review_tools.py:~1349. Low: all eight ARE stdlib-only today (AST-
@@ -124,7 +158,11 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   guard's glob to every non-test tools/*.py (keep the try/except brotli exemption in common.py).
   Accept: the guard flags a planted `import requests` in capture_rendered.py; the real tree passes;
   suite green.
-- [ ] **S9 (todo, S)** draft_report_data._page_list truncates a finding's affected-page list with
+  Done (manual pass): the guard now globs every non-test tools/*.py (keeps the brotli exemption),
+  with a coverage assertion that capture_rendered/crawler/run_review/discover_pages/draft_report_
+  data/trends/triage/check_readme_counts are actually in the scanned set. Verified the widened real
+  tree passes AND a planted `import requests` in capture_rendered.py is flagged. Scanner suite green.
+- [x] **S9 (done, S)** draft_report_data._page_list truncates a finding's affected-page list with
   ", and N more listed in <slug>_scan_summary.md" at LIST_ALL_PAGES=40. draft_report_data.py:111-116;
   the string lands in the rendered findings-table Evidence cell via _finding_from_issue:289-291.
   This is the literal "+N more" truncation the "findings name every subject" rule bars. Low/tension:
@@ -133,6 +171,11 @@ High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Ph
   documented deliberate design. Filed for rule-consistency; decide whether the rule is absolute
   (drop the cap) or the pointer-to-summary is an acceptable exception. Accept: a decision recorded,
   and if absolute, a >40-page finding enumerates every page in the deliverable; suite green.
+  Done (manual pass): DECISION - the "findings name every subject" rule is absolute (per the user's
+  standing preference). Dropped LIST_ALL_PAGES and the "+N more" branch; _page_list(pages) now
+  enumerates every affected page (slug param removed as unused). Updated the codifying test to
+  test_finding_evidence_names_every_page_even_at_crawl_scale (all 50 pages present, no "more", no
+  scan_summary.md pointer). Scanner suite green.
 
 ## Phase R - Sixth (full) convergence-audit findings (2026-07-05)
 After Q1-Q11 drained the backlog to empty (all suites green at 374 + 39 + 8, guard in sync),

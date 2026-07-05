@@ -645,6 +645,52 @@ class TestBuildMainInputGuard(unittest.TestCase):
         self.assertIn("2027-01-01",
                       build_text({"site": "x", "key_dates": {"items": ["2027-01-01"]}}))
 
+    def test_bare_string_list_field_renders_one_item_not_per_character(self):
+        # S3: quick_wins/strengths/weaknesses (and the _as_rows fields) given a bare
+        # string must render ONE item, never one bullet per character (a str is
+        # iterable). Root fix: _as_str_list and the _as_rows string-field guard.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "quick_wins": "Add HSTS"}, out)
+            bullets = [p.text for p in Document(str(out)).paragraphs
+                       if p.style.name == "List Bullet"]
+        self.assertEqual(bullets, ["Add HSTS"])          # one bullet, not 8 characters
+        # the _as_rows path: a bare-string field is one row, not one row per character
+        self.assertEqual(len(ber._as_rows("Homepage lacks a redirect", "finding")), 1)
+        # assessment strengths/weaknesses as bare strings build without corruption
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.docx"
+            ber.build({"site": "x", "assessment": {"strengths": "TLS is strong",
+                                                    "weaknesses": "No HSTS"}}, out)
+            text = " ".join(c.text for t in Document(str(out)).tables
+                            for r in t.rows for c in r.cells)
+        self.assertIn("TLS is strong", text)
+        self.assertIn("No HSTS", text)
+
+    def test_non_dict_container_field_skips_section_not_crash(self):
+        # S4: a container field (scorecard/web_vitals/key_dates/assessment/progress)
+        # given a list or scalar must skip its section cleanly, not AttributeError
+        # mid-build (the .get() dereferences were unguarded).
+        for key in ("scorecard", "web_vitals", "key_dates", "assessment", "progress"):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build({"site": "x", key: [{"a": "b"}]}, out)   # a list, not a dict
+                self.assertTrue(out.is_file(), key)
+
+    def test_non_finite_score_renders_not_measured_not_crash(self):
+        # S5: a NaN or +/-Infinity score (json.loads accepts both, so one can
+        # round-trip in from upstream) must render "not measured" instead of
+        # crashing round() in the score bar; a finite sibling still draws its bar.
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build({"site": "x", "scorecard": {"overall": "Weak", "rows": [
+                    {"category": "Perf", "band": "Adequate", "detail": "ok", "score": 0.7},
+                    {"category": "Security", "band": "Poor", "detail": "m", "score": bad}]}}, out)
+                text = " ".join(c.text for t in Document(str(out)).tables
+                                for r in t.rows for c in r.cells)
+            self.assertIn("not measured", text)
+
     def test_progress_only_renders_under_an_executive_summary_heading(self):
         # P34: progress without a bottom line, assessment, or trend must render its
         # strip under an Executive summary heading, not orphaned under the tiles.

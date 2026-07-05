@@ -93,8 +93,11 @@ def _classify(status):
 def _check_one(url, page_host):
     res = common.http_fetch(url, method="HEAD", want_body=False, timeout=LINK_TIMEOUT)
     status = res.get("final_status")
-    if status in (405, 501, None):
-        # Some servers reject HEAD; fall back to GET without downloading the body.
+    if status is None or status == 405 or (500 <= status < 600):
+        # Some servers reject or error on HEAD (405 Method Not Allowed, or any 5xx
+        # from a backend that throws on an unimplemented HEAD) yet serve the same
+        # URL fine on GET. Fall back to GET without downloading the body before
+        # calling a link broken, so a HEAD-only defect is not a fabricated 5xx.
         res = common.http_fetch(url, method="GET", want_body=False, timeout=LINK_TIMEOUT)
         status = res.get("final_status")
     internal = common.host_of(url) == page_host

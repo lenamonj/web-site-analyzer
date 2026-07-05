@@ -22,6 +22,7 @@ Dependency:
 """
 
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -500,7 +501,11 @@ def _as_rows(items, text_key):
     strings (recommendations/findings/action_plan are human-edited on top of the
     draft, and the sibling quick_wins IS a string list) still renders instead of
     crashing .get() on a non-dict. A bare string becomes {text_key: s} so its text
-    appears; a dict passes through; any other scalar becomes an empty row."""
+    appears; a dict passes through; any other scalar becomes an empty row. A bare
+    string given for the WHOLE field (not a list) is treated as one item, never
+    iterated per character (a str is iterable)."""
+    if isinstance(items, str):
+        items = [items]
     rows = []
     for it in items or []:
         if isinstance(it, dict):
@@ -510,6 +515,26 @@ def _as_rows(items, text_key):
         else:
             rows.append({})
     return rows
+
+
+def _as_str_list(value):
+    """Coerce a field meant to be a list of strings (quick_wins, assessment
+    strengths/weaknesses). A bare string becomes a one-item list, never iterated
+    per character; None or an empty/whitespace string becomes []; a list or tuple
+    is returned as a list (item text coercion is add_run's job)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _finite_number(x):
+    """True only for a real, finite int/float. Excludes NaN and +/-Infinity,
+    which json.loads accepts by default and which crash round() in the score bar."""
+    return isinstance(x, (int, float)) and math.isfinite(x)
 
 
 def _severity_breakdown(findings):
@@ -675,8 +700,8 @@ def add_callout(document, text):
 def add_assessment(document, assessment):
     """Two columns: measured strengths on the left, priorities to fix on the
     right, each a short bulleted list."""
-    strengths = assessment.get("strengths") or []
-    weaknesses = assessment.get("weaknesses") or []
+    strengths = _as_str_list(assessment.get("strengths"))
+    weaknesses = _as_str_list(assessment.get("weaknesses"))
     if not strengths and not weaknesses:
         return
     table = document.add_table(rows=2, cols=2)
@@ -866,6 +891,13 @@ def build(data, out_path, chart_dir=None):
         data["key_dates"]["items"] = _as_rows(data["key_dates"].get("items"), "label")
     if isinstance(data.get("scorecard"), dict):
         data["scorecard"]["rows"] = _as_rows(data["scorecard"].get("rows"), "category")
+    data["quick_wins"] = _as_str_list(data.get("quick_wins"))
+    # Container fields a section reads with .get(): a non-dict (a list or scalar
+    # from a hand-authored shape slip) would AttributeError mid-build. Coerce to
+    # {} so the section is skipped cleanly, mirroring the list normalization above.
+    for _key in ("assessment", "scorecard", "web_vitals", "key_dates", "progress"):
+        if _key in data and not isinstance(data[_key], dict):
+            data[_key] = {}
 
     normal = document.styles["Normal"]
     normal.font.name = BODY_FONT
@@ -948,7 +980,7 @@ def build(data, out_path, chart_dir=None):
         section_heading(document, heading, number_of.get("Measured posture"))
 
         rows = scorecard["rows"]
-        has_scores = any(isinstance(r.get("score"), (int, float)) for r in rows)
+        has_scores = any(_finite_number(r.get("score")) for r in rows)
 
         def scorecard_row(row):
             def write(cells):
@@ -958,7 +990,7 @@ def build(data, out_path, chart_dir=None):
                 detail = str(row.get("detail") or "")
                 if has_scores:
                     score = row.get("score")
-                    if isinstance(score, (int, float)):
+                    if _finite_number(score):
                         set_score_bar_cell(cells[2], score, band)
                         # The bar already shows the score; drop the redundant
                         # "(score N)" suffix from the detail string.

@@ -202,7 +202,10 @@ def check_mta_sts(domain, has_mx):
     gate = _mx_gate(has_mx, "MTA-STS")
     if gate:
         return gate
-    records, _ = _txt_records(f"_mta-sts.{domain}")
+    records, res = _txt_records(f"_mta-sts.{domain}")
+    if not res["ok"]:
+        return {"present": None, "verdict": "info",
+                "note": f"MTA-STS lookup failed ({res['error']}); presence could not be determined."}
     rec = next((r for r in records if r.lower().startswith("v=stsv1")), None)
     if not rec:
         return {"present": False, "verdict": "info",
@@ -229,7 +232,10 @@ def check_tls_rpt(domain, has_mx):
     gate = _mx_gate(has_mx, "TLS-RPT")
     if gate:
         return gate
-    records, _ = _txt_records(f"_smtp._tls.{domain}")
+    records, res = _txt_records(f"_smtp._tls.{domain}")
+    if not res["ok"]:
+        return {"present": None, "verdict": "info",
+                "note": f"TLS-RPT lookup failed ({res['error']}); presence could not be determined."}
     rec = next((r for r in records if r.lower().startswith("v=tlsrptv1")), None)
     if rec:
         return {"present": True, "record": rec, "verdict": "pass",
@@ -244,7 +250,10 @@ def check_bimi(domain, has_mx):
     gate = _mx_gate(has_mx, "BIMI")
     if gate:
         return gate
-    records, _ = _txt_records(f"default._bimi.{domain}")
+    records, res = _txt_records(f"default._bimi.{domain}")
+    if not res["ok"]:
+        return {"present": None, "verdict": "info",
+                "note": f"BIMI lookup failed ({res['error']}); presence could not be determined."}
     rec = next((r for r in records if r.lower().startswith("v=bimi1")), None)
     if rec:
         has_logo = any(p.strip().lower().startswith("l=") for p in rec.split(";"))

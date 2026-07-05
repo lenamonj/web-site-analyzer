@@ -393,3 +393,48 @@ run. NOT converged: the Definition of done requires a full audit pass finding ze
 Medium, and four reproduced Medium remain. No promise. To finish the job, a future run should clear
 S2-S5, then re-run the certifying full audit; and per the S1 learning, when it fixes the next class
 it should fix the shared helper and test there, not leaf by leaf.
+
+## Manual pass (not jeffy) - clear Phase S S2-S9 (2026-07-05)
+
+**Task:** the user asked to clear the remaining Phase S findings directly, outside the jeffy loop
+(which had ended at its budget), and to leave the changes uncommitted for their review. Fixed all
+four Medium (S2-S5) and four Low (S6-S9) in one pass, each with a regression test.
+
+**Files changed:**
+- scan_links.py (S2): GET-retry guard widened from `status in (405, 501, None)` to `status is None
+  or status == 405 or (500 <= status < 600)`, so a HEAD-5xx/GET-ok link is not a fabricated break.
+- build_exec_report.py (S3/S4/S5): added `import math`; a `_as_str_list` helper and a bare-string
+  guard IN `_as_rows` (S3 was broader than filed - `_as_rows` iterated a bare-string field per
+  character, so findings/recommendations/action_plan/evidence shared the corruption); a container
+  coercion loop that turns a non-dict scorecard/web_vitals/key_dates/assessment/progress into {}
+  (S4); a `_finite_number` helper gating both score checks so NaN/Inf render "not measured" (S5).
+- scan_dns_email.py (S6): check_mta_sts/check_tls_rpt/check_bimi now read the ok flag and say
+  "presence could not be determined" on a failed lookup instead of asserting absence.
+- scan_http_security.py (S7): added `_csp_policies`; check_clickjacking now treats framing as
+  protected if ANY separately-enforced CSP policy restricts frame-ancestors (the browser
+  intersection), not first-header-wins.
+- test_review_tools.py (S8): the stdlib-only charter guard globs every non-test tools/*.py now,
+  with a coverage assertion naming the eight orchestration files it previously skipped.
+- draft_report_data.py (S9): DECISION - the "name every subject" rule is absolute; dropped
+  LIST_ALL_PAGES and the "+N more" branch, `_page_list` enumerates every page.
+- Regression tests added: S2 (link fallback), S3/S4/S5 (builder), S6 (dns lookup failure), S7
+  (clickjacking intersection); S8 coverage assertion in the guard test; S9 test rewritten to assert
+  full enumeration. README.md count resync. BACKLOG.md, JOURNAL.md.
+
+**Verification:** every fix reproduced-then-fixed with a direct call before the test, then the full
+battery: scanner 382 -> 385, builder 40 -> 43, charts 8, all green; README guard in sync at 428
+(exit 0); py_compile clean; no em/en dashes. The one pre-existing test that codified the S9
+truncation was updated (behavior changed by the rule decision, not a silent break).
+
+**Learnings:** S3 is the clearest repeat of the project's signature lesson - the finding named
+quick_wins/strengths/weaknesses, but the SAME per-character bug lived in the shared `_as_rows`
+helper feeding four other fields; fixing only the named spots would have left the helper as a latent
+corruptor. The rule holds across data-shape bugs, not just regex bugs: find the shared helper and
+fix it there. Also, S9 shows a "Low" filed as a decision is cheap to resolve when the user has a
+standing rule - the memory ("findings name every subject") settled it without a round trip.
+
+**Next:** all Phase S findings (S1-S9) are closed and the backlog is empty. Changes are UNCOMMITTED
+for the user's review (they will commit and push). Convergence is not yet FORMALLY established: a
+fresh certifying full audit has not run since these fixes landed, and the DoD requires that single
+clean pass. The honest next step, whenever the user wants it, is one more full convergence audit -
+if it comes back zero High / zero Medium, the promise holds.

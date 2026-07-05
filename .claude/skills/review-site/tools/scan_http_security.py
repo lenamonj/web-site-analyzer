@@ -118,22 +118,25 @@ def check_clickjacking(headers):
     # ignored by Chrome/Edge/Safari, and any unknown value is ignored too, so
     # matching mere presence would pass a page that browsers leave framable.
     xfo_protects = (xfo or "").strip().lower() in ("deny", "sameorigin")
-    # Repeated CSP headers are combined (every policy enforced), not last-wins,
-    # so parse the raw value - which may be a list - via _parse_csp and match the
-    # frame-ancestors directive by name rather than taking header_value's last.
+    # Each CSP header is a separately-enforced policy, so framing is restricted if
+    # ANY policy carries a restrictive frame-ancestors: a permissive '*' in one
+    # header cannot undo a 'none'/'self' in another (the browser enforces the
+    # intersection). Collect frame-ancestors across all policies, not just the first.
     raw_csp = headers.get("content-security-policy")
-    fa = _parse_csp(raw_csp).get("frame-ancestors") if raw_csp else None
+    fa_lists = [p["frame-ancestors"] for p in _csp_policies(raw_csp) if "frame-ancestors" in p]
     # frame-ancestors protects unless it allows every origin (a bare '*'); an
-    # empty source list is 'none' (deny all), which protects.
-    fa_protects = fa is not None and "*" not in fa
+    # empty source list is 'none' (deny all), which protects. Protected if any
+    # policy's frame-ancestors is restrictive.
+    fa_present = bool(fa_lists)
+    fa_protects = any("*" not in sources for sources in fa_lists)
     if xfo_protects or fa_protects:
         src = "X-Frame-Options" if xfo_protects else "CSP frame-ancestors"
         return {"x_frame_options": xfo, "csp_frame_ancestors": fa_protects,
                 **_verdict("pass", f"Clickjacking protection via {src}.")}
-    if xfo or fa is not None:
+    if xfo or fa_present:
         # A directive is present but ineffective, which is worse than absent: the
         # site looks protected but browsers still allow framing.
-        return {"x_frame_options": xfo, "csp_frame_ancestors": fa is not None,
+        return {"x_frame_options": xfo, "csp_frame_ancestors": fa_present,
                 **_verdict("fail", "Framing directive present but ineffective: X-Frame-Options "
                            "must be DENY or SAMEORIGIN (ALLOW-FROM and unknown values are ignored), "
                            "and CSP frame-ancestors must not allow all origins (*).")}
@@ -142,9 +145,10 @@ def check_clickjacking(headers):
 
 
 def _parse_csp(value):
-    """Directive name -> source token list. Repeated headers arrive as a list
-    and combine like a semicolon-joined policy; the first occurrence of a
-    directive wins, per the CSP spec."""
+    """Directive name -> source token list for ONE policy. Within a policy the
+    first occurrence of a directive wins, per the CSP spec. A list value (repeated
+    headers) is joined for the coarse script-source analysis; per-header policy
+    semantics (each header enforced independently) are handled by _csp_policies."""
     if isinstance(value, list):
         value = "; ".join(value)
     directives = {}
@@ -154,6 +158,17 @@ def _parse_csp(value):
             directives.setdefault(tokens[0].lower(),
                                   [t.lower().strip("'") for t in tokens[1:]])
     return directives
+
+
+def _csp_policies(value):
+    """One directive map per CSP policy. Each Content-Security-Policy header is a
+    separate policy and the browser enforces ALL of them (the effective policy is
+    their intersection), so a permissive directive in one header does not undo a
+    restrictive one in another. Returns [] when no CSP is present."""
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [_parse_csp(v) for v in values]
 
 
 def check_csp(headers):
