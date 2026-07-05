@@ -201,8 +201,14 @@ def _scan(url, page=None):
         "link_text": _link_text_check(parsed, inconclusive),
         "positive_tabindex": {
             "count": parsed["positive_tabindex"],
-            "verdict": "warn" if parsed["positive_tabindex"] else "pass",
-            "note": (f"{parsed['positive_tabindex']} element(s) use a positive tabindex."
+            # Gate on inconclusive like every other body-derived check: a client-
+            # rendered page's static tabindex count is not the real page, so grade
+            # info (not measured), never a pass on an unmeasured property.
+            "verdict": ("warn" if parsed["positive_tabindex"] and not inconclusive
+                        else "info" if inconclusive else "pass"),
+            "note": ("Tab order not assessable from static HTML (client-rendered)."
+                     if inconclusive
+                     else f"{parsed['positive_tabindex']} element(s) use a positive tabindex."
                      if parsed["positive_tabindex"] else "No positive tabindex values.")},
         "empty_buttons": {
             "count": parsed["buttons_empty"],

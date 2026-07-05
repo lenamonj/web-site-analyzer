@@ -93,7 +93,9 @@ def _canonical_check(canonical, base):
     # stay pass.
     if not canonical:
         return {"value": None, "verdict": "info", "note": "No canonical link."}
-    resolved = urljoin(base, canonical.strip())
+    resolved = common.safe_urljoin(base, canonical.strip())
+    if resolved is None:  # a malformed canonical href resolves to nothing
+        return {"value": canonical, "verdict": "info", "note": "Canonical href is malformed."}
     page_domain = common.registrable_domain(common.host_of(base))
     canon_host = common.host_of(resolved)
     canon_domain = common.registrable_domain(canon_host)

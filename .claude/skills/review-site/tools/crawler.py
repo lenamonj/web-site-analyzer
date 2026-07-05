@@ -57,7 +57,10 @@ def _crawl_delay(rp):
 
 
 def _eligible(url, domain):
-    parts = urlparse(url)
+    try:
+        parts = urlparse(url)
+    except ValueError:
+        return False  # a malformed URL (e.g. an unclosed IPv6 literal) is not eligible
     if parts.scheme not in ("http", "https"):
         return False
     if common.registrable_domain(parts.hostname or "") != domain:
@@ -131,7 +134,10 @@ def crawl(target, max_pages=100, delay=DEFAULT_DELAY, state_path=None,
                     href = (a.get("href") or "").strip()
                     if not href or href.lower().startswith(SKIP_SCHEMES):
                         continue
-                    absolute = urldefrag(urljoin(base, href))[0]
+                    try:
+                        absolute = urldefrag(urljoin(base, href))[0]
+                    except ValueError:
+                        continue  # skip a malformed href, keep crawling the rest
                     if _eligible(absolute, domain) and absolute not in visited \
                             and absolute not in queued:
                         queue.append(absolute)
@@ -165,7 +171,11 @@ def main():
         print("Usage: python crawler.py <url> [max_pages]")
         sys.exit(1)
     target = args[0]
-    max_pages = int(args[1]) if len(args) > 1 else 100
+    try:
+        max_pages = int(args[1]) if len(args) > 1 else 100
+    except ValueError:
+        print("Usage: python crawler.py <url> [max_pages]")
+        sys.exit(1)
     state_path = common.evidence_dir() / f"{common.slug_of(target)}_crawl_state.json"
     result = crawl(target, max_pages=max_pages, state_path=state_path)
     print(f"Collected {result['stats']['collected']} page(s) from {result['domain']} "

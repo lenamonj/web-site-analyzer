@@ -335,6 +335,21 @@ class TestSecurityChecks(unittest.TestCase):
             {"content-security-policy": "default-src 'unsafe-eval'; script-src 'self'"})
         self.assertEqual(scoped["verdict"], "pass")
 
+    def test_csp_data_and_blob_script_sources_are_flagged(self):
+        # Q3: data:/blob:/filesystem: in script-src are scheme-sources that permit
+        # script loading (data: in script-src is a documented CSP bypass), so they
+        # must warn like http:/https:/*, not pass as a restrictive policy.
+        def check(csp):
+            return sec.check_csp({"content-security-policy": csp})
+        for src in ("data:", "blob:", "filesystem:", "mediastream:"):
+            r = check(f"script-src 'self' {src}")
+            self.assertEqual(r["verdict"], "warn", src)
+            self.assertIn("bypass", r["note"], src)
+        # a genuinely restrictive policy (no risky scheme) still passes, and
+        # strict-dynamic still ignores the whole allowlist incl. data:.
+        self.assertEqual(check("script-src 'self' 'nonce-x'")["verdict"], "pass")
+        self.assertEqual(check("script-src 'strict-dynamic' 'nonce-x' data:")["verdict"], "pass")
+
     def test_csp_strict_dynamic_and_nonce_are_not_weaknesses(self):
         # P19: 'strict-dynamic' makes browsers ignore host allowlists and
         # 'unsafe-inline'; a nonce/hash also nullifies 'unsafe-inline'. The
@@ -713,6 +728,51 @@ class TestLinkChecks(unittest.TestCase):
         links._mixed_content("<!--" * 20000, True)
         self.assertLess(time.perf_counter() - t, 1.0)
 
+    def test_mixed_content_ignores_hyphenated_custom_elements(self):
+        # Q4: a custom element like <video-player src="http://..."> must not
+        # false-match the real <video>/<script> tags and be graded as (fabricated)
+        # mixed content (\b matched at the name->hyphen boundary).
+        for tag in ('<video-player src="http://cdn/a">',
+                    '<script-loader src="http://cdn/a.js">',
+                    '<image-viewer src="http://cdn/i.png">'):
+            self.assertEqual(links._mixed_content(tag, True)["verdict"], "pass", tag)
+        # the real tags with an http src are still flagged
+        self.assertEqual(links._mixed_content('<script src="http://cdn/a.js">', True)["verdict"], "fail")
+        self.assertEqual(links._mixed_content('<video src="http://cdn/a">', True)["verdict"], "warn")
+
+    def test_shared_tag_attrs_re_ignores_hyphenated_custom_elements(self):
+        # S1: the SHARED tag_attrs_re factory (common.py) must end the tag name
+        # with (?![-\w]), not \b - \b matches at the name->hyphen joint, so every
+        # consumer parses a hyphenated custom element as its bare-tag prefix and
+        # fabricates a verdict for a tag that is not present. This guards the
+        # factory itself so no consumer (present or future) reinherits the class.
+        import common
+        for tag, sample in (
+            ('form',   '<form-field action="http://x/"></form-field>'),
+            ('img',    '<img-comparison-slider a=b></img-comparison-slider>'),
+            ('script', '<script-loader src="/x.js"></script-loader>'),
+            ('a',      '<a-scene foo=bar></a-scene>'),
+            ('link',   '<link-preview href="http://x/"></link-preview>'),
+            ('iframe', '<iframe-embed src="http://x/"></iframe-embed>'),
+        ):
+            self.assertEqual(common.tag_attrs_re(tag).findall(sample), [], f"{tag} vs {sample}")
+        # the real tag with any following boundary (space, newline, >, attr) still matches
+        for sample in ('<form>', '<form >', '<form\n>', '<form action="x">'):
+            self.assertTrue(common.tag_attrs_re('form').findall(sample), sample)
+        # consumer-level: the two headline fabrications are gone, real verdicts intact
+        import scan_page_security as psec, scan_design as design
+        self.assertEqual(
+            psec.check_form_actions('<form-field action="http://api/bind"></form-field>',
+                                    'https://s/', inconclusive=False)["verdict"], "info")
+        self.assertEqual(
+            psec.check_form_actions('<form action="http://api/bind"></form>',
+                                    'https://s/', inconclusive=False)["verdict"], "fail")
+        self.assertEqual(
+            design.check_image_dimensions('<img-comparison-slider a=b></img-comparison-slider>' * 3,
+                                          False)["verdict"], "info")
+        self.assertEqual(
+            design.check_image_dimensions('<img src="/a.jpg"><img src="/b.jpg">', False)["verdict"], "warn")
+
     def test_mixed_content_link_rel(self):
         # A <link> is mixed content only when its rel actually fetches a
         # subresource: an http stylesheet is active (fail), an http favicon is
@@ -763,6 +823,21 @@ class TestPerformanceChecks(unittest.TestCase):
         self.assertTrue(by_url["https://s.example/js/async-bundle.js"])    # path only
         self.assertTrue(by_url["https://s.example/vendor/asyncstore.js"])   # path only
         self.assertFalse(by_url["https://s.example/real.js"])              # real async attr
+
+    def test_script_blocking_ignores_async_defer_in_attribute_names(self):
+        # Q18: async/defer appearing inside a longer, unquoted attribute NAME
+        # (data-async-init, x-defer-load) must not read as a real async/defer
+        # boolean attribute, so the script still counts as render-blocking.
+        html = ('<script src="/a.js" data-async-init></script>'
+                '<script src="/b.js" x-defer-load></script>'
+                '<script src="/c.js" async></script>'
+                '<script src="/d.js" defer></script>')
+        by_url = {r["url"]: r["blocking"]
+                  for r in perf._script_resources(html, "https://s.example/")}
+        self.assertTrue(by_url["https://s.example/a.js"])   # data-async-init is not async
+        self.assertTrue(by_url["https://s.example/b.js"])   # x-defer-load is not defer
+        self.assertFalse(by_url["https://s.example/c.js"])  # real async attribute
+        self.assertFalse(by_url["https://s.example/d.js"])  # real defer attribute
 
     def test_collect_resources_dedupes_and_types(self):
         parsed = {"links": [{"rel": "stylesheet", "href": "/s.css"}, {"rel": "icon", "href": "/f.ico"}],
@@ -821,6 +896,48 @@ class TestTlsAndDns(unittest.TestCase):
         # a real scheme and a bare host are unchanged
         self.assertEqual(common.normalize_url("http://example.com"), "http://example.com")
         self.assertEqual(common.normalize_url("example.com"), "https://example.com")
+
+    def test_host_of_returns_empty_on_a_malformed_url(self):
+        # Q1: urlparse raises ValueError on an unclosed IPv6 literal; host_of must
+        # degrade to "" (hostless) rather than let the crash propagate to callers.
+        self.assertEqual(common.host_of("http://[::1/"), "")
+        self.assertEqual(common.host_of("http://[bad"), "")
+        # a normal host is unchanged
+        self.assertEqual(common.host_of("https://example.com/x"), "example.com")
+
+    def test_safe_urljoin_returns_none_on_a_malformed_url(self):
+        # Q14: the shared join helper returns None (not raise) on a malformed URL.
+        self.assertIsNone(common.safe_urljoin("https://x/", "http://[::1/"))
+        self.assertEqual(common.safe_urljoin("https://x/", "/a"), "https://x/a")
+
+    def test_page_scanners_survive_a_malformed_url_in_content(self):
+        # Q14: a malformed href/src/loc in target content (an unclosed IPv6 literal)
+        # must be skipped by each page scanner, not abort it - so one crafted element
+        # cannot suppress a whole page's findings or crash the standalone scanner.
+        base = "https://target.example/"
+        body = ('<html lang="en"><head><title>Real content page here now</title>'
+                '<link rel="canonical" href="http://[::1/">'
+                '<link rel="stylesheet" href="http://[::1/bad.css">'
+                '<link rel="stylesheet" href="https://good.example/ok.css"></head>'
+                '<body><h1>H</h1><p>' + ("word " * 80) + '</p>'
+                '<a href="http://[::1/">bad</a><a href="/about">good</a>'
+                '<script src="http://[::1/bad.js"></script>'
+                '<script src="https://cdn.example/ok.js"></script>'
+                '<img src="http://[::1/bad.png"><img src="https://img.example/ok.png">'
+                '</body></html>')
+        p = htmlmeta.page_from_snapshot(base, body)
+        p["render"]["likely_client_rendered"] = False
+        orig = common.http_fetch
+        common.http_fetch = lambda url, **k: {
+            "ok": True, "final_status": 200, "error": None, "final_url": url,
+            "final_headers": {}, "body": "", "body_bytes": 0, "uncompressed_bytes": 0,
+            "content_encoding": "", "hops": [{"url": url, "status": 200, "headers": {}}]}
+        try:
+            for mod in (links, perf, seo, privacy, psec, design):
+                r = mod._scan(base, page=p)  # must not raise ValueError
+                self.assertIn("checks", r, mod.__name__)
+        finally:
+            common.http_fetch = orig
 
     def test_spf_all_mechanism_is_a_token_not_a_substring(self):
         # The 'all' mechanism is a standalone term; a domain that merely
@@ -931,6 +1048,31 @@ class TestTlsAndDns(unittest.TestCase):
             common.tls_info, tls._probe_legacy, common.doh_query = orig_info, orig_probe, orig_doh
             tls.time.gmtime = orig_gmtime
 
+    def test_tls_connectivity_failure_is_not_measured_not_a_fabricated_poor(self):
+        # Q5: a transient connectivity error (timeout, DNS, refused) means the
+        # handshake could not be measured, so grade it info -> Not measured (like the
+        # header scanner), not a fabricated fail/Poor. A genuine SSL/cert error still
+        # fails.
+        orig_info, orig_probe, orig_doh = common.tls_info, tls._probe_legacy, common.doh_query
+        tls._probe_legacy = lambda host, *a, **k: {"verdict": "info", "note": "stub"}
+        common.doh_query = lambda name, rtype, *a, **k: {
+            "ok": True, "error": None, "answers": [], "raw": []}
+        try:
+            for err in ("TimeoutError: timed out", "gaierror: getaddrinfo failed",
+                        "ConnectionRefusedError: refused", "OSError: unreachable"):
+                common.tls_info = lambda h, *a, e=err, **k: {"ok": False, "error": e}
+                r = tls.scan("https://x/")
+                self.assertEqual(r.get("verdict"), "info", err)
+                self.assertEqual(r["grade"]["band"], "Not measured", err)
+            for err in ("SSLCertVerificationError: certificate has expired",
+                        "SSLError: WRONG_VERSION_NUMBER", "CertificateError: mismatch"):
+                common.tls_info = lambda h, *a, e=err, **k: {"ok": False, "error": e}
+                r = tls.scan("https://x/")
+                self.assertEqual(r.get("verdict"), "fail", err)
+                self.assertEqual(r["grade"]["band"], "Poor", err)
+        finally:
+            common.tls_info, tls._probe_legacy, common.doh_query = orig_info, orig_probe, orig_doh
+
 
 class TestScorecard(unittest.TestCase):
     def test_grade_bands(self):
@@ -955,6 +1097,23 @@ class TestScorecard(unittest.TestCase):
         self.assertEqual(common.grade(["pass"] * 4 + ["fail"] * 1)["band"], "Adequate")  # 0.80
         self.assertEqual(common.grade(["pass"] * 3 + ["fail"] * 2)["band"], "Weak")       # 0.60
         self.assertEqual(common.grade(["pass"] * 3 + ["fail"] * 7)["band"], "Poor")       # 0.30
+
+    def test_displayed_score_never_contradicts_its_band(self):
+        # P66: the shown score is truncated (not rounded up) so it never lands in a
+        # different band's range than its label. 9 pass / 4 warn = 0.84615: the old
+        # round(., 2) showed 0.85 (the Strong cutoff) beside an Adequate band; the
+        # truncated 0.84 stays in the Adequate range.
+        def band_of(s):
+            return ("Strong" if s >= 0.85 else "Adequate" if s >= 0.65
+                    else "Weak" if s >= 0.4 else "Poor")
+        for p, w, f in [(9, 4, 0), (5, 12, 0), (0, 19, 5), (11, 2, 0),
+                        (7, 3, 0), (3, 7, 0), (2, 0, 3), (10, 0, 0), (0, 0, 4)]:
+            g = common.grade(["pass"] * p + ["warn"] * w + ["fail"] * f)
+            self.assertEqual(band_of(g["score"]), g["band"],
+                             f"{p}p/{w}w/{f}f: score {g['score']} not in band {g['band']}")
+        # the specific regression: 9 pass / 4 warn shows 0.84 (not 0.85) with Adequate.
+        g = common.grade(["pass"] * 9 + ["warn"] * 4)
+        self.assertEqual((g["score"], g["band"]), (0.84, "Adequate"))
 
     def test_verdicts_of_prefers_checks_then_top_level(self):
         self.assertEqual(common.verdicts_of({"checks": {"a": {"verdict": "pass"},
@@ -1222,24 +1381,34 @@ class TestScannerCharter(unittest.TestCase):
 
     def test_scanners_import_only_stdlib_and_local(self):
         allowed, tools_dir = self._allowed()
+        # brotli is an explicitly-allowed OPTIONAL import (common.py guards it in a
+        # try/except, so the stdlib-only claim holds functionally); any OTHER
+        # third-party import is a violation. Q10: also scan the shared modules every
+        # scanner imports (common/htmlmeta/registry), not just scan_*.py, so a new
+        # REQUIRED third-party import in the shared core cannot ship green.
+        allowed = allowed | {"brotli"}
+        paths = sorted(tools_dir.glob("scan_*.py")) + [
+            tools_dir / m for m in ("common.py", "htmlmeta.py", "registry.py")]
         offenders = {}
-        for path in sorted(tools_dir.glob("scan_*.py")):
+        for path in paths:
             ext = self._external_imports(path, allowed)
             if ext:
                 offenders[path.name] = ext
         self.assertEqual(offenders, {},
-                         f"non-stdlib/non-local imports in scanners: {offenders}")
+                         f"non-stdlib/non-local imports in the scanner suite: {offenders}")
 
     def test_guard_would_catch_a_third_party_import(self):
-        # Prove the guard is not vacuous: a scanner that imported a third-party
-        # package would be flagged.
+        # Q17: prove the guard is not vacuous by calling the REAL _external_imports
+        # helper on a source with third-party imports - both "import X" and
+        # "from X import y" - so a regression in the helper (e.g. dropping the
+        # ImportFrom branch) fails this test. The old version reimplemented the
+        # check inline and could not detect a broken helper.
         allowed, tools_dir = self._allowed()
-        sample = next(tools_dir.glob("scan_*.py"))
-        import ast
-        tree = ast.parse("import requests\nimport common\n")
-        mods = {a.name.split(".")[0] for node in ast.walk(tree)
-                if isinstance(node, ast.Import) for a in node.names}
-        self.assertEqual(sorted(m for m in mods if m not in allowed), ["requests"])
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td) / "fake_scanner.py"
+            fake.write_text("import requests\nfrom flask import Flask\nimport common\n",
+                            encoding="utf-8")
+            self.assertEqual(self._external_imports(fake, allowed), ["flask", "requests"])
 
 
 class TestSharedFetchAndCrossPage(unittest.TestCase):
@@ -1256,6 +1425,24 @@ class TestSharedFetchAndCrossPage(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertEqual(r["checks"]["document_language"]["verdict"], "pass")
         self.assertEqual(r["checks"]["heading_order"]["verdict"], "pass")
+
+    def test_positive_tabindex_is_inconclusive_on_a_client_rendered_page(self):
+        # Q6: positive_tabindex must gate on likely_client_rendered like every other
+        # body-derived a11y check - a SPA shell's static tabindex count is not the
+        # real page, so it is info (not measured), never a pass on an unmeasured page.
+        def scan(html):
+            p = htmlmeta.parse_html(html)
+            render = htmlmeta.render_assessment(p, html)
+            ctx = {"url": "https://x/", "parsed": p, "render": render,
+                   "res": {"ok": True, "body": html, "final_url": "https://x/", "error": None}}
+            return a11y.scan("https://x/", page=ctx)["checks"]["positive_tabindex"]["verdict"]
+        # client-rendered shell -> info, matching empty_buttons
+        self.assertEqual(scan(SPA_SHELL), "info")
+        # a static page with a positive tabindex still warns; a clean one still passes
+        base = ('<html lang="en"><head><title>Real content page here now</title></head>'
+                '<body><h1>H</h1><p>Plenty of real body words here for the page.</p>{}</body></html>')
+        self.assertEqual(scan(base.format('<input tabindex="3">')), "warn")
+        self.assertEqual(scan(base.format('<input tabindex="0">')), "pass")
 
     def test_safe_scan_isolates_failures(self):
         def boom(*a, **k):
@@ -1416,6 +1603,47 @@ class TestDiscovery(unittest.TestCase):
         # the same-registrable-domain child (www) is still fetched
         self.assertIn("https://www.target.example/child2.xml", res["sitemaps_read"])
         self.assertNotIn("https://third-party.test/child.xml", res["sitemaps_read"])
+
+    def test_malformed_url_in_page_content_does_not_abort_discovery(self):
+        # Q1: a malformed URL the target serves (an anchor href, a sitemap <loc>)
+        # must be skipped, not crash the whole review run. The good links survive.
+        orig = common.http_fetch
+        home = ('<html lang="en"><head><title>Home page here now</title></head><body>'
+                '<a href="http://[::1/">bad ipv6</a><a href="/about">About</a></body></html>')
+        sitemap = ('<urlset><url><loc>http://[::1/x</loc></url>'
+                   '<url><loc>https://target.example/p1</loc></url></urlset>')
+
+        def stub(url, **k):
+            body = sitemap if "sitemap" in url else ("" if "robots" in url else home)
+            status = 200 if ("sitemap" in url or "robots" not in url) else 404
+            return {"ok": True, "final_status": status if body or "robots" not in url else 404,
+                    "final_url": "https://target.example/", "body": body, "error": None}
+        common.http_fetch = stub
+        try:
+            d = disco.discover("https://target.example/")  # must not raise
+        finally:
+            common.http_fetch = orig
+        # reaching here proves no crash; the good anchor and sitemap loc survive and
+        # the malformed ones are gone.
+        self.assertTrue(any(u.endswith("/about") for u in d["proposed_review_set"]))
+        self.assertFalse(any("[::1" in u for u in d["proposed_review_set"]))
+
+    def test_malformed_href_does_not_abort_the_crawl(self):
+        # Q1: the --crawl path must also skip a malformed href, not crash.
+        import crawler
+        orig = common.http_fetch
+        page = ('<html lang="en"><head><title>Home page here now</title></head><body>'
+                '<a href="http://[::1/">bad</a><a href="/a2">a2</a></body></html>')
+        common.http_fetch = lambda url, **k: {
+            "ok": True, "final_status": 200, "final_url": url, "body": page, "error": None}
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                c = crawler.crawl("https://target.example/", max_pages=3,
+                                  state_path=Path(td) / "state.json")  # must not raise
+        finally:
+            common.http_fetch = orig
+        self.assertGreaterEqual(len(c["pages"]), 1)
+        self.assertFalse(any("[::1" in u for u in c["pages"]))
 
 
 class TestPerfCompressionCaching(unittest.TestCase):
@@ -3505,6 +3733,18 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(c["counts"]["font"], 1)
         self.assertEqual(c["counts"]["marquee"], 1)
 
+    def test_deprecated_tag_regex_ignores_hyphenated_custom_elements(self):
+        # Q4: a custom element like <font-size-picker> must not false-match the
+        # deprecated <font> tag (\b matched at the name->hyphen boundary).
+        r = self._scan(body="<font-size-picker>x</font-size-picker><center-stage>y</center-stage>")
+        self.assertEqual(r["checks"]["deprecated_presentational_tags"]["verdict"], "pass")
+        # a real deprecated tag alongside a custom element is still counted
+        r2 = self._scan(body="<font-size-picker></font-size-picker><center>real</center>")
+        c2 = r2["checks"]["deprecated_presentational_tags"]
+        self.assertEqual(c2["verdict"], "warn")
+        self.assertEqual(c2["counts"].get("font"), None)  # the custom element is not "font"
+        self.assertEqual(c2["counts"]["center"], 1)
+
     def test_inline_style_density(self):
         few = self._scan(body='<div style="color:red">x</div>')
         self.assertEqual(few["checks"]["inline_style_density"]["verdict"], "pass")
@@ -3537,6 +3777,17 @@ class TestDesign(unittest.TestCase):
         css = "".join(f".c{i} {{ font-family: Font{i}; }}" for i in range(6))
         r = self._scan(head=f"<style>{css}</style>")
         self.assertEqual(r["checks"]["font_families"]["verdict"], "warn")
+
+    def test_font_families_ignore_custom_style_elements(self):
+        # Q13: a <style-guide> custom element between two real <style> blocks must
+        # not leak its inner font-family declarations into the counted typography
+        # (STYLE_BLOCK_RE matched \b at the style->hyphen boundary).
+        head = ('<style>body { font-family: Inter; }</style>'
+                '<style-guide>x { font-family: "Comic Sans"; }</style-guide>'
+                '<style>h1 { font-family: Georgia; }</style>')
+        c = self._scan(head=head)["checks"]["font_families"]
+        self.assertNotIn("comic sans", [f.lower() for f in c["families"]])
+        self.assertEqual(sorted(c["families"]), ["georgia", "inter"])
 
     def test_image_dimensions(self):
         good = self._scan(body='<img src="/a.png" width="10" height="10">')
@@ -4247,6 +4498,14 @@ class TestMainInputGuards(unittest.TestCase):
             sys.argv = orig
         return code, buf.getvalue()
 
+    def test_crawler_rejects_non_integer_max_pages(self):
+        # Q15: a non-integer max_pages must print the usage line and exit 1, not a
+        # raw ValueError traceback (matching run_review/capture_rendered/triage).
+        import crawler
+        code, out = self._run(crawler, ["crawler.py", "https://example.com", "abc"])
+        self.assertEqual(code, 1)
+        self.assertIn("Usage", out)
+
     def test_draft_report_data_rejects_non_dict(self):
         with tempfile.TemporaryDirectory() as td:
             bad = Path(td) / "scan.json"
@@ -4254,6 +4513,24 @@ class TestMainInputGuards(unittest.TestCase):
             code, out = self._run(drpt, ["draft_report_data.py", str(bad)])
         self.assertEqual(code, 1)
         self.assertIn("must be a JSON object", out)
+
+    def test_draft_report_data_rejects_invalid_json_syntax(self):
+        # Q9: a syntactically invalid scan file must give a clear "Invalid JSON"
+        # message and exit 1, not a raw JSONDecodeError traceback.
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "scan.json"
+            bad.write_text("{ this is not valid json ", encoding="utf-8")
+            code, out = self._run(drpt, ["draft_report_data.py", str(bad)])
+        self.assertEqual(code, 1)
+        self.assertIn("Invalid JSON", out)
+
+    def test_draft_report_data_rejects_a_directory_path(self):
+        # Q16: pointing the scan arg at a directory must give a clear message and
+        # exit 1 (is_file() gate), not a raw PermissionError traceback.
+        with tempfile.TemporaryDirectory() as td:
+            code, out = self._run(drpt, ["draft_report_data.py", td])
+        self.assertEqual(code, 1)
+        self.assertIn("not found", out)
 
     def test_capture_rendered_rejects_non_dict(self):
         orig = common.evidence_dir
@@ -4267,6 +4544,45 @@ class TestMainInputGuards(unittest.TestCase):
                 common.evidence_dir = orig
         self.assertEqual(code, 1)
         self.assertIn("must be a JSON object", out)
+
+    def test_capture_rendered_rejects_invalid_json_syntax(self):
+        # Q11: capture_rendered.main must give a clear "Invalid JSON" message and
+        # exit 1 on a syntactically invalid scan file, not a raw traceback (the Q9
+        # class in a third main that the Q9 fix did not reach).
+        orig = common.evidence_dir
+        with tempfile.TemporaryDirectory() as td:
+            common.evidence_dir = lambda: Path(td)
+            slug = common.slug_of("https://x.example/")
+            (Path(td) / f"{slug}_scan.json").write_text("{ this is not valid json ", encoding="utf-8")
+            try:
+                code, out = self._run(caprend, ["capture_rendered.py", "https://x.example/"])
+            finally:
+                common.evidence_dir = orig
+        self.assertEqual(code, 1)
+        self.assertIn("Invalid JSON", out)
+
+    def test_capture_rendered_reports_an_unreadable_scan_file(self):
+        # Q19: a present-but-unreadable scan.json (permission or lock) must give a
+        # clear "Could not read" message and exit 1, not a raw OSError traceback -
+        # matching build_exec_report / draft_report_data. The is_file() gate passes
+        # a file whose status is readable, so OSError surfaces at the read itself;
+        # stub read_text to raise it deterministically on any OS.
+        orig_ed = common.evidence_dir
+        orig_rt = Path.read_text
+        with tempfile.TemporaryDirectory() as td:
+            common.evidence_dir = lambda: Path(td)
+            slug = common.slug_of("https://x.example/")
+            (Path(td) / f"{slug}_scan.json").write_text("{}", encoding="utf-8")  # is_file() True
+            def boom(self, *a, **k):
+                raise OSError(13, "Permission denied")
+            Path.read_text = boom
+            try:
+                code, out = self._run(caprend, ["capture_rendered.py", "https://x.example/"])
+            finally:
+                Path.read_text = orig_rt
+                common.evidence_dir = orig_ed
+        self.assertEqual(code, 1)
+        self.assertIn("Could not read", out)
 
 
 class TestRunReview(unittest.TestCase):

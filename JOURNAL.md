@@ -5,464 +5,391 @@ changed, why, what was verified, and the single most useful next step.
 
 ---
 
+## 2026-07-05 - Q12: complete _as_rows across every builder-consumed list field
+
+**Task:** Q12 (High, deliverable crash). Q2 normalized findings/recommendations/action_plan but
+not the four other list fields the builder .get()s per item, so a hand-authored string list
+crashed the sole deliverable - and evidence (which draft() never emits, so it is purely
+hand-authored) was the most exposed.
+
+**What I did:** extended the _as_rows normalization at the top of build() to cover evidence
+(top-level, "caption") and the nested panel lists web_vitals.metrics ("label"), key_dates.items
+("label"), scorecard.rows ("category"), normalized in place so every consumer sees dicts.
+
+**Files changed:** build_exec_report.py (build() normalization), test_exec_report.py (extended
+test_string_list_report_fields_render_not_crash), BACKLOG.md (Q12 done), JOURNAL.md (this entry).
+No count change (extended a test).
+
+**Verification:** evidence / scorecard.rows / web_vitals.metrics / key_dates.items each as a
+string list build and render their text; the dict forms are unchanged. Builder 39, scanner 374
+green; guard in sync at 413.
+
+**Learnings:** Q2 fixed the three list fields I noticed; the full audit found the four I did not.
+The right closure for a normalize-at-the-boundary fix is to enumerate EVERY list field a consumer
+.get()s per item (grep "\.get(" over the render functions), not just the ones the draft emits -
+evidence, the field a human is most likely to reshape, was exactly the one the draft never
+produces, so it never appeared in my mental model of "the list fields".
+
+**Next:** Q13 (STYLE_BLOCK_RE \b-on-hyphen, the Q4 class in a third regex). Zero High; 5 Medium
+(+ 1 Low) remain. Not converged. No promise.
+
+## 2026-07-05 - Q13: end <style> with (?![-\w]) too, and confirm no other <tag\b remains
+
+**Task:** Q13 (Medium, wrong verdict). STYLE_BLOCK_RE used <style\b, so between two real <style>
+blocks a <style-guide> custom element opened a match whose body ran to the next real </style>,
+pulling its inner font-family declarations into the counted typography (a false over-count / a
+possible "typographic inconsistency" warn).
+
+**What I did:** STYLE_BLOCK_RE now uses <style(?![-\w])[^>]*>(.*?)</style>. Also swept every
+compiled scanner regex for a remaining <tag\b - STYLE_BLOCK_RE was the last (LOC_RE is bounded
+by <loc></loc>, and the <urlset/<sitemapindex checks are substring presence tests on XML roots,
+not \b regexes).
+
+**Files changed:** scan_design.py (STYLE_BLOCK_RE), test_review_tools.py (new
+test_font_families_ignore_custom_style_elements), README.md (count resync), BACKLOG.md (Q13
+done), JOURNAL.md (this entry).
+
+**Verification:** the phantom "Comic Sans" from a <style-guide> is no longer captured; <style>
+and <style type="text/css"> still match. Scanner 374 -> 375, all green; README resynced to 414
+(guard exit 0).
+
+**Learnings:** this is the third and final regex in the \b-on-hyphen class (Q4 fixed two, this
+the third). The Q8-run sweep grep <(tag|..)\b missed it because STYLE_BLOCK_RE is a SINGLE tag
+(<style\b), so the alternation pattern did not match - the sweep must match the general shape
+(<[a-z]+\b in a regex), not the specific shape I had just fixed. A class-completeness grep is
+only as complete as the pattern it searches for.
+
+**Next:** Q14 (page scanners' unguarded urljoin on target URLs). Zero High; 4 Medium (+ 1 Low)
+remain. Not converged. No promise.
+
+## 2026-07-05 - Q14: route every target-URL join through safe_urljoin across the page scanners
+
+**Task:** Q14 (Medium, crash on hostile input). The Q1 malformed-URL guard fixed discover/crawler
+but not the page scanners, so a malformed href/src/loc (http://[::1/) raised ValueError inside
+scan_links/performance/seo/privacy/page_security/design - contained by _safe_scan in a full run
+(honest, no fabricated pass) but wiping out 5-6 scanners' findings for the page and crashing the
+standalone scanner CLI.
+
+**What I did:** added common.safe_urljoin(base, url) (returns None on ValueError) and routed every
+target-controlled urljoin through it, skipping None: scan_links (_candidate_links, _fragment_check),
+scan_performance (script + stylesheet + image loops), scan_seo (_canonical_check -> info on a
+malformed canonical), scan_privacy (_external_resource_urls via a local _add, _tracking_pixels),
+scan_page_security (_cross_origin_resources x2), scan_design (stylesheet loop). host_of was already
+Q1-hardened, so the downstream urlparse/host_of on resolved URLs is safe.
+
+**Files changed:** common.py (safe_urljoin), scan_links/scan_performance/scan_seo/scan_privacy/
+scan_page_security/scan_design.py (13 call sites), test_review_tools.py (2 new tests), README.md
+(count resync), BACKLOG.md (Q14 done), JOURNAL.md (this entry).
+
+**Verification:** all six scanners on a page carrying malformed AND good href/src/loc/canonical:
+no crash, checks produced, the good URLs kept. Scanner 375 -> 377, all green; README resynced to
+416 (guard exit 0).
+
+**Learnings:** a shared safe_urljoin was the right shape over 13 scattered call sites - one helper
+to reason about (returns None), a uniform "skip None" at each site, versus 13 try/excepts. The Q1
+fix stopped at the two orchestration entrypoints because that is where the crash was REPRODUCED;
+the class actually lived in every scanner that resolves a target URL. Fix where the class is, not
+only where the first repro landed.
+
+**Next:** Q15 (crawler non-int max_pages traceback). Zero High; 3 Medium (Q15, Q16, Q17) + 1 Low
+remain. Not converged. No promise.
+
+## 2026-07-05 - Q15: guard crawler's max_pages arg like every sibling CLI
+
+**Task:** Q15 (Medium, CLI crash). crawler.main did int(args[1]) unguarded, so a non-integer
+max_pages raised a raw ValueError - unlike run_review/capture_rendered/triage, which all wrap
+their numeric-arg parse.
+
+**What I did:** wrapped the int() in try/except ValueError -> print the existing usage line +
+sys.exit(1).
+
+**Files changed:** crawler.py (main), test_review_tools.py (new
+test_crawler_rejects_non_integer_max_pages), README.md (count resync), BACKLOG.md (Q15 done),
+JOURNAL.md (this entry).
+
+**Verification:** crawler.py <url> abc -> "Usage: python crawler.py <url> [max_pages]" + exit 1,
+no traceback; no-args path unchanged. Scanner 377 -> 378 green; README resynced to 417 (guard
+exit 0).
+
+**Learnings:** the odd-one-out in a family of CLIs - four entrypoints wrapped their int()/float()
+parse and one did not. The Phase R audit found it by comparing siblings; the fix is to make the
+outlier match. Consistency across an entrypoint family is the same correctness property as
+consistency across a check family (Q6).
+
+**Next:** Q16 (build/draft main OSError on a directory path). Zero High; 2 Medium (Q16, Q17) + 1
+Low remain. Not converged. No promise.
+
+## 2026-07-05 - Q16: gate on is_file and catch OSError in the two JSON mains
+
+**Task:** Q16 (Medium, CLI crash). build_exec_report.main and draft_report_data.main gated on
+exists() (True for a directory) and caught only JSONDecodeError, so pointing the input at a
+directory (or an unreadable file) raw-tracebacked with a PermissionError/OSError - an
+inconsistency with capture_rendered.main which already uses is_file().
+
+**What I did:** both mains now gate on in_path.is_file() (a directory prints "not found" + exit 1
+without reaching read_text) and add an except OSError -> print f"Could not read {path}: {e}" +
+exit 1, kept distinct from the JSONDecodeError branch's "Invalid JSON" message so the Q9 tests
+still hold.
+
+**Files changed:** build_exec_report.py (main), draft_report_data.py (main), test_exec_report.py
++ test_review_tools.py (directory-path guard tests), README.md (count resync), BACKLOG.md (Q16
+done + Q19 filed), JOURNAL.md (this entry).
+
+**Verification:** a directory path -> "not found" + exit 1 (no traceback); invalid JSON still says
+"Invalid JSON"; a valid file still drafts/builds. Scanner 378 -> 379, builder 39 -> 40 green;
+README resynced to 419 (guard exit 0).
+
+**Replenishment (Q16-run check) - one Low found:** checked the Q16 class across all three JSON
+mains. capture_rendered.main already uses is_file() (so the directory case is covered) but catches
+only JSONDecodeError, not OSError - the same gap for a valid-but-unreadable scan file. Its scan
+path is DERIVED (not an arbitrary operator arg), so the trigger is much rarer than build/draft's;
+filed as Q19 (Low) for class consistency.
+
+**Next:** Q17 (the vacuous non-vacuity guard test). Zero High; 1 Medium (Q17) + 2 Low (Q18, Q19)
+remain. Not converged. No promise.
 ## 2026-07-05 - JOURNAL rotation
 
 **Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
 the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
 
-**What I did:** moved 6 entries verbatim to JOURNAL-archive.md:
-- 2026-07-05 - P39: coerce a non-string evidence code/image in the appendix
-- 2026-07-05 - P41: detect an http:// formaction downgrade, not just form action
-- 2026-07-05 - P44: fail on multiple SPF records (a permerror)
-- 2026-07-05 - P45: warn on the full-URL-leaking referrer policies
+**What I did:** moved 8 entries verbatim to JOURNAL-archive.md:
+- 2026-07-05 - Q2: normalize string-list report fields so the deliverable never crashes
+- 2026-07-05 - Q3: flag data:/blob: script-src scheme-sources (a CSP bypass)
+- 2026-07-05 - Q4: end the tag name with (?![-\w]), not \b, so custom elements do not false-match
 - 2026-07-05 - JOURNAL rotation
-- 2026-07-05 - P46: fail a cross-host canonical instead of grading presence
+- 2026-07-05 - Q5: grade a TLS connectivity failure Not measured, not a fabricated Poor
+- 2026-07-05 - Q6: gate positive_tabindex on inconclusive like its sibling checks
+- 2026-07-05 - Q7: coerce scope.method so a non-string cannot crash the cover
+- 2026-07-05 - Q8: normalize evidence highlight to a list of strings
 
 **Verification:** archive is append-only and unchanged above the move; JOURNAL.md
 now holds the preamble, the last 10 substantive entries, and this rotation note.
 No code or state logic touched.
 
-**Next:** P56 (scan_links fabricated mixed-content fail). No promise.
+**Next:** Q17 (the vacuous non-vacuity guard test). No promise.
 
-## 2026-07-05 - P56: ignore commented-out markup in the mixed-content scan
+## 2026-07-05 - Q17: make the non-vacuity guard test actually call the guard
 
-**Task:** P56 (Medium, fabricated security fail). _mixed_content ran MIXED_RE over the
-raw body, so an http:// script/iframe inside an HTML comment - which no browser fetches
-- was graded as active mixed content, fabricating a security vulnerability in the CEO
-report (the charter's cardinal sin).
+**Task:** Q17 (Medium, vacuous test). test_guard_would_catch_a_third_party_import - the test whose
+stated purpose is to prove the stdlib guard is not vacuous - reimplemented the import check inline
+and never called the real _external_imports, so it could not detect a broken helper (a refactor
+dropping the ast.ImportFrom branch would ship green).
 
-**What I did:** _mixed_content now strips HTML comments via a new _strip_comments helper
-before matching (both MIXED_RE and the <link> scan). _strip_comments is a LINEAR string
-scan (find "<!--", then "-->"), deliberately NOT a lazy <!--.*?--> regex: I measured
-that regex at 37s on 50k unclosed "<!--" (a ReDoS, the N6 class). Scoped to comments
-(the reproduced case); left <template>/<noscript> alone as rarer and more arguable.
+**What I did:** the test now writes a temp source with "import requests", "from flask import
+Flask", and "import common", and calls the REAL self._external_imports(fake, allowed), asserting
+["flask", "requests"] - exercising both the ast.Import and ast.ImportFrom branches.
 
-**Files changed:** scan_links.py (_strip_comments helper, applied in _mixed_content),
-test_review_tools.py (new test_mixed_content_ignores_commented_out_markup), README.md
-(count resync), BACKLOG.md (P56 done), JOURNAL.md (this entry).
+**Files changed:** test_review_tools.py (the test), BACKLOG.md (Q17 done), JOURNAL.md (this entry).
+No production code, no count change.
 
-**Verification:** a commented http script -> pass; a comment does not hide a real script
-after it -> fail; real uncommented script/img still fail/warn; 20k unclosed "<!--" stays
-under 1s (linear, not catastrophic). Scanner 355 -> 356, all green; README resynced to
-356/393 (guard exit 0); builder untouched.
+**Verification:** the test passes as shipped AND fails (1 failure) when _external_imports is
+neutered to return [], so it now genuinely catches a broken guard. Scanner 379 green; guard 419.
 
-**Learnings:** the obvious fix (a lazy comment regex) reintroduces the exact ReDoS the
-project already fixed once (N6). A resource's location in the DOM decides whether it is
-mixed content: inside a comment it is inert, so the check must model what a browser
-actually fetches, not what text appears in the source. When the safe pattern for
-"strip a delimited region" is a lazy regex, reach for a linear string scan instead.
+**Replenishment (Q17-run check) - clean:** swept for other tests that reimplement the function
+they claim to prove. The only inline ast.parse/ast.walk reimplementation WAS this test; the other
+"not vacuous" notes (the P60 gmtime guard, the Q14 scanner survival test, the perf cache-control
+assertion) exercise real code paths, not reimplementations. No findings filed.
 
-**Next:** P57 (a dangling aria-labelledby counts as a real accessible name). Three
-Medium and three Low remain, zero High. Not converged. No promise.
+**Next:** Q18 (render-blocking async substring, Low) then Q19 (capture_rendered OSError, Low).
+Zero High, ZERO MEDIUM now; 2 Low remain. When they clear the backlog empties and the certifying
+full audit re-runs. Not converged. No promise.
 
-## 2026-07-05 - P57: validate aria-labelledby references against the page ids
+## Iteration 12 - Q18: render-blocking async/defer matched as substring, not token (Low)
 
-**Task:** P57 (Medium, presence-not-value). _accessible_name returned "aria-labelledby"
-on mere presence of the attribute, so a control whose aria-labelledby points at a
-non-existent id (a typo, or a JS-generated id absent from the static DOM) graded as
-labeled - assistive tech gets no name, yet the report said "all controls labeled".
+**Task:** Q18. scan_performance._script_resources classified a script as non-blocking whenever the
+quote-stripped attribute string CONTAINED "async" or "defer" as a bare substring, so an unrelated
+attribute NAME like data-async-init or x-defer-load flipped a genuinely render-blocking script to
+non-blocking. Under-counts blocking scripts (never fabricates), so Low, but it is the last unfixed
+member of the "substring-on-structured-string" defect class the Phase Q/R audits kept reopening.
 
-**What I did:** _accessible_name now takes the page ids set and credits aria-labelledby
-only when at least one referenced id exists (it is a space-separated id list); a
-dangling reference falls through to the next name source (title/alt) or None. Scoped to
-aria-labelledby - the only reference-based name source here: aria-label is a literal
-string, label[for] was already validated (the control id must be in labels_for), and
-aria-describedby is a description not a name (never used by _accessible_name).
-_form_check passes set(parsed["ids"]).
+**Files changed:** scan_performance.py (added module-level ASYNC_ATTR_RE / DEFER_ATTR_RE =
+re.compile(r"(?<![-\w])async(?![-\w])" | "defer", re.I); line 57 now
+`not ASYNC_ATTR_RE.search(bare) and not DEFER_ATTR_RE.search(bare)`; kept the quote-strip so a
+src="async.js" value is still ignored). test_review_tools.py (added
+test_script_blocking_ignores_async_defer_in_attribute_names). BACKLOG.md, JOURNAL.md.
 
-**Files changed:** scan_accessibility.py (_accessible_name signature + aria-labelledby
-validation, _form_check call), test_review_tools.py (extended test_accessible_name and
-test_form_check with the new ids arg and dangling/resolved cases), BACKLOG.md (P57
-done), JOURNAL.md (this entry). No count change (extended existing tests).
+**Verification:** 7-case table - data-async-init and x-defer-load -> blocking True; real async,
+defer, async="" -> False; src="/async.js" value -> True; plain -> True: ALL PASS. New regression
+test green. Mutation check: reverting the two regexes to bare re.compile("async"|"defer") makes the
+new test fail (1 failure) - proves it is not vacuous. Full scanner suite 380 tests OK (was 379).
 
-**Verification:** a resolved aria-labelledby -> labeled/pass; a dangling one -> not
-labeled (falls through; form_labels fail); a title still names a control whose
-aria-labelledby dangles; existing labeled/unlabeled/placeholder cases unchanged. Scanner
-356, all green; README total 393 (guard exit 0); builder untouched.
+**Replenishment (Q18-class partial audit) - clean, zero findings:** swept every bare-substring
+membership test on a structured string across scan_*.py. Already token-safe (no change needed):
+cookie Secure/HttpOnly ("secure" in attrs where attrs is a ;-split LIST, scan_http_security:239),
+link rels ("stylesheet" in rels where rels is a SET, scan_links:162), inline-style props ("width"
+in props where props is a SET of property names split on ":", scan_design:178 - the docstring
+documents this same class fix), robots directives ("none"/"noindex" in a comma-split SET,
+scan_seo:80), CSP script-src/strict-dynamic/unsafe-eval (dict key / source-list membership).
+Inspected and cleared (no reproducible wrong verdict on realistic input, so filing would be a
+speculative Low the rubric forbids): "stylesheet" in a rel-VALUE string (scan_page_security:63,
+scan_design:127) and HSTS "preload"/"includesubdomains" substrings (scan_http_security:72-73) - no
+standard rel or HSTS token embeds those substrings, and the only exotic case (rel="stylesheet/less")
+yields at most a harmless extra row, never a flipped pass/fail. The substring-on-structured-string
+class is now genuinely closed.
 
-**Learnings:** an id reference is only as good as its target - the presence-not-value
-class in its cross-reference form. aria-label (a literal) and aria-labelledby (a
-pointer) look symmetric in the attribute list but are not: the pointer has to resolve.
-The other reference source, label[for], was already validated the same way (control id
-in labels_for), which is why only aria-labelledby leaked.
+**Learnings:** The class was one token-match away from closed the whole time - every other member
+had already been hardened (each carrying a docstring naming the fix), and only the async/defer perf
+site still used bare `in`. Lesson reaffirmed: match the general shape of the class (any structured
+string tested with a quoted literal via `in`), not just the shape that produced the last repro.
+Also: a "no findings" replenishment is a legitimate audit outcome - the evidence rule forbids
+manufacturing a speculative Low just to have something to file.
 
-**Next:** P58 (the image-dimension check accepts any "width" substring, so a
-max-width:100% responsive image false-passes the layout-shift check). Two Medium and
-three Low remain, zero High. Not converged. No promise.
-
-## 2026-07-05 - P58: grade image dimensions by declared property, not a width substring
-
-**Task:** P58 (Medium, substring-on-structured-data). The layout-shift check matched any
-style attribute containing the substring "width", so max-width:100%, min-width, and a
-bare percentage width (all reserve no vertical space) false-passed as "declares
-dimensions", hiding the exact CLS pattern the check exists to catch.
-
-**What I did:** replaced the substring STYLE_DIM_RE with STYLE_ATTR_RE (captures the
-style value) plus a _style_reserves_space helper that parses the CSS declarations by
-property NAME and reserves space only on aspect-ratio, or an explicit width AND height.
-So max-width/min-width (distinct property names) and a width with no height no longer
-count; the width/height HTML-attribute branch is unchanged.
-
-**Files changed:** scan_design.py (STYLE_ATTR_RE, _style_reserves_space helper,
-check_image_dimensions), test_review_tools.py (new
-test_style_dimensions_grade_properties_not_a_width_substring), README.md (count resync),
-BACKLOG.md (P58 done), JOURNAL.md (this entry).
-
-**Verification:** max-width:100% / min-width / width:100% / height:auto -> warn (missing
-dimensions); width:800px;height:600px / aspect-ratio / aspect-ratio+width / width+height
-HTML attrs -> pass. Scanner 356 -> 357, all green; README resynced to 357/394 (guard exit
-0); builder untouched.
-
-**Learnings:** substring-on-structured-data again, this time on CSS - "width" as a
-substring matches max-width and min-width, which are different properties that reserve
-no space. Parsing declarations by property name (split on ; then :) is the CSS analogue
-of the ';'-boundary tag parsing the DKIM/DMARC checks already use; the meaning lives in
-the property name, not in the character sequence.
-
-**Next:** P59 (any CAA record grades "restricts issuance", even an iodef-only record
-that restricts nothing). One Medium and three Low remain, zero High. Not converged. No
-promise.
-
-## 2026-07-05 - P59: grade CAA on the issue/issuewild tag, not mere presence
-
-**Task:** P59 (Medium, presence-not-value on DNS). check_caa graded pass on any CAA
-answer, so an iodef-only record (an incident-reporting contact that restricts nothing)
-was reported as "CAA restricts certificate issuance" though any public CA could still
-issue.
-
-**What I did:** added _restricts_issuance(record) - it reads the tag (second token of
-the "<flags> <tag> <value>" presentation format) and returns True only for
-issue/issuewild. check_caa passes only when at least one record restricts issuance (and
-the note lists only those); a CAA set with no issue/issuewild (iodef- or
-contactemail-only) grades info "present but no issue/issuewild, any public CA may still
-issue"; no CAA stays info.
-
-**Files changed:** scan_tls.py (_restricts_issuance helper, check_caa grading),
-test_review_tools.py (new test_caa_iodef_only_does_not_restrict_issuance), README.md
-(count resync), BACKLOG.md (P59 done), JOURNAL.md (this entry).
-
-**Verification:** iodef-only and contactemail-only -> info; issue and issuewild -> pass;
-iodef+issue -> pass naming only the issue record; no CAA -> info. Scanner 357 -> 358, all
-green; README resynced to 358/395 (guard exit 0); builder untouched.
-
-**Learnings:** the presence-not-value class on DNS again - a CAA answer's meaning is in
-its tag, and only issue/issuewild are restrictions; iodef/contactemail are present but
-inert. Same shape as the SPF/DKIM/DMARC tag parsing: read the structured field's tag,
-never grade the record's mere existence. This closes the last Medium of the P49-run
-replenishment.
-
-**Next:** the Low tail - P50 (viewport width=device-width), P55 (snapshot filename
-churn), P60 (far-future cert expiry crash). Zero High, zero Medium open. When the Low
-clear, the next iteration runs the full convergence audit that can certify done. Not
-converged. No promise.
-## 2026-07-05 - JOURNAL rotation
-
-**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
-the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
-
-**What I did:** moved 5 entries verbatim to JOURNAL-archive.md:
-- 2026-07-05 - P42: require a real hash token before crediting SRI
-- 2026-07-05 - P43: credit Expires and s-maxage as caching lifetimes
-- 2026-07-05 - P47: treat an empty DKIM p= as a revoked key
-- 2026-07-05 - P48: grade an absent Permissions-Policy as info, not a hard fail
-- 2026-07-05 - JOURNAL rotation
-
-**Verification:** archive is append-only and unchanged above the move; JOURNAL.md
-now holds the preamble, the last 10 substantive entries, and this rotation note.
-No code or state logic touched.
-
-**Next:** P50 (viewport width=device-width). No promise.
-
-## 2026-07-05 - P50: require width=device-width for a mobile-friendly viewport
-
-**Task:** P50 (Low, presence-not-value). The viewport check passed on any non-empty
-content, but Google's mobile-friendly criterion is width=device-width; a fixed-width
-viewport (content="width=1024") is present but not responsive.
-
-**What I did:** extracted _viewport_check(viewport) - absent -> fail (unchanged); a value
-containing width=device-width (space- and case-insensitive) -> pass "Responsive viewport
-set"; present but without it (width=1024, or a width-less value) -> warn "set but not
-responsive".
-
-**Files changed:** scan_seo.py (_viewport_check helper, viewport check now calls it),
-test_review_tools.py (new test_viewport_check), README.md (count resync), BACKLOG.md (P50
-done + P61-P63 filed), JOURNAL.md (this entry).
-
-**Verification:** width=device-width (incl. uppercase, with initial-scale) -> pass;
-width=1024 and initial-scale-only -> warn; None/"" -> fail. Scanner 358 -> 359, all green;
-README resynced to 359/396 (guard exit 0); builder untouched.
-
-**Learnings:** presence-not-value once more, and the last of the P41-run Low tail's
-grading fixes - "has a viewport" is not "is responsive"; the value that matters is the
-width=device-width directive.
-
-**Replenishment (P50-run partial audit):** completing P50 left two open (below three), so
-I audited the least-recently-scored DIMENSIONS - documentation accuracy, test-suite
-integrity, and the aggregator/CLI orchestration (the prior four rounds swept the code). An
-auditor swept them read-only; I reproduced every finding myself. The orchestration layer
-and the doc counts/defaults were clean. Filed P61 (Medium: TestBuildMainInputGuard lacks
-the skipUnless(HAVE_DOCX) guard its siblings carry, so without python-docx its 5 tests
-error with NameError instead of skipping, contradicting the module docstring's "Skipped
-entirely" - reproduced with docx blocked: errors 5, skipped 0), P62 (Low: two inaccurate
-README statements - network isolation is not "suite-wide", and "Both test suites" should
-be three), and P63 (Low: the cover-contents "in_order" test checks membership, not order).
-
-**Next:** P61 (the missing skipUnless guard), the one new Medium. One Medium and four Low
-now open, zero High. The docs/tests dimension sweep surfaced a Medium, so convergence is
-not yet reachable. Not converged. No promise.
-
-## 2026-07-05 - P61: guard TestBuildMainInputGuard on python-docx like its siblings
-
-**Task:** P61 (Medium, misleading docs + broken skip path). TestBuildMainInputGuard
-lacked the @unittest.skipUnless(HAVE_DOCX, ...) decorator its three sibling classes
-carry, and its 5 tests reference ber (bound only under `if HAVE_DOCX:`), so without
-python-docx they raised NameError instead of skipping - contradicting the module
-docstring's "Skipped entirely when python-docx is not installed".
-
-**What I did:** added @unittest.skipUnless(HAVE_DOCX, "python-docx not installed") above
-the class, matching TestExecReport/TestTrendSection/TestReportLabel.
-
-**Files changed:** test_exec_report.py (one decorator), BACKLOG.md (P61 done), JOURNAL.md
-(this entry). No code or count change (a decorator, not a new test method).
-
-**Verification:** with the docx import blocked, the class's 5 tests SKIP (errors 0,
-skipped 5), no NameError; with docx present the full builder suite runs and passes (37).
-TestBuilderDependencies stays unguarded by design - it reads requirements.txt to assert
-the deps are declared, so it must run without docx. Scanner 359 and README total 396
-unaffected (guard exit 0).
-
-**Learnings:** a skip guard is load-bearing infrastructure, not a formality - a test
-class that references a conditionally-imported symbol MUST carry the same guard as the
-import, or the "optional dependency" contract breaks exactly for the contributor the
-option exists to serve. The docstring was the tell: it promised a behavior the newest
-class did not honor.
-
-**Next:** the Low tail - P55 (snapshot filename churn), P60 (far-future cert expiry
-crash), P62 (two inaccurate README statements), P63 (vacuous cover-order test). Zero
-High, zero Medium open. When the Low clear, the next iteration runs the full convergence
-audit that can certify done. Not converged. No promise.
-
-## 2026-07-05 - P55: reuse a DOM page's snapshot filename across runs
-
-**Task:** P55 (Low, determinism/disk hygiene). taken is seeded from the manifest, which
-already holds a refreshed URL's own filename, so snapshot_filename allocated a NEW name
-each run - the file oscillated (home.html -> home-2.html -> home.html) and each run
-orphaned the prior snapshot on disk. The deliverable stayed correct (scan_site reads the
-manifest-referenced file), so this was internal evidence hygiene.
-
-**What I did:** the DOM-snapshot branch now reuses manifest["pages"][url]["file"] when
-the URL already has an entry, and calls snapshot_filename only for a URL new to the
-manifest, so a refresh keeps its slot.
-
-**Files changed:** capture_rendered.py (snapshot filename reuse), test_review_tools.py
-(new test_refreshing_a_dom_page_reuses_its_snapshot_filename), README.md (count resync),
-BACKLOG.md (P55 done), JOURNAL.md (this entry).
-
-**Verification:** capturing the same DOM page three times -> one stable filename, exactly
-one .html on disk (no orphan); the distinct-page and manual-merge tests still pass, so
-genuinely new URLs still get distinct names. Scanner 359 -> 360, all green; README
-resynced to 360/397 (guard exit 0); builder untouched.
-
-**Learnings:** an idempotency bug hidden by a correct-enough output - the report read the
-manifest's current file, so the churn only showed as orphaned files and run-to-run
-filename drift. Seeding a uniqueness set from state that already contains the item you
-are about to re-key is the trap: allocate a new key only for genuinely new items, reuse
-the existing key otherwise.
-
-**Next:** P60 (a far-future cert notAfter crashes gmtime on Windows, aborting the TLS
-scan). Zero High, zero Medium; three Low remain (P60, P62, P63). Not converged. No
-promise.
-
-## 2026-07-05 - P60: guard far-future cert-expiry formatting against a gmtime crash
-
-**Task:** P60 (Low, uncaught crash). time.strftime(time.gmtime(expiry_epoch)) raises
-OSError on Windows for a notAfter past ~year 3000, uncaught in _scan, aborting the whole
-TLS scan.
-
-**What I did:** wrapped the strftime/gmtime call in try/except (OSError, ValueError,
-OverflowError); on failure expires_on is set to None (the display date is dropped, never
-fabricated) and days_left - plain arithmetic in _parse_not_after, not gmtime - still
-drives the verdict.
-
-**Files changed:** scan_tls.py (guarded expires_on formatting), test_review_tools.py (new
-test_far_future_cert_expiry_does_not_abort_the_scan), README.md (count resync), BACKLOG.md
-(P60 done + P64-P66 filed), JOURNAL.md (this entry).
-
-**Verification:** notAfter year 9999 -> scan ok, expiry pass (huge days_left),
-expires_on None; a 2027 cert still formats "2027-08-29"; an expired 2020 cert still fails.
-Scanner 360 -> 361, all green; README resynced to 361/398 (guard exit 0); builder
-untouched.
-
-**Learnings:** degrade the derived DISPLAY value, keep the load-bearing computation -
-days_left (arithmetic) is robust where gmtime (a platform C call) is not, so the verdict
-survives even when the pretty date cannot be formatted. Dropping expires_on to None is
-honest (no fabricated date); crashing the category was not.
-
-**Replenishment (P60-run partial audit):** completing P60 left two open (below three), so
-I audited the cross-cutting NUMERIC core - the scorecard rollup, band thresholds, and
-trend/delta math - where a wrong number is a wrong deliverable. An auditor swept it
-read-only; I reproduced every finding myself. Medians, quarter bucketing, the grouped
-multi-page diff identity, and every guarded division were sound. Filed P64 (Medium: a
-crashed scanner leaves the overall band Strong/1.0 and draft() drops the crash entirely -
-reproduced: tls scanner ok=False + all else passing -> overall Strong, crashed tool absent
-from report data; a gap in P7, which surfaces the crash in the digest/console but not the
-docx), P65 (Medium: diff_issues keys on verdict, so a warn->fail defect is counted 1 new
-AND 1 resolved and named "resolved" though it worsened - reproduced), and P66 (Low: band
-from the unrounded score but the rounded score is displayed, so a boundary row shows e.g.
-"Adequate (score 0.85)" with 0.85 being the Strong cutoff).
-
-**Next:** P64 (crashed scanner -> uncaveated Strong headline), the higher-impact new
-Medium (a single-scanner crash is common). Two Medium and three Low now open, zero High.
-The numeric-core sweep reopened Medium findings, so convergence is further off, correctly.
+**Next:** Q19 (capture_rendered.main lacks an OSError catch on its derived scan read, Low) - the
+last open task. When it clears the backlog empties and the certifying FULL convergence audit
+re-runs (rescoring every dimension with fresh evidence). Zero High, ZERO Medium, 1 Low remains.
 Not converged. No promise.
+
+## Iteration 13 - Q19: capture_rendered.main missing OSError catch + README count drift (Low)
+
+**Task:** Q19. capture_rendered.main gated its derived scan read on is_file() and caught
+JSONDecodeError, but a present-but-unreadable scan.json (permission or lock) still raw-tracebacked
+with an uncaught OSError, unlike build_exec_report / draft_report_data.main which catch it. Last
+open member of the "third json main lacks the OSError catch" consistency gap opened in Q16.
+
+**Files changed:** capture_rendered.py (added `except OSError as e: print(f"Could not read
+{scan_path}: {e}"); sys.exit(1)` after the JSONDecodeError catch; the two are disjoint -
+json.JSONDecodeError subclasses ValueError, never OSError, so no ordering hazard).
+test_review_tools.py (added test_capture_rendered_reports_an_unreadable_scan_file in
+TestMainInputGuards - stubs Path.read_text to raise OSError while the file's is_file() passes,
+asserts "Could not read" + exit 1). README.md (test-count resync, see partial audit below).
+BACKLOG.md, JOURNAL.md.
+
+**Verification:** new test green in isolation and in the full run. Mutation check: temporarily
+stripping the except-OSError branch makes the test error on the uncaught OSError (proves it
+exercises the new branch), then restored verbatim. Full scanner suite 381 tests OK (was 380);
+builder suite OK; py_compile clean across every tool.
+
+**Replenishment (partial audit - documentation + dependency hygiene) - one real finding, fixed:**
+Ran the full deterministic battery (scanner 381, builder 40, stdlib-charter test, py_compile) all
+green. Probed two least-recently-scored dimensions:
+- Documentation honesty: check_readme_counts.py reported DRIFT - the committed README still claimed
+  scanner 363 / builder 37 / 400 total while the working tree is now 381 / 40 / 421. The README was
+  never updated across the entire Q and R phase of test additions, so the CI count guard would fail
+  on the next push. Fixed with `check_readme_counts.py --fix`; git diff confirms ONLY the six count
+  tokens changed (badge, summary line, both suite comments, total, file-tree annotation); guard now
+  exits 0. Medium-flavoured (misleading docs + would break CI) but caught and closed inside this
+  iteration as the honest completion of the test-count-changing work, so it opens no backlog task.
+- Dependency hygiene: the stdlib-only charter test passes (no scanner imports anything third-party);
+  requirements.txt still scopes python-docx + matplotlib to the report builder alone. Clean.
+
+**Learnings:** Adding or removing a test silently drifts the README, and the drift is invisible
+until check_readme_counts.py runs - it accreted across ~18 test additions unnoticed because no
+iteration ran the guard. Lesson: any iteration that changes a suite's test count must run the count
+guard as part of its own verification, not leave it for a future push. The guard did its job the
+moment it was invoked; the gap was process, not tooling. Also reaffirmed: a "no findings" claim is
+only as good as the evidence command behind it - the drift would have stayed hidden behind a
+confident "docs look fine" eyeball.
+
+**Next:** BACKLOG.md now has ZERO open tasks - every Phase R (and prior) finding is closed. The
+next iteration triggers the certifying FULL convergence audit per the Method: a single pass that
+rescores every applicable dimension against the severity rubric with fresh evidence. Only if it
+finds zero High and zero Medium does the Definition of done hold and the promise fire. Current
+standing: zero High, ZERO Medium, zero Low open. Not yet converged - the full certifying audit has
+not run since the backlog emptied. No promise this turn.
+
+## Iteration 14 - Phase S: seventh FULL convergence audit (backlog was empty)
+
+**Task:** Backlog empty, so per the Method this was the certifying full convergence audit that can
+prove the Definition of done. It did NOT converge.
+
+**Method / fresh evidence:** Fresh deterministic battery first - scanner 381, builder 40, charts 8
+all OK on py3.13; README count guard in sync; py_compile clean across every module. Then four
+independent adversarial general-purpose auditors, one per dimension slice (A scanner grading, B
+report pipeline, C orchestration/trend, D tests/docs/deps/compat/security), each told to reproduce
+before reporting and to declare "none" rather than manufacture. I then reproduced every High/Medium
+candidate myself with a direct call before filing (trust but verify).
+
+**Files changed:** BACKLOG.md (new Phase S section, S1-S9), JOURNAL.md. No source changed - an
+empty-backlog iteration audits and files, it does not fix.
+
+**Findings (all reproduced by me):**
+- S1 HIGH - fabricated verdict. The SHARED `tag_attrs_re` factory (common.py:42) still uses `\b`,
+  so hyphenated custom elements are parsed as their bare-tag prefix across every consumer. My repro:
+  check_form_actions on a page whose only form-like tag is `<form-field action="http://...">`
+  returns verdict "fail" with a fabricated insecure-form-action (there is no <form>); check_image_
+  dimensions on `<img-comparison-slider>`*3 returns "warn" for 3 dimensionless images (there are
+  zero real <img>). A CEO report would carry a false SECURITY failure and false CLS warnings for any
+  site using web components. This is the SAME \b-on-hyphen class the Q/R audits "closed" in the
+  LOCAL regexes (MIXED_RE, DEPRECATED_RE use `(?![-\w])`) - but every prior sweep audited those
+  leaf regexes and never the factory they all delegate to.
+- S2 MEDIUM - scan_links retries GET only on HEAD status (405,501,None), so a HEAD-5xx/GET-200
+  server yields a fabricated "broken" link. My repro: guard is `status in (405,501,None)`,
+  `_classify(500)`->"broken".
+- S3 MEDIUM - builder renders a bare string given to a list field (quick_wins / strengths /
+  weaknesses) as one bullet PER CHARACTER, exit 0. My repro: quick_wins="Add HSTS" -> 8 char bullets.
+- S4 MEDIUM - builder raw-tracebacks (AttributeError) on a non-dict scorecard/progress/web_vitals/
+  key_dates/assessment. My repro: scorecard=[{...}] -> 'list' object has no attribute 'get' at :902.
+- S5 MEDIUM - builder raw-tracebacks (ValueError/OverflowError) on a NaN/Infinity score, which
+  json.loads accepts by default. My repro: score:NaN -> cannot convert float NaN to integer at :740.
+- S6-S9 LOW - DNS absence-on-failed-lookup note text; CSP first-header-wins vs browser intersection;
+  charter guard glob narrower than the zero-dep claim; draft _page_list ">N more" truncation (the
+  documented crawl-only ceiling, filed for rule-consistency).
+
+**Audit scores (rescored this pass, highest finding severity per dimension):**
+- Correctness: HIGH (S1 fabricated security/CLS verdict; S2 fabricated broken-link).
+- Error handling: MEDIUM (S4, S5 raw tracebacks where a clean message is the contract).
+- Code quality / UX of the deliverable: MEDIUM (S3 silent per-char corruption of the report).
+- Testing: LOW (S8 guard glob; no vacuous tests - Slice D neuter-proved the security tests and
+  found zero tautologies).
+- Security (of the tool itself): NONE (Slice D: no eval/exec/pickle/shell; slug scrub blocks
+  traversal; redirects bounded; CrUX key never leaks into output - reproduced).
+- Documentation: NONE (prose, commands, flags, and prose counts all match code; guard passes).
+- Dependency hygiene: NONE (stdlib-only confirmed by full AST scan; pins sane; 3.10.19 ran all
+  suites green).
+- Performance / Architecture / Developer experience / Observability: NONE found this pass.
+- Overall: HIGH. NOT CONVERGED (1 High, 4 Medium, 4 Low).
+
+**Learnings:** The "class-completeness" trap struck a seventh time and it is now a clear pattern:
+when a defect class is fixed leaf-by-leaf (each local regex), the SHARED FACTORY those leaves are
+supposed to be replaced by is the one site no lens ever revisits - it looks like infrastructure, not
+a check. The durable rule: when you fix a class in N call sites, grep for the common HELPER/FACTORY
+they share and fix (and test) it there, then delete the leaf workarounds; a leaf-only fix leaves the
+factory as a latent regression generator. S1 also shows why the DoD demands an INDEPENDENT full
+audit with fresh eyes - six prior audits plus my own narrow sweeps all missed common.py:42 because
+they trusted the leaf fixes and never re-derived the class from the factory.
+
+**Next:** Iteration 15 (the budget's last) executes S1 - the top item and the only High - fixing
+tag_attrs_re to `(?![-\w])`, adding a shared-helper custom-element regression test, and confirming
+every consumer is correct. The four Medium (S2-S5) and four Low will remain open at budget end;
+that is the honest state, since the budget is the hard stop and one High-priority fix is one
+iteration's work. NOT converged. No promise - there is a live High and four Medium.
+
 ## 2026-07-05 - JOURNAL rotation
 
-**Task:** housekeeping. JOURNAL.md passed the 500-line rotation threshold, so
-the oldest entries move to JOURNAL-archive.md and the last 10 stay here.
+Rotated at >500 lines: moved the oldest 5 entries (2026-07-05 - Q9: a clear message, not a raw traceback, on invalid JSON input through 2026-07-05 - Phase R: second full convergence audit (NOT converged - 1 High, 6 Medium)) to JOURNAL-archive.md, kept the last 10 in JOURNAL.md. History is preserved, not rewritten. Standing after the Phase S audit: 1 High (S1), 4 Medium (S2-S5), 4 Low (S6-S9) open; NOT converged.
 
-**What I did:** moved 5 entries verbatim to JOURNAL-archive.md:
-- 2026-07-05 - P51: fetch only same-domain sitemaps in discover_pages
-- 2026-07-05 - P52: gate the CWV strength on a complete field capture
-- 2026-07-05 - P53: recover the body when an unclosed title swallows it
-- 2026-07-05 - P54: coerce the last two non-string scalars in the builder
-- 2026-07-05 - P49: require a dotted version before the version-banner warn
+## Iteration 15 - S1: kill the fabricated verdict at the shared tag_attrs_re factory (High)
 
-**Verification:** archive is append-only and unchanged above the move; JOURNAL.md
-now holds the preamble, the last 10 substantive entries, and this rotation note.
-No code or state logic touched.
+**Task:** S1, the only High from the Phase S audit and the last iteration in the budget. The shared
+`tag_attrs_re` factory (common.py:42) ended the tag name with `\b`, which matches at the
+name->hyphen joint, so every consumer parsed a hyphenated custom element as its bare-tag prefix and
+fabricated a verdict for a tag that was not present.
 
-**Next:** P64 (crashed scanner -> uncaveated Strong headline). No promise.
+**Files changed:** common.py (tag_attrs_re: `r"<%s\b%s>"` -> `r"<%s(?![-\w])%s>"`, with a docstring
+naming the class and the sibling leaf regexes it mirrors). test_review_tools.py (added
+test_shared_tag_attrs_re_ignores_hyphenated_custom_elements). README.md (count resync 381->382).
+BACKLOG.md (S1 done), JOURNAL.md (this entry).
 
-## 2026-07-05 - P64: surface a scanner crash in the deliverable and caveat the headline
+**Verification:** factory returns [] for <form-field>, <img-comparison-slider>, <script-loader>,
+<a-scene>, <link-preview>, <iframe-embed>; still matches <form>, <form >, <form\n>, <form attr=x>.
+Consumer level: check_form_actions on a <form-field>-only page -> "info" (honest "no forms", not the
+fabricated "fail"); a real insecure <form> still -> "fail"; check_image_dimensions on
+<img-comparison-slider>*3 -> "info" (no images, not the fabricated "warn"); a real dimensionless
+<img> still -> "warn" with the right count. New test is a FACTORY-level guard so no present-or-future
+consumer reinherits the class; mutation check: reverting to `\b` fails it. Full battery: scanner 382
+(was 381), builder 40, charts 8 all green; README guard exit 0 at 422; py_compile clean.
 
-**Task:** P64 (Medium, unmeasured-reported-as-clean at the overall level). build_scorecard
-forces a crashed scanner's CATEGORY to Not measured (P7) but grades the OVERALL band from
-the surviving categories and only bolts on an errors key; draft() then dropped
-scanner_errors and the errors keys, so the CEO deliverable read "Strong" with no trace of
-which category went unmeasured.
+**Learnings:** the fix that closes a leaf-by-leaf defect class for good is to fix the SHARED FACTORY
+and test AT the factory, not at one consumer - a consumer-level test would have protected only
+scan_page_security or scan_design while the other four consumers stayed exposed. This is the
+counterpart to the Phase S finding: the class stayed open for seven audits because it was fixed at
+the leaves and tested at the leaves, so the factory was never in any test's blast radius. Now it is.
 
-**What I did:** fixed in the data layer (draft_report_data), which the builder already
-renders. _scorecard now carries scan["scanner_errors"] into the report data as
-scorecard.scanner_errors, and bottom_line - the executive callout the builder renders
-verbatim - gains a caveat clause when any scanner errored ("N scanner(s) could not
-measure their category (<tools>), so this posture covers only the measured categories").
-No new builder element: the per-category Not-measured row from P7 already shows in the
-table, and the headline now explains it.
-
-**Files changed:** draft_report_data.py (_scorecard scanner_errors passthrough,
-bottom_line caveat), test_review_tools.py (new test_scanner_crash_is_surfaced_and_
-caveats_the_headline), README.md (count resync), BACKLOG.md (P64 done), JOURNAL.md (this
-entry).
-
-**Verification:** a tls-category crash + all else passing -> report data names scan_tls in
-scorecard.scanner_errors and bottom_line reads "...Strong...; 1 scanner(s) could not
-measure their category (scan_tls), so this posture covers only the measured categories";
-the no-crash base SCAN has empty scanner_errors and no caveat. Scanner 361 -> 362, builder
-37 green (the new key is inert to the builder); README resynced to 362/399 (guard exit 0).
-
-**Learnings:** P7 stopped the fabrication one layer too early - it corrected the category
-band and the internal digest/console but not the deliverable's headline, so the overall
-recovered a false clean. Fixing the data layer was enough because bottom_line is already
-rendered verbatim; the cheapest honest fix routes the caveat through an existing surface
-rather than adding a new one.
-
-**Next:** P65 (a warn->fail defect counted as both resolved and new in the trend delta).
-One Medium and three Low remain, zero High. Not converged. No promise.
-
-## 2026-07-05 - P65: key the issue delta on (scan, check), not the verdict
-
-**Task:** P65 (Medium, false improvement claim). diff_issues keyed the grouped identity
-on (scan_label, check, verdict), so a defect that worsened warn->fail produced two
-distinct keys - the fail counted "new" and the warn counted "resolved" - and the trend
-section named the still-present, now-worse defect as resolved.
-
-**What I did:** dropped the verdict from the key: diff_issues now keys on
-(scan_label, check) only, so a verdict change (warn<->fail) is the same persistent defect
-and is neither new nor resolved. Kept it minimal (no separate "worsened" bucket); the
-docstring now explains why the verdict is excluded.
-
-**Files changed:** scan_site.py (diff_issues key + docstring), test_review_tools.py (new
-test_diff_issues_treats_a_verdict_change_as_persistence), README.md (count resync),
-BACKLOG.md (P65 done), JOURNAL.md (this entry).
-
-**Verification:** warn->fail and fail->warn -> 0 new / 0 resolved; a genuinely gone defect
--> 0/1; a genuinely new one -> 1/0; the existing new/resolved and defects-not-pages diff
-tests still pass. Scanner 362 -> 363, all green; README resynced to 363/400 (guard exit
-0); builder untouched.
-
-**Learnings:** identity is what you compare by, and the verdict is a property OF a defect,
-not part of WHICH defect it is - folding a mutable attribute into an identity key turns
-every change of that attribute into a delete-plus-create. The grouped-finding view the
-report shows already treats a defect as one thing across verdicts; the delta had to match
-that identity or it would contradict the findings table.
-
-**Next:** the Low tail - P62 (two inaccurate README statements), P63 (vacuous cover-order
-test), P66 (band vs rounded-score boundary). Zero High, zero Medium open. When the Low
-clear, the next iteration runs the full convergence audit that can certify done. Not
-converged. No promise.
-
-## 2026-07-05 - P62: correct two inaccurate README statements
-
-**Task:** P62 (Low, misleading docs). README.md:239 claimed network primitives are stubbed
-"suite-wide so no test can ever reach a real network", but only http_post_json/env_value/
-rdap_domain are stubbed at import; http_fetch/tls_info/doh_query are per-test. README.md:261
-said "Both test suites" though CI runs three plus the count guard.
-
-**What I did:** reworded :239 to name what is stubbed suite-wide (the CrUX call, the
-credential reader, RDAP) versus per-test (HTTP fetch, TLS, DoH), dropping the overstated
-"no test can ever"; changed :261 to "All three test suites + README-count guard".
-
-**Files changed:** README.md (two lines), BACKLOG.md (P62 done + P63... no new findings),
-JOURNAL.md (this entry). Documentation-only, no code/test/count change.
-
-**Verification:** ci.yml confirmed to run test_review_tools, test_exec_report,
-test_report_charts, and check_readme_counts.py (so "three suites + guard" is accurate); the
-stubbing description matches what is patched suite-wide vs per-test. Count guard still in
-sync (400 total; prose edits do not touch counts).
-
-**Replenishment (P62-run partial audit):** completing P62 left two open (below three), so I
-audited the least-covered remaining layer - the plumbing: the registry, the contract
-finalizer (finalize/verdicts_of/grade), the CONCURRENCY (the ThreadPoolExecutor fan-out in
-scan_links/scan_performance and the reference-counted fetch cache), and the pipeline glue.
-An auditor swept it read-only and found ZERO reproducible defects; I re-verified the two
-highest-value claims myself - _FETCH_CACHE_LOCK guards every cache access, and a worker
-exception PROPAGATES out of scan_links.scan (recorded by _safe_scan as an errored scanner,
-now surfaced post-P64, never a fabricated clean pass). Cache integrity under 40 threads,
-deterministic output under a racy network, and a balanced cache lifecycle across the nested
-run all held. No findings filed - a clean partial audit is a valid outcome, and I did not
-manufacture marginal ones to pad the backlog.
-
-**Next:** P63 (the cover-contents "in_order" test checks membership, not order). Zero High,
-zero Medium; two Low remain (P63, P66). Not converged. No promise.
-
-## 2026-07-05 - CI portability fix: the P60 test asserted a Windows-only outcome
-
-**Task:** post-push CI triage. GitHub Actions on cf8fe5b went red on both Ubuntu legs
-(py3.10 + py3.13) while both Windows legs passed - a platform split that pointed straight
-at the P60 change. The P60 test asserted expires_on IS None for a far-future (year 9999)
-cert, which only holds on Windows, where time.gmtime raises OSError past ~year 3000; on
-Linux (64-bit time_t) gmtime formats "9999-12-31", so assertIsNone failed.
-
-**What I did:** rewrote test_far_future_cert_expiry_does_not_abort_the_scan to be
-platform-agnostic and to cover the guard deterministically: it stubs tls.time.gmtime to
-raise (forcing the except branch on any OS -> expires_on None, scan still grades), and on
-the real far-future date it asserts only the invariant (scan ok, expiry pass, expires_on
-None-or-str). A normal 2027 cert still formats "2027-08-29" everywhere. The production
-guard (the try/except in scan_tls) was already correct on both platforms; only the test
-over-asserted a Windows implementation detail.
-
-**Files changed:** test_review_tools.py (the P60 test), BACKLOG.md (P60 follow-up note),
-JOURNAL.md (this entry). No production-code change.
-
-**Verification:** all three suites green locally on Windows (scanner 363, builder 37,
-report-charts 8; guard in sync). The forced-raise branch now exercises the guard on Linux
-too, and the far-future assertion accepts either platform's expires_on.
-
-**Learnings:** "tested on Windows, green" is not "cross-platform green" - a test that
-asserts the RESULT of a platform-specific failure (gmtime raising) bakes the platform into
-the assertion. The durable fix is to force the failure mode under test explicitly (stub
-the raising call) rather than rely on the host OS to produce it, so the guard is covered
-on every matrix cell. CI caught exactly the gap a Windows-only local run could not.
-
-**Next:** resume the loop at P63. Zero High, zero Medium; two Low remain. Not converged.
-No promise.
+**Next:** BUDGET EXHAUSTED - this was iteration 15 of 15, the hard stop. S1 (the one High) is fixed
+and verified. Open at budget end: 4 Medium (S2 HEAD-5xx broken-link, S3 bare-string-to-list-field
+per-char corruption, S4 non-dict-container traceback, S5 NaN/Inf-score traceback) and 4 Low
+(S6-S9), all filed with reproductions and acceptance checks in BACKLOG Phase S ready for the next
+run. NOT converged: the Definition of done requires a full audit pass finding zero High AND zero
+Medium, and four reproduced Medium remain. No promise. To finish the job, a future run should clear
+S2-S5, then re-run the certifying full audit; and per the S1 learning, when it fixes the next class
+it should fix the shared helper and test there, not leaf by leaf.

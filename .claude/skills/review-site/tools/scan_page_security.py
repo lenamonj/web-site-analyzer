@@ -55,14 +55,18 @@ def _cross_origin_resources(body, base):
     for attrs in SCRIPT_RE.findall(body):
         m = SRC_RE.search(attrs)
         if m:
-            out.append((urljoin(base, m.group(1)), bool(INTEGRITY_RE.search(attrs))))
+            url = common.safe_urljoin(base, m.group(1))
+            if url is not None:
+                out.append((url, bool(INTEGRITY_RE.search(attrs))))
     for attrs in LINK_RE.findall(body):
         rel = REL_RE.search(attrs)
         if not rel or "stylesheet" not in rel.group(1).lower():
             continue
         m = HREF_RE.search(attrs)
         if m:
-            out.append((urljoin(base, m.group(1)), bool(INTEGRITY_RE.search(attrs))))
+            url = common.safe_urljoin(base, m.group(1))
+            if url is not None:
+                out.append((url, bool(INTEGRITY_RE.search(attrs))))
     cross = []
     for url, has_sri in out:
         host = common.host_of(url)

@@ -145,10 +145,19 @@ class TestExecReport(unittest.TestCase):
         self.assertIn("IN THIS REPORT", self.text)
         idx = self.text.index("IN THIS REPORT")
         listing = self.text[idx:idx + 600]
-        for name in ("Executive summary", "Measured posture", "Core Web Vitals",
-                     "Key dates", "Key findings hurting the site",
-                     "Preferred recommendations", "Quick wins", "Evidence appendix"):
-            self.assertIn(name, listing)
+        names = ("Executive summary", "Measured posture", "Core Web Vitals",
+                 "Key dates", "Key findings hurting the site",
+                 "Preferred recommendations", "Quick wins", "Evidence appendix")
+        positions = []
+        for name in names:
+            pos = listing.find(name)
+            self.assertNotEqual(pos, -1, f"{name!r} missing from the cover contents list")
+            positions.append(pos)
+        # P63: the contents list must name the sections in rendering ORDER, not just
+        # contain them; each name's offset must strictly increase, so a shuffled
+        # contents list fails rather than passing on membership alone.
+        self.assertEqual(positions, sorted(positions),
+                         f"cover contents list out of order: {list(zip(names, positions))}")
 
     def test_running_header_skips_the_cover(self):
         section = self.doc.sections[0]
@@ -521,6 +530,24 @@ class TestBuildMainInputGuard(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("must be a JSON object", out)
 
+    def test_invalid_json_syntax_exits_with_a_clear_message(self):
+        # Q9: a syntactically invalid file (a trailing comma is the common slip)
+        # must give a clear "Invalid JSON" message and exit 1, not a raw traceback.
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "data.json"
+            bad.write_text("{ this is not valid json ", encoding="utf-8")
+            code, out = self._run_main(["build_exec_report.py", str(bad), str(Path(td) / "o.docx")])
+        self.assertEqual(code, 1)
+        self.assertIn("Invalid JSON", out)
+
+    def test_directory_input_exits_with_a_clear_message(self):
+        # Q16: pointing the input at a directory must give a clear message and exit
+        # 1 (is_file() gate), not a raw PermissionError/OSError traceback.
+        with tempfile.TemporaryDirectory() as td:
+            code, out = self._run_main(["build_exec_report.py", td, str(Path(td) / "o.docx")])
+        self.assertEqual(code, 1)
+        self.assertIn("not found", out)
+
     def test_valid_dict_still_builds(self):
         with tempfile.TemporaryDirectory() as td:
             good = Path(td) / "data.json"
@@ -564,17 +591,59 @@ class TestBuildMainInputGuard(unittest.TestCase):
             # P39: a non-string evidence code/image must not crash split()/Path()
             {"site": "x", "evidence": [{"caption": "c", "code": 123}]},
             {"site": "x", "evidence": [{"caption": "c", "image": 123}]},
+            # Q8: a numeric evidence highlight (bare or in a list) must not crash
+            # text.find/iteration in the marked-run renderer.
+            {"site": "x", "evidence": [{"caption": "c", "code": "listen 5000", "highlight": [5000]}]},
+            {"site": "x", "evidence": [{"caption": "c", "code": "listen 5000", "highlight": 5000}]},
             # P54: a numeric scorecard-row detail must not crash re.sub (it runs
             # only when a numeric score is present on the row), and a numeric
             # report_label must not crash .upper().
             {"site": "x", "scorecard": {"overall": "Weak", "rows": [
                 {"category": "SEO", "band": "Weak", "score": 0.5, "detail": 2024}]}},
             {"site": "x", "report_label": 2024, "scorecard": {"overall": "Weak", "rows": []}},
+            # Q7: a numeric or list scope.method must not crash the cover-page join.
+            {"site": "x", "scope": {"pages_reviewed": 5, "method": 2026}},
+            {"site": "x", "scope": {"pages_reviewed": 5, "method": ["a", "b"]}},
         ]
         for data in cases:
             with tempfile.TemporaryDirectory() as td:
                 ber.build(data, Path(td) / "o.docx")  # must not raise
                 self.assertTrue((Path(td) / "o.docx").is_file())
+
+    def test_string_list_report_fields_render_not_crash(self):
+        # Q2: recommendations/findings/action_plan are human-authored on top of the
+        # draft (the sibling quick_wins IS a plain string list), so authoring one as
+        # a list of strings must render the strings, not crash .get() on a non-dict.
+        def build_text(data):
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "o.docx"
+                ber.build(data, out)
+                doc = Document(str(out))
+                paras = "\n".join(p.text for p in doc.paragraphs)
+                cells = " ".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
+                return paras + " " + cells
+        self.assertIn("Add a CSP header",
+                      build_text({"site": "x", "recommendations": ["Add a CSP header"]}))
+        self.assertIn("Weak TLS config",
+                      build_text({"site": "x", "findings": ["Weak TLS config"]}))
+        self.assertIn("Enable HSTS",
+                      build_text({"site": "x", "action_plan": ["Enable HSTS"]}))
+        # a mixed dict + string + number list renders the dict and string, no crash
+        mixed = build_text({"site": "x", "findings": [
+            {"severity": "High", "area": "tls", "finding": "real dict finding"},
+            "bare string finding", 123]})
+        self.assertIn("real dict finding", mixed)
+        self.assertIn("bare string finding", mixed)
+        # Q12: the remaining builder-consumed list fields must also normalize -
+        # evidence (authored entirely by hand) plus the nested panel lists.
+        self.assertIn("home.png caption",
+                      build_text({"site": "x", "evidence": ["home.png caption"]}))
+        self.assertIn("seo is weak",
+                      build_text({"site": "x", "scorecard": {"overall": "Weak", "rows": ["seo is weak"]}}))
+        self.assertIn("LCP 2.1s",
+                      build_text({"site": "x", "web_vitals": {"metrics": ["LCP 2.1s"]}}))
+        self.assertIn("2027-01-01",
+                      build_text({"site": "x", "key_dates": {"items": ["2027-01-01"]}}))
 
     def test_progress_only_renders_under_an_executive_summary_heading(self):
         # P34: progress without a bottom line, assessment, or trend must render its

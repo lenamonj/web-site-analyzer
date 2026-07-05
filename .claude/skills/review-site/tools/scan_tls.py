@@ -120,9 +120,21 @@ def _scan(target):
     host = common.host_of(target) or target.strip()
     info = common.tls_info(host)
     if not info["ok"]:
+        err = info["error"] or ""
+        # An SSL/certificate error means the peer was reached but the TLS handshake
+        # or cert validation genuinely failed - a real finding (fail). A connectivity
+        # error (timeout, DNS gaierror, connection refused/reset, network unreachable)
+        # means the handshake could not be measured at all, so grade it info -> Not
+        # measured (surfaced as an errored scanner), matching how the header scanner
+        # treats a non-response, rather than fabricate a Poor TLS posture from a
+        # transient network hiccup. tls_info flattens the error to "<TypeName>: <msg>",
+        # and every ssl error type name starts with SSL (or the older CertificateError).
+        is_tls_error = err.startswith(("SSL", "Certificate"))
         return {
             "tool": "scan_tls", "host": host, "ok": False, "error": info["error"],
-            "verdict": "fail", "note": f"TLS handshake failed: {info['error']}",
+            "verdict": "fail" if is_tls_error else "info",
+            "note": (f"TLS handshake failed: {err}" if is_tls_error
+                     else f"TLS not measured: could not connect ({err})."),
         }
 
     cert = info["cert"] or {}

@@ -35,7 +35,10 @@ SCOPE = "page"
 # browser does not fetch) are not reported as mixed content.
 # <link> is handled separately (below) because whether an http href is mixed
 # content depends on its rel: only a subresource-loading rel counts.
-MIXED_RE = re.compile(r"<(script|img|iframe|source|audio|video)\b"
+# (?![-\w]) not \b after the tag name: \b matches at the name->hyphen boundary, so a
+# custom element like <video-player src="http://..."> would false-match "video" and be
+# graded as (fabricated) mixed content. Require the tag name to end here.
+MIXED_RE = re.compile(r"<(script|img|iframe|source|audio|video)(?![-\w])"
                       r"(?:[^>\"']|\"[^\"]*\"|'[^']*')*?"
                       r"(?<![-\w])(?:src|href)\s*=\s*[\"'](http://[^\"']+)", re.I)
 ACTIVE_TAGS = {"script", "iframe"}
@@ -60,9 +63,9 @@ def _candidate_links(anchors, base):
         href = (a.get("href") or "").strip()
         if not href or href.lower().startswith(SKIP_SCHEMES):
             continue
-        absolute = urljoin(base, href)
-        if urlparse(absolute).scheme not in ("http", "https"):
-            continue
+        absolute = common.safe_urljoin(base, href)
+        if absolute is None or urlparse(absolute).scheme not in ("http", "https"):
+            continue  # skip a malformed href, do not abort the whole scan
         if absolute in seen:
             continue
         seen.add(absolute)
@@ -193,7 +196,10 @@ def _fragment_check(anchors, ids, base, inconclusive):
         if href.startswith("#"):
             frag = href[1:]
         else:
-            absolute, frag = urldefrag(urljoin(page_base, href))
+            joined = common.safe_urljoin(page_base, href)
+            if joined is None:
+                continue
+            absolute, frag = urldefrag(joined)
             if not _same_page(absolute, page_base):
                 continue
         if frag:

@@ -190,6 +190,14 @@ def check_csp(headers):
             wild = [s for s in sources if s in ("*", "http:", "https:")]
             if wild:
                 problems.append(f"{script_directive} allows any origin ({', '.join(wild)})")
+            # data:/blob:/filesystem:/mediastream: are scheme-sources too, and data:
+            # in script-src is a documented CSP bypass (<script src="data:...">). They
+            # broaden script sources exactly like http:/https:/* but were not flagged.
+            risky = [s for s in sources
+                     if s in ("data:", "blob:", "filesystem:", "mediastream:")]
+            if risky:
+                problems.append(f"{script_directive} permits script from {', '.join(risky)} "
+                                "(a known CSP bypass)")
         # 'unsafe-inline' is ignored when a nonce/hash or 'strict-dynamic' is present,
         # so only flag it otherwise. 'unsafe-eval' is unaffected by both and is always
         # a real weakness.

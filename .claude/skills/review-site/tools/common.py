@@ -38,8 +38,12 @@ _TAG_ATTRS = r"""((?:[^>"']|"[^"]*"|'[^']*')*)"""
 
 def tag_attrs_re(tag):
     """Compiled regex capturing one tag's full attribute string, tolerating
-    '>' inside quoted attribute values."""
-    return re.compile(r"<%s\b%s>" % (tag, _TAG_ATTRS), re.I)
+    '>' inside quoted attribute values. End the tag name with (?![-\\w]), not
+    \\b, so a hyphenated custom element (<form-field>, <img-comparison-slider>,
+    <a-scene>) is never parsed as its bare-tag prefix - \\b matches at the
+    name->hyphen joint and would fabricate a verdict for a tag that is not
+    present. Mirrors scan_links.MIXED_RE / scan_design.DEPRECATED_RE."""
+    return re.compile(r"<%s(?![-\w])%s>" % (tag, _TAG_ATTRS), re.I)
 
 
 def normalize_url(url):
@@ -56,7 +60,24 @@ def normalize_url(url):
 
 
 def host_of(url):
-    return urlparse(normalize_url(url)).hostname or ""
+    try:
+        return urlparse(normalize_url(url)).hostname or ""
+    except ValueError:
+        # A malformed URL (e.g. an unclosed IPv6 literal "http://[::1/") has no
+        # usable host; treat it as hostless so same-site filters drop it rather
+        # than let the ValueError abort the caller.
+        return ""
+
+
+def safe_urljoin(base, url):
+    """urljoin that returns None instead of raising ValueError on a malformed URL
+    (an unclosed IPv6 literal, a bad bracket). Target content (anchor hrefs, sitemap
+    locs, resource srcs) is attacker-influenceable, so every join over it must skip a
+    bad URL rather than abort the scanner; callers drop a None result."""
+    try:
+        return urljoin(base, url)
+    except ValueError:
+        return None
 
 
 def slug_of(url):
@@ -578,7 +599,14 @@ def grade(verdicts):
     score = (counts["pass"] + counts["warn"] * 0.5) / graded
     band = ("Strong" if score >= 0.85 else "Adequate" if score >= 0.65
             else "Weak" if score >= 0.4 else "Poor")
-    return {**counts, "graded": graded, "score": round(score, 2), "band": band}
+    # Display a truncated-to-2-decimals score so it never rounds UP across a band
+    # boundary (a 0.846 Adequate site must not show 0.85, the Strong cutoff, and so
+    # contradict its own label). The band stays derived from the true score; only the
+    # shown number is floored, in integer space (the score is the exact rational
+    # (2*pass + warn) / (2*graded)) so an exact boundary like 0.85 shows 0.85, not
+    # 0.84 from float error.
+    shown = (2 * counts["pass"] + counts["warn"]) * 100 // (2 * graded) / 100
+    return {**counts, "graded": graded, "score": shown, "band": band}
 
 
 def finalize(result, category):

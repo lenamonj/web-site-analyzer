@@ -30,11 +30,16 @@ MAX_EXAMPLES = 5
 INLINE_STYLE_WARN = 30
 FONT_FAMILY_WARN = 4
 
-DEPRECATED_RE = re.compile(r"<(font|center|marquee|blink|frameset|frame|big|strike)\b", re.I)
+# (?![-\w]) not \b: \b matches at the name->hyphen boundary, so a custom element
+# like <font-size-picker> would false-match "font". Require the tag name to end here.
+DEPRECATED_RE = re.compile(r"<(font|center|marquee|blink|frameset|frame|big|strike)(?![-\w])", re.I)
 # (?<![-\w]) instead of \b so hyphenated attributes (data-src, data-width,
 # lazy-load patterns) never satisfy the real attribute's regex.
 STYLE_ATTR_RE = re.compile(r"""(?<![-\w])style\s*=\s*["']""", re.I)
-STYLE_BLOCK_RE = re.compile(r"<style\b[^>]*>(.*?)</style>", re.I | re.S)
+# (?![-\w]) not \b: \b matches the style->hyphen boundary, so a <style-guide> custom
+# element opens a match whose body runs to the next real </style>, pulling its inner
+# font-family declarations into the counted typography. Require the tag name to end here.
+STYLE_BLOCK_RE = re.compile(r"<style(?![-\w])[^>]*>(.*?)</style>", re.I | re.S)
 FONT_FAMILY_RE = re.compile(r"font-family\s*:\s*([^;}{]+)", re.I)
 IMG_RE = common.tag_attrs_re("img")
 SRC_RE = re.compile(r"""(?<![-\w])src\s*=\s*["']([^"']+)["']""", re.I)
@@ -120,8 +125,8 @@ def _stylesheet_urls(parsed, base):
         rel = (l.get("rel", "") or "").lower()
         href = l.get("href")
         if "stylesheet" in rel and href:
-            absolute = urljoin(base, href)
-            if urlparse(absolute).scheme in ("http", "https"):
+            absolute = common.safe_urljoin(base, href)
+            if absolute is not None and urlparse(absolute).scheme in ("http", "https"):
                 urls.append(absolute)
     return urls[:MAX_STYLESHEETS]
 

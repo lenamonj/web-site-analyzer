@@ -227,22 +227,28 @@ LINK_RESOURCE_RELS = ("stylesheet", "preconnect", "dns-prefetch", "prefetch", "p
 def _collect_resource_urls(body, parsed, base):
     """Absolute http(s) URLs of external resources referenced by the static HTML."""
     urls = []
+
+    def _add(ref):  # skip a malformed URL rather than abort the scan
+        u = common.safe_urljoin(base, ref)
+        if u is not None:
+            urls.append(u)
+
     for attrs in SCRIPT_RE.findall(body):
         m = SRC_RE.search(attrs)
         if m:
-            urls.append(urljoin(base, m.group(1)))
+            _add(m.group(1))
     for attrs in IFRAME_RE.findall(body):
         m = SRC_RE.search(attrs)
         if m:
-            urls.append(urljoin(base, m.group(1)))
+            _add(m.group(1))
     for img in parsed["images"]:
         if img.get("src"):
-            urls.append(urljoin(base, img["src"]))
+            _add(img["src"])
     for link in parsed["links"]:
         rel = (link.get("rel", "") or "").lower()
         href = link.get("href")
         if href and any(r in rel for r in LINK_RESOURCE_RELS):
-            urls.append(urljoin(base, href))
+            _add(href)
     seen, out = set(), []
     for u in urls:
         if urlparse(u).scheme in ("http", "https") and u not in seen:
@@ -286,8 +292,8 @@ def _tracking_pixels(body, base):
         m = SRC_RE.search(attrs)
         if not m:
             continue
-        src = urljoin(base, m.group(1))
-        if urlparse(src).scheme not in ("http", "https"):
+        src = common.safe_urljoin(base, m.group(1))
+        if src is None or urlparse(src).scheme not in ("http", "https"):
             continue
         host = (urlparse(src).hostname or "").lower()
         w = WIDTH_RE.search(attrs)

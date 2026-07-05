@@ -38,6 +38,10 @@ SCRIPT_RE = common.tag_attrs_re("script")
 # (?<![-\w]) not \b: a consent-gated <script data-src=...> must not be
 # measured as a live resource (a bare \b matches inside data-src).
 SRC_RE = re.compile(r'(?<![-\w])src\s*=\s*["\']([^"\']+)["\']', re.I)
+# async/defer as boolean attribute NAMES (token-bounded), not a bare substring:
+# an attribute like data-async-init or a class must not read as async/defer.
+ASYNC_ATTR_RE = re.compile(r"(?<![-\w])async(?![-\w])", re.I)
+DEFER_ATTR_RE = re.compile(r"(?<![-\w])defer(?![-\w])", re.I)
 
 
 def _kb(n):
@@ -51,11 +55,14 @@ def _script_resources(html, base):
         m = SRC_RE.search(attrs)
         if not m:
             continue
-        # async/defer are bare boolean attributes; strip quoted values first so a
-        # src path like /js/async-bundle.js is not misread as an async attribute.
-        bare = re.sub(r'"[^"]*"|\'[^\']*\'', "", attrs.lower())
-        blocking = "async" not in bare and "defer" not in bare
-        out.append({"url": urljoin(base, m.group(1)), "blocking": blocking})
+        # async/defer are boolean attributes; strip quoted values first so a src
+        # path like async.js is not misread, then match the attribute NAME as a
+        # token so data-async-init / an unrelated word does not count as async.
+        bare = re.sub(r'"[^"]*"|\'[^\']*\'', "", attrs)
+        blocking = not ASYNC_ATTR_RE.search(bare) and not DEFER_ATTR_RE.search(bare)
+        url = common.safe_urljoin(base, m.group(1))
+        if url is not None:
+            out.append({"url": url, "blocking": blocking})
     return out
 
 
@@ -65,10 +72,14 @@ def _collect_resources(html, parsed, base):
         resources.append({"url": s["url"], "type": "script", "blocking": s["blocking"]})
     for l in parsed["links"]:
         if "stylesheet" in (l.get("rel", "").lower()) and l.get("href"):
-            resources.append({"url": urljoin(base, l["href"]), "type": "stylesheet", "blocking": True})
+            url = common.safe_urljoin(base, l["href"])
+            if url is not None:
+                resources.append({"url": url, "type": "stylesheet", "blocking": True})
     for img in parsed["images"]:
         if img.get("src"):
-            resources.append({"url": urljoin(base, img["src"]), "type": "image", "blocking": False})
+            url = common.safe_urljoin(base, img["src"])
+            if url is not None:
+                resources.append({"url": url, "type": "image", "blocking": False})
     # De-duplicate by URL, keep first classification.
     seen, unique = set(), []
     for r in resources:

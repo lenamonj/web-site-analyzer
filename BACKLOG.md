@@ -5,6 +5,553 @@ highest-priority unblocked `todo`. Keep tasks small enough to finish and verify
 in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
+## Phase S - Seventh (full) convergence-audit findings (2026-07-05)
+After Q12-Q19 drained the backlog to empty (all suites green at 381 + 40 + 8, README guard in
+sync, py_compile clean, real CPython 3.10.19 verified green), the seventh full convergence audit
+ran: fresh deterministic battery plus four independent adversarial auditors over the whole
+surface (A scanner grading, B report pipeline, C orchestration/trend, D tests/docs/deps/compat/
+security). Slices C and D came back clean (D even installed 3.10.19 and ran all suites, and
+neuter-proved the security tests). Slices A and B surfaced defects; I reproduced every one myself
+before filing. The lesson AGAIN: the headline defect is the SAME \b-on-hyphen fabricated-verdict
+class the Q/R runs "closed" - but it lived in the SHARED tag_attrs_re factory in common.py, which
+every prior narrow sweep skipped because it audited the LOCAL regexes (MIXED_RE, DEPRECATED_RE,
+STYLE_BLOCK_RE) that were each individually fixed, never the factory they all delegate to. One
+High, four Medium, plus Low. Convergence NOT met. Audit scores in JOURNAL.md (Phase S).
+
+### Now (High)
+- [x] **S1 (done, M)** FABRICATED VERDICT: the shared `tag_attrs_re` factory used `\b`, which
+  matches at the name->hyphen boundary, so hyphenated custom elements are parsed as their bare-tag
+  prefix across EVERY consumer. common.py:42 (`r"<%s\b%s>"`). This is the exact \b-on-hyphen class
+  the project fixed in its LOCAL regexes (scan_links.MIXED_RE, scan_design.DEPRECATED_RE both use
+  `(?![-\w])`) and tests, but the shared factory - used by scan_page_security (SCRIPT/LINK/FORM/A),
+  scan_performance (SCRIPT), scan_design (IMG), scan_privacy (SCRIPT/IFRAME/IMG), scan_links
+  (LINK_TAG) - reintroduces it unguarded. Reproduced (mine): `check_form_actions('<form-field
+  action="http://api.internal/bind"></form-field>', base, inconclusive=False)` -> verdict "fail",
+  insecure_actions ['http://api.internal/bind'] - a fabricated insecure-form-action SECURITY FAIL
+  when the page has NO <form> at all; `check_image_dimensions('<img-comparison-slider ...>'*3,
+  False)` -> verdict "warn" (3 images missing dimensions) when there are ZERO real <img> tags
+  (img-comparison-slider is a popular real web component); <a-scene> (A-Frame), <script-loader>
+  similarly inflate link/script/tracker/weight tallies. HIGH: a CEO report would carry a false
+  security failure and false CLS warnings for any site using web components - "users get wrong
+  results" and a fabricated pass/fail, the cardinal charter violation. Fix: change tag_attrs_re to
+  `r"<%s(?![-\w])%s>"` (mirror the already-fixed local regexes). Accept: `common.tag_attrs_re(
+  'form').findall('<form-field action="http://x/"></form-field>')` returns []; check_form_actions
+  on a page whose only form-like tag is <form-field> returns info/pass (not fail); check_image_
+  dimensions on a page whose only img-like tag is <img-comparison-slider> returns info "no images"
+  (not warn); a real <form action="http://..."> still fails and a real dimensionless <img> still
+  warns; a shared-helper custom-element regression test added; full scanner suite green.
+  Done (iteration 15): changed tag_attrs_re to `r"<%s(?![-\w])%s>"` in common.py with a docstring
+  naming the class and the sibling regexes; added test_shared_tag_attrs_re_ignores_hyphenated_custom_
+  elements at the FACTORY level (6 custom elements -> []; real <form>/<form >/<form\n>/<form attr>
+  still match; check_form_actions on <form-field>-only -> info not fail; real <form> still fail;
+  check_image_dimensions on <img-comparison-slider>*3 -> info not warn; real <img> still warn).
+  Mutation-checked: reverting to `\b` fails the new test. Scanner 381 -> 382, builder 40, charts 8
+  all green; README resynced to 422 (guard exit 0); py_compile clean. The verdict on a form-less
+  page is "info" (honest "no forms"), which satisfies the "info/pass (not fail)" acceptance.
+
+### Next (Medium)
+- [ ] **S2 (todo, M)** FABRICATED broken-link fail: scan_links._check_one retries GET only when the
+  HEAD status is in (405, 501, None), so a link that returns 5xx to HEAD but serves fine on GET is
+  classified "broken" and rolls up to a link_health FAIL. scan_links.py:96 (the GET-retry guard)
+  and _classify (500 <= status < 600 -> "broken"). Reproduced (mine): the GET-retry guard is
+  `status in (405, 501, None)`; `_classify(500)` -> "broken", so a HEAD-500/GET-200 server (a
+  common WSGI/app pattern that throws on unimplemented HEAD) yields a fabricated broken-link fail,
+  potentially for every internal link. Medium: needs the specific HEAD-5xx/GET-ok server behavior,
+  narrower than S1. Fix: widen the GET fallback to also retry on 5xx (status is None or status ==
+  405 or 500 <= status < 600). Accept: a stubbed link returning 500 on HEAD and 200 on GET is NOT
+  classified broken; a link that 500s on BOTH stays broken; a 404 stays broken without a wasted
+  GET; suite green.
+- [ ] **S3 (todo, S)** Builder silently corrupts the deliverable when a list-valued field is given
+  a bare string: quick_wins (build_exec_report.py:1064-1070) and assessment strengths/weaknesses
+  (build_exec_report.py:678-698) iterate `for item in ...` without the _as_rows/list normalization
+  used elsewhere, so a str (which is iterable) yields ONE BULLET PER CHARACTER with exit 0.
+  Reproduced (mine): `{"site":"Example","quick_wins":"Add HSTS"}` -> 8 List Bullet paragraphs
+  ['A','d','d',' ','H','S',...]. Medium: these fields are explicitly human-authored (draft() leaves
+  them for a human; CLAUDE.md says a human fills them), so writing one item as "Add HSTS" instead
+  of ["Add HSTS"] is a natural slip that ships a corrupt CEO report. Fix: coerce str->[str] before
+  iterating (mirror _as_rows, whose own docstring already names quick_wins as a string list). Accept:
+  quick_wins/strengths/weaknesses given a bare string render as ONE bullet with the full text; a
+  list still renders one bullet per item; builder suite green.
+- [ ] **S4 (todo, S)** Builder raw-tracebacks on a non-dict container where a dict is expected:
+  build_exec_report.py:902 `scorecard.get("rows")` (scorecard from data.get, unguarded), same class
+  at 890-891 (progress.trend), 904 (web_vitals.metrics), 907 (key_dates.items), 678 (assessment.
+  strengths). The isinstance(...) normalization guards at 863-867 prove non-dict input was
+  anticipated for SOME keys, but these dereferences are unguarded. Reproduced (mine):
+  `{"site":"Example","scorecard":[{"category":"Security","band":"Poor","detail":"x"}]}` ->
+  AttributeError 'list' object has no attribute 'get' at line 902, raw traceback (not the clean
+  message+exit-1 that bad-path/bad-JSON get). Medium: placing scorecard rows directly as a list
+  (omitting the {"rows":...} wrapper) is a realistic hand-author error. Fix: coerce each to {} when
+  not a dict at read time, mirroring the existing normalization guards. Accept: scorecard/progress/
+  web_vitals/key_dates/assessment given a list or scalar produce a clean build (section skipped or
+  empty), never a raw AttributeError; a valid dict still renders; builder suite green.
+- [ ] **S5 (todo, S)** Builder raw-tracebacks on a non-finite score: set_score_bar_cell does
+  `round(score * SCORE_BAR_SEGMENTS)` and `round(nan)` raises ValueError, `round(inf)` raises
+  OverflowError. build_exec_report.py:740. The isinstance(score,(int,float)) gates at 951/961 treat
+  NaN/Inf as valid numbers, so they reach 740. Reproduced (mine): `{"scorecard":{"overall":"Weak",
+  "rows":[{"category":"Security","band":"Poor","detail":"m","score":NaN}]}}` -> ValueError cannot
+  convert float NaN to integer at line 740. Medium: json.loads AND json.dump both accept NaN/Infinity
+  by default, so a score computed as nan/inf upstream round-trips into exec_report_data.json and
+  detonates the one deliverable. Fix: gate on finiteness (import math; `isinstance(score,(int,float))
+  and math.isfinite(score)`), else render "not measured" like the existing non-numeric branch at
+  967. Accept: a NaN or Infinity score renders "not measured" instead of crashing; a finite score
+  still draws the bar; builder suite green.
+
+### Later (Low)
+- [ ] **S6 (todo, S)** scan_dns_email MTA-STS / TLS-RPT / BIMI notes state a definitive absence on
+  a FAILED DoH TXT lookup: check_mta_sts/check_tls_rpt/check_bimi do `records, _ = _txt_records(...)`
+  and discard the ok flag, so a lookup failure (records==[]) prints e.g. "No MTA-STS record; SMTP
+  delivery accepts silent TLS downgrade" as fact. scan_dns_email.py:205-209, 232-238, 247-253.
+  Low: verdict stays "info" either way so the grade is unaffected; only the note text asserts an
+  unmeasured absence (charter-spirit, not a graded fabrication). Fix: when the lookup did not
+  succeed, say "could not determine" instead of "no record". Accept: with a stubbed failing TXT
+  lookup the note does not assert absence; with a real empty result it still says "no record"; suite
+  green.
+- [ ] **S7 (todo, S)** scan_http_security CSP parser is first-header-wins across separate CSP
+  headers, but browsers enforce EVERY CSP header (intersection). scan_http_security.py:144-156
+  (_parse_csp joins a header list with "; "). Reproduced by Slice A: `check_clickjacking(
+  {'content-security-policy': ["frame-ancestors *", "frame-ancestors 'none'"]})` -> verdict "fail"
+  though the page IS framing-protected by the second header. Low: multiple CSP headers with
+  conflicting frame-ancestors is a contrived config, low real-world incidence. Fix: model multiple
+  CSP headers as the intersection of their directives, not a naive join. Accept: two CSP headers
+  where either supplies frame-ancestors 'none'/'self' -> not a clickjacking fail; suite green.
+- [ ] **S8 (todo, S)** The stdlib-only charter guard test covers only scan_*.py + common/htmlmeta/
+  registry, but the README/CLAUDE.md "zero dependency" claim spans the whole tools/ tree
+  (capture_rendered, crawler, triage, run_review, discover_pages, draft_report_data, trends,
+  check_readme_counts). tools/test_review_tools.py:~1349. Low: all eight ARE stdlib-only today (AST-
+  verified by Slice D), so nothing is currently wrong; but a future third-party import in e.g.
+  capture_rendered.py would ship green while contradicting the docs, and the docstring's "a stray
+  third-party import cannot silently break the claim" overstates the guard's reach. Fix: widen the
+  guard's glob to every non-test tools/*.py (keep the try/except brotli exemption in common.py).
+  Accept: the guard flags a planted `import requests` in capture_rendered.py; the real tree passes;
+  suite green.
+- [ ] **S9 (todo, S)** draft_report_data._page_list truncates a finding's affected-page list with
+  ", and N more listed in <slug>_scan_summary.md" at LIST_ALL_PAGES=40. draft_report_data.py:111-116;
+  the string lands in the rendered findings-table Evidence cell via _finding_from_issue:289-291.
+  This is the literal "+N more" truncation the "findings name every subject" rule bars. Low/tension:
+  only fires when one grouped finding affects >40 pages, which needs opt-in --crawl mode (default
+  review set is small), and it does point to the summary for the full list; the ceiling is a
+  documented deliberate design. Filed for rule-consistency; decide whether the rule is absolute
+  (drop the cap) or the pointer-to-summary is an acceptable exception. Accept: a decision recorded,
+  and if absolute, a >40-page finding enumerates every page in the deliverable; suite green.
+
+## Phase R - Sixth (full) convergence-audit findings (2026-07-05)
+After Q1-Q11 drained the backlog to empty (all suites green at 374 + 39 + 8, guard in sync),
+the second full convergence audit ran: fresh battery plus four independent adversarial
+auditors over the whole surface, each also verifying the Q-series fixes are complete. Every
+finding reproduced by me before filing. The lesson: my Q-run "class-completeness" sweeps were
+overconfident - most of these are the SAME Q classes ONE FORM DEEPER, exactly the forms my
+narrow greps missed (a single-tag <style\b vs my <(tag|..)\b pattern; .get()-on-a-list-item
+vs .join; the page scanners the Q1 URL fix never reached). One High, five Medium, one Low.
+Convergence NOT met. Audit scores in JOURNAL.md (Phase R).
+
+### Now (High)
+- [x] **Q12 (done, M)** The builder normalizes findings/recommendations/action_plan via _as_rows
+  (Q2) but NOT the other list fields it consumes, so a hand-authored list of strings still
+  crashes the sole deliverable - and evidence, the field draft() never emits (purely
+  hand-authored, per the memory note that significant findings need screenshot proof), is the
+  most likely to be shaped as a list of image paths. build_exec_report.py:1077 (evidence,
+  item.get("caption")), :589 (web_vitals.metrics, m.get("label")), :624 (key_dates.items,
+  item.get("label")), :941 (scorecard.rows, r.get("score")) all call .get() on a list item.
+  Reproduced: build({evidence:["home.png","mob.png"]}) -> AttributeError 'str' object has no
+  attribute 'get' (a bare traceback, no message); scorecard.rows:["seo is weak"],
+  web_vitals.metrics:["LCP 2.1s"], key_dates.items:["2027-01-01"] each crash the same way.
+  High: the sole deliverable crashes on a realistic hand-edit of the one field authored
+  entirely by hand. Found by the Phase R audit. Fix: complete the Q2 normalization - normalize
+  evidence via _as_rows(data.get("evidence"), "caption") and the other three list fields (or
+  guard isinstance(item, dict) in each consumer) so a bare-string/other-scalar item renders or
+  is skipped, never .get()'d. Accept: build with evidence, scorecard.rows, web_vitals.metrics,
+  and key_dates.items each authored as a string list succeeds (evidence text renders); the dict
+  forms are unchanged; builder suite green.
+  Done: extended the _as_rows normalization at the top of build() to cover evidence (top-level,
+  text_key "caption") and the nested panel lists web_vitals.metrics ("label"), key_dates.items
+  ("label"), and scorecard.rows ("category") - normalized in place so every consumer (the panels,
+  the scorecard has_scores check, the section-title logic) sees dicts. Verified all four string-
+  list forms build and render their text (evidence caption, scorecard text, LCP metric, key
+  date), and the dict forms are unchanged. Extended
+  test_string_list_report_fields_render_not_crash with the four fields. Builder 39 (extended test,
+  count unchanged); scanner 374 and README total 413 unaffected (guard exit 0). Closes the Phase R
+  High - completes the _as_rows (Q2) class across every builder-consumed list field.
+
+### Next (Medium)
+- [x] **Q13 (done, S)** STYLE_BLOCK_RE still uses \b after the tag name - the Q4 class in a
+  third regex the Q4 fix missed (a single tag, so the Q8-run grep for <(tag|..)\b did not match
+  <style\b). scan_design.py:39 STYLE_BLOCK_RE = re.compile(r"<style\b[^>]*>(.*?)</style>", ...);
+  \b matches the style->hyphen boundary, so between two real <style> blocks a <style-guide>
+  custom element opens a match whose non-greedy body runs to the next real </style>, pulling the
+  custom element's inner font-family declarations into the counted typography. Reproduced:
+  STYLE_BLOCK_RE.findall over <style>...Inter...</style><style-guide>...Comic Sans...
+  </style-guide><style>...Georgia...</style> captures a block containing "Comic Sans" (a phantom
+  family), so check_font_families over-counts and can flip to a false "typographic
+  inconsistency" warn. Medium: a wrong graded verdict from the exact \b-on-hyphen class this
+  release is certifying closed. Found by the Phase R audit. Fix: <style(?![-\w])[^>]*>(.*?)
+  </style> (verified it still matches <style> and <style type="text/css"> and not <style-guide>).
+  Accept: STYLE_BLOCK_RE does not match/capture <style-guide> content; a real <style> block
+  still matches; scan_design suite green.
+  Done: STYLE_BLOCK_RE now uses <style(?![-\w])[^>]*>(.*?)</style>. Verified: between two real
+  <style> blocks, a <style-guide> custom element no longer opens a match (the phantom "Comic
+  Sans" is not captured), while <style> and <style type="text/css"> still match. Also swept for
+  any other <tag\b in a compiled scanner regex - STYLE_BLOCK_RE was the last; the rest are usage
+  strings, comments, or bounded <loc>/substring XML-root checks. New test
+  test_font_families_ignore_custom_style_elements. Scanner 374 -> 375; README resynced to 414
+  (guard exit 0); no builder change. Closes the \b-on-hyphen (Q4) class across all three regexes.
+- [x] **Q14 (done, M)** The Q1 malformed-URL guard was incomplete: the page scanners still call
+  urljoin/urlparse on target-controlled URLs unguarded, so one malformed href/src/loc
+  (http://[::1/, //[::1/foo, http://a[b]c/) raises ValueError inside the scanner. scan_links.py:66
+  (_candidate_links) and :199 (_fragment_check), scan_performance.py:58/68/71 (_collect_resources),
+  and the same class at scan_seo.py:96, scan_privacy.py:233/237/240/245/289, scan_page_security.py
+  :58/65, scan_design.py:125. Reproduced: scan_links._scan on a page whose anchor is
+  href="http://[::1/" raises ValueError: Invalid IPv6 URL. _safe_scan contains it in the
+  orchestrated run (the run stays honest - the category reads Not measured, no fabricated pass),
+  but ONE crafted element on a hostile target wipes out that page's link-health, mixed-content,
+  performance, privacy, page-security, and design findings at once, and the standalone
+  python scan_links.py <url> aborts with a raw traceback. Medium (contained by _safe_scan, not a
+  full-run crash or fabricated clean, but a wide attacker-triggerable suppression of measured
+  findings). Found by the Phase R audit. Fix: wrap the per-item urljoin/urlparse in
+  try/except ValueError -> continue in _candidate_links, _fragment_check, _collect_resources, and
+  the sibling scanners, mirroring the discover_pages/crawler fix. Accept: each of the named
+  scanners, given a page with a malformed href/src/loc plus a good one, returns a graded result
+  with the good URL kept and no ValueError; suites green.
+  Done: added common.safe_urljoin(base, url) (returns None on ValueError) and routed every
+  target-controlled urljoin through it, skipping None: scan_links (_candidate_links,
+  _fragment_check), scan_performance (_script_resources + stylesheet/image loops), scan_seo
+  (_canonical_check -> info "malformed" on a bad canonical), scan_privacy (_external_resource_urls
+  via a local _add helper, _tracking_pixels), scan_page_security (_cross_origin_resources x2),
+  scan_design (stylesheet loop). host_of was already hardened (Q1), so the downstream urlparse/
+  host_of on the resolved URLs is safe. Verified all six scanners on a page carrying malformed
+  AND good href/src/loc/canonical: no crash, checks produced, good URLs kept. Two tests:
+  test_safe_urljoin_returns_none_on_a_malformed_url and
+  test_page_scanners_survive_a_malformed_url_in_content. Scanner 375 -> 377; README resynced to
+  416 (guard exit 0); no builder change. Completes the Q1 malformed-URL class across the scanners.
+- [x] **Q15 (done, S)** crawler.main raw-tracebacks on a non-integer max_pages, unlike every
+  sibling CLI. crawler.py:174 max_pages = int(args[1]) if len(args) > 1 else 100 is unguarded
+  (run_review/capture_rendered/triage all wrap int()/float() in try/except). Reproduced:
+  python crawler.py https://example.com abc -> ValueError: invalid literal for int() with base 10:
+  'abc' (raw traceback, no usage). Medium: a CLI crash on realistic bad input, short of the
+  "clear message, not a raw traceback" bar. Found by the Phase R audit. Fix: wrap the int() in
+  try/except ValueError -> print the usage line + sys.exit(1). Accept: crawler.py <url> abc prints
+  a usage message and exits 1 (no traceback); a valid integer still crawls; suite green.
+  Done: wrapped the int(args[1]) in try/except ValueError -> print the usage line + sys.exit(1),
+  matching run_review/capture_rendered/triage. Verified: crawler.py <url> abc -> "Usage:" + exit
+  1 (no traceback). New test test_crawler_rejects_non_integer_max_pages. Scanner 377 -> 378;
+  README resynced to 417 (guard exit 0); no builder change.
+- [x] **Q16 (done, S)** build_exec_report.main and draft_report_data.main raw-traceback on a
+  directory or unreadable path - the Q9 fix gated on exists() (True for a dir) and caught only
+  JSONDecodeError, not the OSError read_text raises; capture_rendered.main uses is_file() and is
+  fine, an inconsistency in the same just-hardened code. build_exec_report.py:1101,
+  draft_report_data.py:429. Reproduced: python draft_report_data.py . (a directory) ->
+  PermissionError [Errno 13]; build_exec_report.py tools out.docx -> same. Medium: a CLI crash on
+  realistic bad input (pointing at a dir or an unreadable file). Found by the Phase R audit. Fix:
+  gate on .is_file() (as capture_rendered does) and widen the except to (json.JSONDecodeError,
+  OSError). Accept: both mains given a directory or unreadable path print a clear message and exit
+  1 (no traceback); a valid file still builds; suites green.
+  Done: both mains now gate on in_path.is_file() (so a directory prints "not found" + exit 1
+  instead of reaching read_text) and add an except OSError -> print f"Could not read {path}: {e}"
+  + exit 1 (kept the JSONDecodeError branch's "Invalid JSON" message distinct so the Q9 tests
+  still pass). Verified: a directory path -> "not found" + exit 1 (no traceback); invalid JSON
+  still says "Invalid JSON"; a valid file still drafts/builds. New tests
+  test_directory_input_exits_with_a_clear_message and test_draft_report_data_rejects_a_directory
+  _path. Scanner 378 -> 379; builder 39 -> 40; README resynced to 419 (guard exit 0).
+- [x] **Q17 (done, S)** test_guard_would_catch_a_third_party_import is vacuous - the test whose
+  stated purpose is "prove the guard is not vacuous" never calls the guard helper. test_review_
+  tools.py:1310 reimplements a simplified inline import check (only ast.Import, computes sample
+  but never uses it), so it cannot detect a broken _external_imports. Reproduced: neutering
+  _external_imports to return [] leaves BOTH the stdlib-guard test and this non-vacuity test green
+  (0 errors/fails) - a refactor dropping the ast.ImportFrom branch would make a scanner's
+  "from requests import get" invisible while this test still asserts green. Medium: a vacuous test
+  on the path guarding a headline "zero dependencies" claim (the P61/P63/Q10 vacuous-guard class).
+  Found by the Phase R audit. Fix: have the test call the real _external_imports on a temp source
+  containing both "import requests" and "from requests import x", asserting ["requests"]. Accept:
+  the non-vacuity test calls the real helper and fails if _external_imports is neutered to []; the
+  suite still passes as shipped.
+  Done: the test now writes a temp source with "import requests", "from flask import Flask", and
+  "import common", and calls the REAL self._external_imports(fake, allowed), asserting
+  ["flask", "requests"] - exercising both the ast.Import and ast.ImportFrom branches. Verified:
+  it passes as shipped AND fails (1 failure) when _external_imports is neutered to return [], so it
+  now genuinely detects a broken guard. Scanner 379 (rewrote an existing test, count unchanged);
+  guard in sync at 419; no code change.
+
+### Later (Low)
+- [x] **Q18 (done, S)** scan_performance render-blocking detection substring-matched "async" on
+  the quote-stripped attribute string, so a script whose attribute NAME contains the substring
+  (data-async-init, x-async, data-deferred) was treated as non-blocking. scan_performance.py:56-57
+  ("async" not in bare / "defer" not in bare). Reproduced: a render-blocking <script src=... 
+  data-async-init> was classified non-blocking. Low: it only UNDER-counts blocking scripts (never
+  fabricates), and flipping the graded verdict (warn at >3 blocking) needs 4+ blocking scripts
+  several carrying such attributes - compound and unlikely. Found by the Phase R audit. Fix: test
+  for the async/defer attribute as a token (a whitespace/quote-bounded attribute name), not a bare
+  substring, mirroring the (?<![-\w]) attribute-name matching used elsewhere. Accept: a script
+  with data-async-init and no real async attribute counts as render-blocking; a real async/defer
+  script still does not; suite green.
+  Done (iteration 12): added module-level ASYNC_ATTR_RE / DEFER_ATTR_RE = re.compile(r"(?<![-\w])
+  async(?![-\w])" | "defer", re.I) and switched line 57 to
+  `not ASYNC_ATTR_RE.search(bare) and not DEFER_ATTR_RE.search(bare)` (kept the quote-strip so a
+  src="async.js" value is still ignored). Added test_script_blocking_ignores_async_defer_in_
+  attribute_names (data-async-init / x-defer-load -> blocking True; real async / defer -> False).
+  Mutation-checked: reverting the two regexes to bare re.compile("async"|"defer") makes the new
+  test fail (1 failure). Scanner suite 380 green.
+- [x] **Q19 (done, S)** capture_rendered.main caught only JSONDecodeError on its scan read, not
+  OSError - the Q16 gap in the third json main. capture_rendered.py:650-654 gates on is_file() (so
+  a directory is caught) but a valid-but-unreadable scan.json (permission/lock) raw-tracebacked with
+  an OSError, unlike build_exec_report/draft_report_data.main which catch it. Low: the scan
+  path is DERIVED (evidence_dir()/<slug>_scan.json), not an arbitrary operator arg, so the
+  unreadable-file trigger is much rarer than build/draft's; filed for class consistency. Found by
+  the Q16-run replenishment check. Fix: add except OSError -> print f"Could not read {scan_path}:
+  {e}" + sys.exit(1), matching the other two mains. Accept: capture_rendered.main on an unreadable
+  scan file prints a clear message and exits 1 (no traceback); a valid scan still proceeds; suite
+  green.
+  Done (iteration 13): added the `except OSError as e: print(f"Could not read {scan_path}: {e}");
+  sys.exit(1)` branch after the JSONDecodeError catch (the two are disjoint - JSONDecodeError is a
+  ValueError, not an OSError). Added test_capture_rendered_reports_an_unreadable_scan_file (stubs
+  Path.read_text to raise OSError while is_file() passes, asserts "Could not read" + exit 1).
+  Mutation-checked: stripping the branch makes the test error on the uncaught OSError. Suite 381.
+
+## Phase Q - Fifth (full) convergence-audit findings (2026-07-05)
+After the P41-P66 work drained the backlog to empty (all suites green at 364 + 37 + 8,
+guard in sync), the full convergence audit ran: a fresh deterministic battery plus four
+independent adversarial auditors over the whole surface (scanner grading, report
+pipeline, infra/concurrency, docs/tests/deps). The targeted P-series rounds each swept a
+narrow slice; the full audit, attacking new angles (CSP scheme-sources, malformed URLs,
+hand-authored string lists, hyphenated custom elements), found ten more - THREE High and
+seven Medium - each reproduced by me before filing. Convergence is NOT met. Audit scores
+in JOURNAL.md (Phase Q). Dimensions clean: performance, numeric/trend math, dependency
+hygiene (functional), observability, determinism, concurrency, most of correctness.
+
+### Now (High)
+- [x] **Q1 (done, M)** A malformed URL in target-controlled content crashes the entire
+  review run. common.host_of / urljoin / urlparse raise ValueError("Invalid IPv6 URL") on
+  an input like http://[::1/, and run_review.pipeline calls discover_pages.discover()
+  (default path) and crawler.crawl() (--crawl path) OUTSIDE any _safe_scan guard, so a
+  single bad anchor href, sitemap <loc>, or robots Sitemap: line aborts the whole pipeline
+  before any report is produced. Reproduced: a homepage with one anchor href="http://[::1/"
+  (http_fetch stubbed) -> discover() raises ValueError at discover_pages.py:95 (urljoin);
+  the robots-sitemap and crawler paths crash the same way; the page-level scanner path with
+  the same input is contained by _safe_scan (ok=False), proving the gap is specific to the
+  two unguarded orchestration calls. High: a crash on realistic, attacker-influenceable
+  input that aborts the default deliverable pipeline (charter puts a hostile target's
+  response in the threat model). Fix: wrap discover()/crawl() in run_review.pipeline with
+  the same failure isolation the scanners get, and/or harden host_of and the discovery/
+  crawler URL handling to catch ValueError and skip the offending URL. Accept: a homepage
+  whose anchor/sitemap/robots names a malformed URL yields a report (the bad URL skipped),
+  not an aborted run; a normal run is unchanged; suites green.
+  Done: fixed at the source (the bad URL is skipped, discovery keeps the rest, no run_review
+  wrapper that would drop all discovery). common.host_of now returns "" on a urlparse
+  ValueError (so the same-site filters drop a hostless malformed URL); discover_pages
+  _internal_nav_links wraps the per-anchor urljoin/urlparse in try/except ValueError ->
+  continue; crawler._eligible catches ValueError -> False and the crawl link loop wraps
+  urldefrag(urljoin(...)) in try/except -> continue. Verified all four entry points
+  (anchor href, sitemap <loc>, robots Sitemap: line, crawler link) with http://[::1/: no
+  crash, and the good URLs survive (/about, sitemap p1, crawl /a2). Three tests:
+  test_host_of_returns_empty_on_a_malformed_url,
+  test_malformed_url_in_page_content_does_not_abort_discovery,
+  test_malformed_href_does_not_abort_the_crawl. Scanner 364 -> 367; README resynced to 404
+  (guard exit 0); no builder change.
+- [x] **Q2 (done, M)** build() hard-crashes when recommendations or findings is a list of
+  plain strings - a realistic hand-edit of the primary human-authored field, taking down
+  the sole deliverable. build_exec_report.py:975/978 (_rank_key sort over recommendations),
+  :500 (_severity_breakdown over findings), :1008 (action_plan) call .get() on each item
+  with no guard, so a bare-string item raises AttributeError and no .docx is written.
+  Reproduced: build({recommendations:["Add a CSP","Use HTTPS"]}) and build({findings:["a
+  finding"]}) both -> AttributeError 'str' object has no attribute 'get'. CLAUDE.md/SKILL.md
+  name recommendations/quick_wins as the fields a human authors on top of the draft, and the
+  sibling quick_wins in the same file IS a plain string list, so authoring recommendations
+  as strings is a natural edit - a direct counterexample to the "hand-edited JSON cannot
+  crash the build" hardening (P35/P54). High: the sole deliverable crashes on realistic
+  input with a cryptic error and no partial file. Fix: normalize a bare-string item to
+  {"recommendation": s} / {"finding": s} (and guard action_plan) before use, or make the
+  sort/breakdown keys treat a non-dict item as empty. Accept: build with recommendations
+  and findings authored as string lists succeeds (the strings render); dict form still
+  renders; builder suite green.
+  Done: added _as_rows(items, text_key) and normalized data["findings"]/["recommendations"]
+  /["action_plan"] once at the top of build(), so EVERY consumer (the glance-tiles severity
+  breakdown, the section-title logic, and the three tables) sees dicts. A bare string
+  becomes {finding|recommendation|action: s} so its text renders; a dict passes through;
+  any other scalar becomes an empty row. New test test_string_list_report_fields_render_not
+  _crash (each string list builds AND its text appears in the docx; a mixed dict+string+int
+  findings list renders both the dict and the string). Verified all three string-list forms
+  render and the dict form is unchanged. Builder 37 -> 38; README resynced to 405 (guard
+  exit 0); no scanner change. Closes the second of the three Phase Q High findings.
+- [x] **Q3 (done, M)** The CSP check grades data:/blob: in script-src as a clean pass,
+  hiding a documented XSS bypass. scan_http_security.check_csp's dangerous-source set treats
+  only *, http:, https: as unsafe script-src origins, but data: (and blob:) are scheme-
+  sources too and data: in script-src is a well-known CSP bypass (permits <script
+  src="data:text/javascript,...">; CSP Evaluator rates it high). Reproduced: script-src
+  'self' data: -> pass "restricts script sources"; script-src 'self' data: blob: -> pass;
+  script-src 'self' https: -> warn (correctly). So a bypassable policy reports as fully
+  restricting scripts. High: a security check gives a false clean on a known-weak policy -
+  a pass hiding a real problem (the reviewer sees CSP pass and never investigates). Fix: add
+  data:, blob:, filesystem:, mediastream: to the dangerous script-src scheme-source set
+  (warn), matching how http:/https:/* are already flagged. Accept: script-src 'self' data:
+  and script-src 'self' blob: -> warn; a genuinely restrictive policy ('self' + nonce) still
+  passes; the existing strict-dynamic/nonce/unsafe-* cases are unchanged; suite green.
+  Done: check_csp now flags data:/blob:/filesystem:/mediastream: in the script directive as
+  a distinct problem ("permits script from <schemes> (a known CSP bypass)"), under the same
+  strict-dynamic guard as the host/scheme allowlist (strict-dynamic ignores the whole
+  allowlist incl. these schemes). New test test_csp_data_and_blob_script_sources_are_flagged
+  (each risky scheme -> warn with a "bypass" note; 'self'+nonce still pass; strict-dynamic +
+  data: still pass). The existing wild/strict-dynamic/nonce/unsafe cases are unchanged.
+  Scanner 367 -> 368; README resynced to 406 (guard exit 0); no builder change. Closes the
+  last of the three Phase Q High findings - zero High now open.
+
+### Next (Medium)
+- [x] **Q4 (done, M)** DEPRECATED_RE and MIXED_RE use \b after the tag name, so a
+  hyphenated custom element false-matches - the exact \b-on-hyphen class the codebase fixed
+  for attributes but not for tag names. scan_design.DEPRECATED_RE (<(font|center|...|big)\b)
+  matches <font-size-picker> at the t->- boundary (a spurious "Deprecated presentational
+  tag" warn/finding), and scan_links.MIXED_RE (<(script|img|iframe|...)\b) matches
+  <script-loader src="http://...">/<video-player src="http://..."> as active/passive mixed
+  content - a FABRICATED security finding. Reproduced: DEPRECATED_RE matches <font-size-
+  picker> and <center-stage>; MIXED_RE matches <video-player src="http://x/a"> and <script-
+  loader src="http://x/a">; the controls <center> and <script src="http://x/a"> still match.
+  Medium: a wrong verdict / false deliverable finding (incl. a fabricated mixed-content fail)
+  on a web-components page. Fix: require the tag to end at the name - e.g. (?![-\w]) after
+  the alternation - in both regexes. Accept: <font-size-picker>/<video-player src=http>/
+  <script-loader src=http> do not match; the real <center>/<img>/<script>/<iframe> tags still
+  match; suites green.
+  Done: replaced \b with (?![-\w]) after the tag-name alternation in both DEPRECATED_RE
+  (scan_design.py) and MIXED_RE (scan_links.py) - the tag name must end at the boundary, so
+  a name->hyphen (custom element) no longer satisfies it. Verified: <font-size-picker>/
+  <center-stage>/<frame-layout>/<big-header> and <video-player/script-loader/image-tag src=
+  http> no longer match; the real font/center/frame/frameset/big/marquee/blink/strike and
+  script/img/iframe/video tags still match (incl. frameset vs frame via backtracking). Two
+  tests: test_deprecated_tag_regex_ignores_hyphenated_custom_elements and
+  test_mixed_content_ignores_hyphenated_custom_elements. Scanner 368 -> 370; README resynced
+  to 408 (guard exit 0); no builder change.
+- [x] **Q5 (done, M)** scan_tls fabricates a hard fail -> Poor on any TLS handshake failure,
+  including a transient timeout/DNS/connection-refused, while the sibling http_security
+  treats the identical non-response as info/"Not measured". scan_tls._scan (scan_tls.py:122-
+  126) returns verdict:"fail" for every tls_info failure without distinguishing a genuine
+  TLS/cert error from a connectivity error. Reproduced (tls_info stubbed ok=False, error
+  "TimeoutError: timed out"): scan_tls top-level verdict fail, band Poor score 0.0, while
+  scan_http_security on the same unreachable host grades info / Not measured. Medium: a
+  fabricated verdict on an I/O failure (a named hunt class); a single transient hiccup on the
+  one-shot handshake yields a fabricated Poor TLS grade. Fix: on tls_info failure, grade
+  info/"Not measured" for connectivity errors (timeout, DNS, connection-refused) and reserve
+  fail for actual TLS/certificate errors. Accept: a stubbed timeout/DNS/refused tls_info ->
+  info (not fail/Poor); a genuine cert/protocol error still fails; a normal handshake still
+  grades; suite green.
+  Done: the tls_info-failure branch now classifies the flattened error ("<TypeName>: <msg>"):
+  an ssl error (type name starts with SSL, or the older CertificateError) -> fail (a real
+  finding); any other failure (timeout, DNS gaierror, connection refused/reset, OSError
+  unreachable) -> info, which verdicts_of does not grade, so the category reads Not measured
+  and is surfaced as an errored scanner - matching how scan_http_security treats a
+  non-response, no fabricated Poor. New test
+  test_tls_connectivity_failure_is_not_measured_not_a_fabricated_poor (four connectivity
+  errors -> info/Not measured; three SSL/cert errors -> fail/Poor). Scanner 370 -> 371; README
+  resynced to 409 (guard exit 0); no builder change.
+- [x] **Q6 (done, S)** positive_tabindex is graded pass on a client-rendered page whose body
+  was never measured, while every other body-derived a11y check returns info. scan_
+  accessibility positive_tabindex has no likely_client_rendered gate (scan_accessibility.py
+  ~:202-206), so a JS shell (0 static tabindex) grades pass. Reproduced: on a SPA shell
+  (client_rendered True), image_alt/form_labels/heading_order/landmarks/link_text/empty_
+  buttons all -> info but positive_tabindex -> pass. Medium: reports an unmeasured property
+  of the real page as passing (charter: never report an unmeasured thing as pass); narrow
+  (only a client-rendered page without a browser capture), small grade inflation. Fix: gate
+  it the same as empty_buttons - return info when inconclusive. Accept: on a client-rendered
+  page positive_tabindex is info (not pass); on a static page with a positive tabindex it
+  still warns and a clean static page still passes; suite green.
+  Done: the positive_tabindex verdict now gates on inconclusive exactly like empty_buttons:
+  "warn" if positive_tabindex and not inconclusive, else "info" if inconclusive, else "pass";
+  the note reads "Tab order not assessable from static HTML (client-rendered)" when
+  inconclusive. New test test_positive_tabindex_is_inconclusive_on_a_client_rendered_page
+  (SPA_SHELL -> info; static + positive tabindex -> warn; static clean -> pass). Scanner
+  371 -> 372; README resynced to 410 (guard exit 0); no builder change.
+- [x] **Q7 (done, S)** A numeric scope.method crashes the cover page - a remaining
+  uncoerced scalar in the P35/P54 class. build_exec_report._scope_text (build_exec_report.py
+  :284) does "  |  ".join(bits) after bits.append(scope["method"]) un-stringified, so a
+  non-string method raises TypeError. Reproduced: build({scope:{pages_reviewed:5,
+  method:2026}}) -> TypeError sequence item 1: expected str instance, int found (a list
+  method reproduces the same). Medium: a deliverable crash, though method is machine-
+  populated so a human rarely retypes it. Fix: bits.append(str(scope["method"])), mirroring
+  the str() coercion already used in add_running_header. Accept: build with a numeric and a
+  list scope.method succeeds; a normal string method still renders; builder suite green.
+  Done: _scope_text now appends str(scope["method"]) instead of the raw value, so a non-string
+  method cannot crash the "  |  ".join. Verified a numeric, list, and float method all build
+  and a normal string method still renders on the cover. Extended
+  test_non_string_scalars_do_not_crash_the_build with numeric and list scope.method cases.
+  Builder 38 (extended an existing test, count unchanged); guard in sync at 410; no scanner
+  change.
+- [x] **Q8 (done, S)** A numeric evidence highlight crashes build(). build_exec_report
+  add_code_block/_add_marked_runs (build_exec_report.py:753, ~:782) wraps a bare str
+  highlight into a list but passes any other type through, so text.find(h)/iterating h
+  raises on a numeric highlight. Reproduced: evidence=[{caption, code:"listen 5000",
+  highlight:[5000]}] -> TypeError find() argument 1 must be str, not int; highlight=5 (bare
+  int) -> 'int' object is not iterable. add_code_block's docstring documents highlight as "a
+  string or list of strings", and highlighting a numeric literal in a code exhibit is a
+  natural intent. Medium: crashes the report, but the highlighted evidence appendix is an
+  advanced/optional feature. Fix: stringify highlight items after the str->[str]
+  normalization (highlight = [str(h) for h in highlight]). Accept: a numeric and a mixed
+  highlight list build without crashing and highlight the stringified token; a normal string
+  highlight still works; builder suite green.
+  Done: add_code_block now normalizes highlight to a list of strings for every shape - None ->
+  [], str -> [str], list/tuple -> [str(h) for each], any other scalar -> [str(scalar)] - so
+  _add_marked_runs' text.find never gets a non-str and a bare scalar never hits iteration.
+  Verified highlight=[5000]/5000/["5000","listen"]/"listen"/None all build and the stringified
+  5000 is highlighted. Extended test_non_string_scalars_do_not_crash_the_build with numeric
+  list and bare-int highlight cases. Builder 38 (extended test, count unchanged); guard in
+  sync at 410; no scanner change.
+- [x] **Q9 (done, S)** build_exec_report and draft_report_data main() raw-traceback on
+  invalid JSON syntax, contradicting the project's own "clear message, not a raw traceback"
+  bar. build_exec_report.py:1072 and draft_report_data.py:432 guard the missing-file and
+  non-dict cases but call json.loads unguarded, so a syntactically invalid file (a trailing
+  comma, the most common hand-authoring slip) crashes with a raw json.decoder.JSONDecodeError
+  on the input SKILL.md instructs the operator to hand-author. Reproduced: feeding "{ this is
+  not valid json " to draft_report_data.py prints the full json/decoder stack ending in
+  JSONDecodeError. The two guard tests (test_exec_report.py / test_review_tools.py) state the
+  "not a raw traceback" bar but only cover the top-level-array case, never invalid syntax.
+  Medium: a CLI crash on realistic bad input on the deliverable's build step; informative but
+  short of the stated contract. Fix: wrap both json.loads in try/except json.JSONDecodeError
+  -> print f"Invalid JSON in {path}: {e}" + sys.exit(1); extend the two guard tests with an
+  invalid-syntax case. Accept: both mains print a clear "Invalid JSON" message and exit 1 (no
+  traceback) on a syntactically bad file; a valid file still builds; suites green.
+  Done: wrapped both json.loads (build_exec_report.main and draft_report_data.main) in
+  try/except json.JSONDecodeError -> print f"Invalid JSON in {path}: {e}" + sys.exit(1).
+  Verified: a syntactically invalid file gives the clear message and exit 1 (no traceback) for
+  both; a top-level array still gives the "must be a JSON object" message. Extended the two
+  guard tests (test_invalid_json_syntax_exits_with_a_clear_message,
+  test_draft_report_data_rejects_invalid_json_syntax). Scanner 372 -> 373; builder 38 -> 39;
+  README resynced to 412 (guard exit 0).
+- [x] **Q10 (done, S)** The "scanners are pure stdlib" guard test only globs scan_*.py, so it
+  never scans common.py - which every scanner imports and which already contains a third-
+  party import (brotli). test_review_tools.py:1243 globs scan_*.py; common.py:165 imports
+  brotli (optional, try/except, so the functional claim holds today). The test docstring
+  promises it guards the "zero dependencies" claim, but a future REQUIRED third-party import
+  in common.py would ship green while breaking the README badge. Reproduced: the test's own
+  checker run against common.py flags ['brotli']; common.py is not in the scan_*.py glob.
+  Medium: a test whose body checks less than its docstring promises, under-covering a headline
+  behavior on the most-imported module. Fix: broaden the glob to include common.py/htmlmeta.py
+  /registry.py and treat brotli as an explicitly-allowed optional import (whitelist), so a
+  new required third-party import anywhere in the shared code fails the guard. Accept: the
+  charter test scans common.py (and the other shared modules) and still passes today with
+  brotli whitelisted; adding a dummy required third-party import to common.py fails it; suite
+  green.
+  Done: test_scanners_import_only_stdlib_and_local now scans scan_*.py PLUS the shared modules
+  every scanner imports (common.py, htmlmeta.py, registry.py) and whitelists brotli (the one
+  optional, try/except-guarded import) in the allowed set. Verified: the test passes today
+  (common/htmlmeta/registry have no non-whitelisted external import), and common.py + a
+  required "import requests" is flagged (['requests']), so a new required third-party import in
+  the shared core now fails the guard; the non-vacuity test (requests still flagged) holds.
+  Scanner 373 (modified an existing test, count unchanged); guard in sync at 412; no code
+  change.
+- [x] **Q11 (done, S)** capture_rendered.main() raw-tracebacks on invalid scan JSON - the
+  Q9 class in a third main() the Q9 fix did not reach. capture_rendered.py:650 does
+  scan = json.loads(scan_path.read_text(...)) unguarded (unlike _load_or_new at :493-499,
+  which catches JSONDecodeError/OSError), so a syntactically invalid or partially-written
+  scan JSON crashes the capture step with a raw JSONDecodeError. Reproduced: with
+  evidence_dir stubbed to a dir holding an invalid <slug>_scan.json, capture_rendered.main()
+  raises JSONDecodeError (not a SystemExit with a message). Found by the Q9-run class-
+  completeness sweep. Medium: a CLI crash on realistic bad input (a scan file the operator
+  points at or a truncated write), same "clear message, not a raw traceback" bar as Q9. Fix:
+  wrap the json.loads in try/except json.JSONDecodeError -> print f"Invalid JSON in
+  {scan_path}: {e}" + sys.exit(1), matching build_exec_report/draft_report_data.main. Accept:
+  capture_rendered.main on a syntactically invalid scan JSON prints a clear "Invalid JSON"
+  message and exits 1 (no traceback); a valid scan still proceeds; suites green.
+  Done: wrapped the json.loads at capture_rendered.py:650 in try/except json.JSONDecodeError ->
+  print f"Invalid JSON in {scan_path}: {e}" + sys.exit(1), matching the Q9 fix in the other two
+  mains. Verified: an invalid scan JSON -> "Invalid JSON in <path>: ..." + exit 1 (no
+  traceback); a non-dict array still gives "must be a JSON object". New test
+  test_capture_rendered_rejects_invalid_json_syntax. Scanner 373 -> 374; README resynced to 413
+  (guard exit 0); no builder change. Closes the last Phase Q finding - backlog now empty.
+
 ## Phase P - Fourth convergence-audit findings (2026-07-04)
 The fourth full-audit pass (after O1-O8 closed; four independent auditors, all
 suites green at 307 + 32 + 8 beforehand) confirmed every prior fix and closed
@@ -1132,6 +1679,17 @@ the Later section).
   intended. Accept: the three docs no longer imply a fixed three-quarter window
   (they say "three or more" / "once three quarters exist"), or build_trend caps to
   the last three quarters with a test asserting <= 3 plotted; suites green.
+  Done: grade() now floors the DISPLAYED score to 2 decimals via integer arithmetic
+  (the score is the exact rational (2*pass + warn) / (2*graded), so
+  (2*pass+warn)*100 // (2*graded) / 100 truncates without float error), while the band
+  stays derived from the true score. A 0.846 site now shows 0.84 with Adequate (was 0.85,
+  the Strong cutoff) and an exact 0.85 still shows 0.85 with Strong - the displayed number
+  never lands in a different band's range than its label, and no band is inflated. New
+  test test_displayed_score_never_contradicts_its_band (nine cases incl. the three
+  boundary regressions and exact boundaries assert band_of(shown) == band; 9p/4w shows
+  0.84/Adequate). The existing exact-boundary band/score tests (0.85, 0.65, 0.4) still
+  pass. Scanner 363 -> 364; README resynced to 401 total (guard exit 0); builder/charts
+  green.
   Done: chose the doc reword (the code's own comments at build_exec_report.py:21
   and :451 already say "three or more quarters of history", so showing all quarters
   once three exist is the intended design, not a bug to cap). SKILL.md:100 and
@@ -1528,7 +2086,7 @@ the Later section).
   three test suites + README-count guard" - verified ci.yml runs test_review_tools,
   test_exec_report, test_report_charts, and check_readme_counts.py. Documentation-only; the
   count guard is still in sync (400 total, prose edits do not touch counts).
-- [ ] **P63 (todo, S)** test_cover_contents_list_names_rendered_sections_in_order does
+- [x] **P63 (done, S)** test_cover_contents_list_names_rendered_sections_in_order does
   not check order. test_exec_report.py:144-151 asserts only assertIn(name, listing)
   membership within a 600-char slice, so a regression that reordered the cover's contents
   list would still pass though the test name promises order. Low: the invariant holds
@@ -1537,7 +2095,13 @@ the Later section).
   partial audit. Fix: assert the found positions are monotonically increasing (or compare
   the extracted ordered names to the expected sequence). Accept: the test fails if the
   contents-list order is shuffled relative to the section order; builder suite green.
-- [ ] **P66 (todo, S)** The scorecard band is computed from the unrounded score but the
+  Done: the test now records each section name's offset in the contents-list slice (via
+  listing.find, asserting each is present) and asserts positions == sorted(positions), so
+  a shuffled contents list (a name out of rendering order) fails on the ordering, not just
+  passes on membership. Verified: the test passes (cover is in order) and the assertion
+  provably rejects a shuffle (sorted != positions). Builder 37 (extended the same test,
+  count unchanged); guard in sync at 400; no code change.
+- [x] **P66 (done, S)** The scorecard band is computed from the unrounded score but the
   ROUNDED score is displayed, so at every band boundary the shown number contradicts the
   band label. common.grade (common.py:578-581) derives band from the exact score, then
   returns round(score, 2); draft_report_data._scorecard renders "<band> ... (score 0.85)"

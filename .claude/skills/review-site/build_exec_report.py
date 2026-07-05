@@ -280,7 +280,7 @@ def _scope_text(scope):
     if pages:
         bits.append(f"{pages} page(s) reviewed")
     if (scope or {}).get("method"):
-        bits.append(scope["method"])
+        bits.append(str(scope["method"]))  # coerce so a non-string method cannot crash join
     return "  |  ".join(bits)
 
 
@@ -493,6 +493,23 @@ def add_trend_section(document, trend, chart_dir, prefix, number):
         p = document.add_paragraph(style="List Bullet")
         p.paragraph_format.space_after = Pt(2)
         add_run(p, item, size=9)
+
+
+def _as_rows(items, text_key):
+    """Coerce a list of report items to dicts so a hand-authored list of plain
+    strings (recommendations/findings/action_plan are human-edited on top of the
+    draft, and the sibling quick_wins IS a string list) still renders instead of
+    crashing .get() on a non-dict. A bare string becomes {text_key: s} so its text
+    appears; a dict passes through; any other scalar becomes an empty row."""
+    rows = []
+    for it in items or []:
+        if isinstance(it, dict):
+            rows.append(it)
+        elif isinstance(it, str):
+            rows.append({text_key: it})
+        else:
+            rows.append({})
+    return rows
 
 
 def _severity_breakdown(findings):
@@ -766,8 +783,16 @@ def add_code_block(document, code, highlight=None):
     """A shaded monospace box holding a literal snippet, with the exact problem
     substring(s) highlighted. `highlight` is a string or list of strings. Each
     source line becomes its own paragraph so line breaks are preserved."""
-    if isinstance(highlight, str):
+    # Normalize to a list of strings so a hand-authored numeric highlight (or a list
+    # with a numeric item) does not crash text.find/iteration in _add_marked_runs.
+    if highlight is None:
+        highlight = []
+    elif isinstance(highlight, str):
         highlight = [highlight]
+    elif isinstance(highlight, (list, tuple)):
+        highlight = [str(h) for h in highlight]
+    else:
+        highlight = [str(highlight)]
     table = document.add_table(rows=1, cols=1)
     set_table_borders(table, top=(4, HAIRLINE_HEX), bottom=(4, HAIRLINE_HEX),
                       left=(4, HAIRLINE_HEX), right=(4, HAIRLINE_HEX))
@@ -824,6 +849,23 @@ def add_footer(document, site):
 def build(data, out_path, chart_dir=None):
     document = Document()
     chart_dir = Path(chart_dir) if chart_dir else Path(out_path).parent
+
+    # Normalize the human-authored list fields once, up front, so every consumer
+    # (the glance tiles' severity breakdown, the section-title logic, and the
+    # tables) sees dicts and a hand-authored string list never crashes the build.
+    data["findings"] = _as_rows(data.get("findings"), "finding")
+    data["recommendations"] = _as_rows(data.get("recommendations"), "recommendation")
+    data["action_plan"] = _as_rows(data.get("action_plan"), "action")
+    # evidence is authored entirely by hand (draft() never emits it), so it is the
+    # most likely to arrive as a list of strings/paths; normalize it and the nested
+    # panel lists the same way so a bare-string item renders or degrades, never .get()s.
+    data["evidence"] = _as_rows(data.get("evidence"), "caption")
+    if isinstance(data.get("web_vitals"), dict):
+        data["web_vitals"]["metrics"] = _as_rows(data["web_vitals"].get("metrics"), "label")
+    if isinstance(data.get("key_dates"), dict):
+        data["key_dates"]["items"] = _as_rows(data["key_dates"].get("items"), "label")
+    if isinstance(data.get("scorecard"), dict):
+        data["scorecard"]["rows"] = _as_rows(data["scorecard"].get("rows"), "category")
 
     normal = document.styles["Normal"]
     normal.font.name = BODY_FONT
@@ -1066,10 +1108,17 @@ def main():
         sys.exit(1)
     in_path = Path(sys.argv[1])
     out_path = Path(sys.argv[2])
-    if not in_path.exists():
+    if not in_path.is_file():
         print(f"Input JSON not found: {in_path}")
         sys.exit(1)
-    data = json.loads(in_path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(in_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON in {in_path}: {e}")
+        sys.exit(1)
+    except OSError as e:
+        print(f"Could not read {in_path}: {e}")
+        sys.exit(1)
     if not isinstance(data, dict):
         print(f"Input JSON must be a JSON object, got {type(data).__name__}: {in_path}")
         sys.exit(1)

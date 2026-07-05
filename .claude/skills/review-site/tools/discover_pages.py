@@ -92,9 +92,12 @@ def _internal_nav_links(anchors, base, domain):
         href = (a.get("href") or "").strip()
         if not href or href.lower().startswith(("mailto:", "tel:", "javascript:", "#", "data:")):
             continue
-        absolute = urljoin(base, href).split("#")[0]
-        if urlparse(absolute).scheme not in ("http", "https"):
-            continue
+        try:
+            absolute = urljoin(base, href).split("#")[0]
+            if urlparse(absolute).scheme not in ("http", "https"):
+                continue
+        except ValueError:
+            continue  # a malformed href (e.g. an unclosed IPv6 literal) is skipped, not fatal
         if not _same_site(absolute, domain):
             continue
         if absolute not in seen:

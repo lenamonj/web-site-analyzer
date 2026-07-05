@@ -426,10 +426,17 @@ def main():
         print("Usage: python draft_report_data.py <scan.json> [output.json]")
         sys.exit(1)
     in_path = Path(args[0])
-    if not in_path.exists():
+    if not in_path.is_file():
         print(f"Scan JSON not found: {in_path}")
         sys.exit(1)
-    scan = json.loads(in_path.read_text(encoding="utf-8"))
+    try:
+        scan = json.loads(in_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON in {in_path}: {e}")
+        sys.exit(1)
+    except OSError as e:
+        print(f"Could not read {in_path}: {e}")
+        sys.exit(1)
     if not isinstance(scan, dict):
         print(f"Scan JSON must be a JSON object, got {type(scan).__name__}: {in_path}")
         sys.exit(1)

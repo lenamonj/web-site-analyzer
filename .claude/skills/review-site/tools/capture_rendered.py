@@ -647,7 +647,14 @@ def main():
     if not scan_path.is_file():
         print(f"No scan found at {scan_path}; run scan_site.py or run_review.py first.")
         sys.exit(1)
-    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    try:
+        scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON in {scan_path}: {e}")
+        sys.exit(1)
+    except OSError as e:
+        print(f"Could not read {scan_path}: {e}")
+        sys.exit(1)
     if not isinstance(scan, dict):
         print(f"Scan JSON must be a JSON object, got {type(scan).__name__}: {scan_path}")
         sys.exit(1)
