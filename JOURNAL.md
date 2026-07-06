@@ -403,7 +403,7 @@ budget on background-agent wait-turns.
 
 **Changed:** JOURNAL.md only (this entry). No product code touched this iteration.
 
-**Checkpoint:** pending
+**Checkpoint:** d0879938
 
 **Verification:** BACKLOG.md ## Converged names anchor 67dbb6aa024f0fcbeeef612c6f0c813c0d37e012. git status --porcelain is empty (clean tree). git diff --name-only 67dbb6aa lists only BACKLOG.md, a state file. Every path changed since the anchor is a state file (PLAN/BACKLOG/JOURNAL), so no implementing code has changed since certification; the Phase V/W zero-High/zero-Medium scores stand by the ratchet rule.
 
