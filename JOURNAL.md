@@ -397,3 +397,16 @@ per-site guards it replaced. The relaunch ran the final audit inline after the f
 budget on background-agent wait-turns.
 
 **Next:** converged. Nothing open. Outputting the promise.
+
+## iter 1/3 | 3008acaa | 2026-07-06 | RATCHET | converged
+**Task:** Ratchet check on relaunch (jeffy N=3). Verify the recorded convergence anchor still holds so the run converges without re-auditing already-settled code.
+
+**Changed:** JOURNAL.md only (this entry). No product code touched this iteration.
+
+**Checkpoint:** pending
+
+**Verification:** BACKLOG.md ## Converged names anchor 67dbb6aa024f0fcbeeef612c6f0c813c0d37e012. git status --porcelain is empty (clean tree). git diff --name-only 67dbb6aa lists only BACKLOG.md, a state file. Every path changed since the anchor is a state file (PLAN/BACKLOG/JOURNAL), so no implementing code has changed since certification; the Phase V/W zero-High/zero-Medium scores stand by the ratchet rule.
+
+**Learnings:** the anchor recorded by the prior run (commit e498f91) makes this relaunch a one-step ratchet rather than a full re-audit, which is the intended fast path when nothing but the ledger moved since convergence.
+
+**Next:** converged. Nothing open. Outputting the promise.
