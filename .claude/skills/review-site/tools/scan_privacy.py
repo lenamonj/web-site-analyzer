@@ -354,7 +354,8 @@ def _scan(url, page=None):
 
         if third:
             tp = {"verdict": "info", "count": len(third), "domains": third[:MAX_LIST],
-                  "note": f"{len(third)} distinct third-party origin(s): {', '.join(third[:MAX_LIST])}."}
+                  "note": f"{common.count_noun(len(third), 'distinct third-party origin')}: "
+                          f"{', '.join(third[:MAX_LIST])}."}
         else:
             tp = {"verdict": "info", "count": 0, "domains": [],
                   "note": "No third-party resource origins in the static HTML."}
@@ -369,8 +370,9 @@ def _scan(url, page=None):
 
         if pixels:
             px = {"verdict": "warn", "count": len(pixels), "examples": pixels[:MAX_LIST],
-                  "note": (f"{len(pixels)} likely tracking pixel(s) (1x1 or known-tracker <img>). "
-                           "JS-injected pixels are not visible to a static scan.")}
+                  "note": (f"{common.count_noun(len(pixels), 'likely tracking pixel')} "
+                           "(1x1 or known-tracker <img>). JS-injected pixels are not "
+                           "visible to a static scan.")}
         else:
             px = {"verdict": "pass", "count": 0, "examples": [],
                   "note": "No 1x1 or known-tracker tracking pixels in static markup."}

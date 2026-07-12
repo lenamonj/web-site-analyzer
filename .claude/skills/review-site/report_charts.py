@@ -136,6 +136,9 @@ def render_trend_charts(trend, out_dir, prefix):
     plt.rcParams["font.family"] = "sans-serif"
     plt.rcParams["font.sans-serif"] = SANS
     quarters = trend["quarters"]
+    # Reader-facing panel titles supplied by the trend data; a series without
+    # one falls back to its key stem so old trend blocks still render.
+    labels = trend.get("series_labels") or {}
     charts = []
 
     overall = series.get("overall_score")
@@ -166,7 +169,8 @@ def render_trend_charts(trend, out_dir, prefix):
             ax = axes[i // cols][i % cols]
             _plot_series(ax, series[key], markersize=4, endpoint_size=6)
             _style_axis(ax)
-            ax.set_title(key[:-len("_score")], fontsize=8.5, color=INK, pad=3)
+            ax.set_title(labels.get(key) or key[:-len("_score")],
+                         fontsize=8.5, color=INK, pad=3)
             ax.set_ylim(0, 1.08)
             ax.set_yticks([0, 1])
             _label_endpoint(ax, series[key], lambda v: f"{v:.2f}",

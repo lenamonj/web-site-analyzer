@@ -143,8 +143,10 @@ def check_dkim(domain):
         hits = list(pool.map(probe, DKIM_SELECTORS))
     found = [sel for sel, hit in zip(DKIM_SELECTORS, hits) if hit]
     if found:
+        word = "selector" if len(found) == 1 else "selectors"
         return {"selectors_found": found, "selectors_probed": DKIM_SELECTORS,
-                "verdict": "pass", "note": f"DKIM key published for selector(s): {', '.join(found)}."}
+                "verdict": "pass",
+                "note": f"DKIM key published for {word} {', '.join(found)}."}
     return {"selectors_found": [], "selectors_probed": DKIM_SELECTORS,
             "verdict": "info",
             "note": (f"No DKIM key on the {len(DKIM_SELECTORS)} probed selectors (provider names "
@@ -159,7 +161,8 @@ def check_mx(domain):
                 "note": f"MX lookup failed ({res['error']}); mail routing could not be determined."}
     hosts = [a.split()[-1].rstrip(".") for a in res["answers"] if a]
     if hosts:
-        return {"records": hosts, "verdict": "info", "note": f"{len(hosts)} MX host(s)."}
+        return {"records": hosts, "verdict": "info",
+                "note": f"{common.count_noun(len(hosts), 'MX host')}."}
     return {"records": [], "verdict": "info", "note": "No MX records; domain does not receive mail here."}
 
 

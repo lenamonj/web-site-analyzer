@@ -60,7 +60,8 @@ def check_favicon(parsed, base):
     declared = [l for l in parsed["links"] if "icon" in (l.get("rel", "") or "").lower()]
     if declared:
         return {"verdict": "pass", "declared": len(declared),
-                "note": f"{len(declared)} icon link(s) declared (favicon or touch icon)."}
+                "note": f"{common.count_noun(len(declared), 'icon link')} declared "
+                        "(favicon or touch icon)."}
     res = common.http_fetch(urljoin(base, "/favicon.ico"), method="HEAD", want_body=False)
     if res.get("final_status") in (405, 501):
         # Some servers reject HEAD; do not report a missing favicon off that.
@@ -94,8 +95,9 @@ def check_deprecated_tags(body, inconclusive):
         counts[tag] = counts.get(tag, 0) + 1
     if counts:
         listed = ", ".join(f"{t} x{n}" for t, n in sorted(counts.items()))
+        word = "tag" if len(counts) == 1 else "tags"
         return {"verdict": "warn", "counts": counts,
-                "note": f"Deprecated presentational tag(s) in the markup: {listed}."}
+                "note": f"Deprecated presentational {word} in the markup: {listed}."}
     return {"verdict": "pass", "counts": {}, "note": "No deprecated presentational tags."}
 
 
@@ -109,7 +111,7 @@ def check_inline_style_density(body, inconclusive):
                 "note": (f"{count} inline style attributes on one page; styling is escaping the "
                          "stylesheet, which erodes visual consistency and maintainability.")}
     return {"verdict": "pass", "count": count,
-            "note": f"{count} inline style attribute(s) in the static HTML."}
+            "note": f"{common.count_noun(count, 'inline style attribute')} in the static HTML."}
 
 
 def _first_family(declaration):

@@ -168,12 +168,13 @@ def _asset_caching_check(measured, inconclusive):
     if len(uncached) * 2 > len(ok_assets):
         return {"verdict": "warn", "measured": len(ok_assets), "uncached": len(uncached),
                 "examples": uncached[:5],
-                "note": (f"{len(uncached)} of {len(ok_assets)} measured static asset(s) have no "
-                         "usable caching lifetime (no max-age or marked no-store); repeat visits "
-                         "redownload them.")}
+                "note": (f"{len(uncached)} of {common.count_noun(len(ok_assets), 'measured static asset')} "
+                         "without a usable caching lifetime (no max-age or marked no-store); "
+                         "repeat visits redownload them.")}
     return {"verdict": "pass", "measured": len(ok_assets), "uncached": len(uncached),
-            "note": (f"{len(ok_assets) - len(uncached)} of {len(ok_assets)} measured static "
-                     "asset(s) carry a caching lifetime.")}
+            "note": (f"{len(ok_assets) - len(uncached)} of "
+                     f"{common.count_noun(len(ok_assets), 'measured static asset')} "
+                     "carry a caching lifetime.")}
 
 
 def _redirect_chain_check(res):
@@ -262,16 +263,17 @@ def _scan(url, page=None):
             "verdict": ("fail" if total_floor > TOTAL_FAIL_BYTES
                         else "warn" if total_floor > TOTAL_WARN_BYTES else "pass"),
             "note": (f"Static weight floor is {_kb(total_floor)} KB across HTML plus "
-                     f"{len(measured)} measured resource(s). JS-loaded resources are not counted.")},
+                     f"{common.count_noun(len(measured), 'measured resource')}. "
+                     "JS-loaded resources are not counted.")},
         "render_blocking_scripts": {
             "count": len(blocking_scripts),
             "examples": [r["url"] for r in blocking_scripts[:5]],
             "verdict": "warn" if len(blocking_scripts) > BLOCKING_SCRIPTS_WARN else "pass",
-            "note": (f"{len(blocking_scripts)} render-blocking script(s) in the shipped HTML "
-                     "(no async or defer).")},
+            "note": (f"{common.count_noun(len(blocking_scripts), 'render-blocking script')} "
+                     "in the shipped HTML (no async or defer).")},
         "third_party_origins": {
             "count": len(third_party), "hosts": third_party[:15], "verdict": "info",
-            "note": f"{len(third_party)} third-party resource origin(s)."},
+            "note": f"{common.count_noun(len(third_party), 'third-party resource origin')}."},
         "compression": _compression_check(res),
         "caching": _caching_check(res.get("final_headers", {}) or {}),
         "asset_caching": _asset_caching_check(measured, render["likely_client_rendered"]),

@@ -88,10 +88,11 @@ def check_subresource_integrity(body, base, inconclusive):
     if missing:
         return {"verdict": "warn", "cross_origin": len(cross), "without_integrity": len(missing),
                 "examples": missing[:MAX_EXAMPLES],
-                "note": (f"{len(missing)} of {len(cross)} cross-origin script/style resource(s) "
-                         "lack an integrity attribute; a compromised CDN could alter them undetected.")}
+                "note": (f"{len(missing)} of {common.count_noun(len(cross), 'cross-origin script/style resource')} "
+                         "without an integrity attribute; a compromised CDN could alter them undetected.")}
     return {"verdict": "pass", "cross_origin": len(cross), "without_integrity": 0,
-            "note": f"All {len(cross)} cross-origin script/style resource(s) carry Subresource Integrity."}
+            "note": f"{common.count_noun(len(cross), 'cross-origin script/style resource')} "
+                    "checked; all carry Subresource Integrity."}
 
 
 def check_form_actions(body, base, inconclusive):
@@ -113,11 +114,12 @@ def check_form_actions(body, base, inconclusive):
     insecure += [m.group(1) for m in FORMACTION_RE.finditer(body)]
     if insecure:
         return {"verdict": "fail", "count": len(forms), "insecure_actions": insecure[:MAX_EXAMPLES],
-                "note": (f"{len(insecure)} insecure http:// submission target(s) (form action or "
-                         "button formaction) on this HTTPS page; submitted data would leave the "
-                         "page unencrypted.")}
+                "note": (f"{common.count_noun(len(insecure), 'insecure http:// submission target')} "
+                         "(form action or button formaction) on this HTTPS page; submitted data "
+                         "would leave the page unencrypted.")}
     return {"verdict": "pass", "count": len(forms),
-            "note": f"All {len(forms)} form(s) submit over HTTPS or relative URLs."}
+            "note": f"{common.count_noun(len(forms), 'form')} checked; all submit "
+                    "over HTTPS or relative URLs."}
 
 
 def check_inline_handlers(body, inconclusive):
@@ -127,8 +129,9 @@ def check_inline_handlers(body, inconclusive):
     count = len(INLINE_HANDLER_RE.findall(body))
     if count:
         return {"verdict": "info", "count": count,
-                "note": (f"{count} inline event handler attribute(s) (onclick and similar). "
-                         "These require unsafe-inline and block a strict Content-Security-Policy.")}
+                "note": (f"{common.count_noun(count, 'inline event handler attribute')} "
+                         "(onclick and similar). These require unsafe-inline and block "
+                         "a strict Content-Security-Policy.")}
     return {"verdict": "pass", "count": 0, "note": "No inline event handlers in the static HTML."}
 
 
@@ -145,10 +148,12 @@ def check_target_blank(anchors, inconclusive):
     unprotected = sum(1 for a in blank if not a[1])
     if unprotected:
         return {"verdict": "info", "count": len(blank), "without_rel": unprotected,
-                "note": (f"{unprotected} of {len(blank)} target=_blank link(s) lack rel=noopener. "
-                         "Modern browsers imply noopener; older ones allow tab-nabbing.")}
+                "note": (f"{unprotected} of {common.count_noun(len(blank), 'target=_blank link')} "
+                         "without rel=noopener. Modern browsers imply noopener; older ones "
+                         "allow tab-nabbing.")}
     return {"verdict": "pass", "count": len(blank),
-            "note": f"All {len(blank)} target=_blank link(s) carry rel=noopener or noreferrer."}
+            "note": f"{common.count_noun(len(blank), 'target=_blank link')} checked; "
+                    "all carry rel=noopener or noreferrer."}
 
 
 A_TAG_RE = common.tag_attrs_re("a")

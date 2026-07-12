@@ -63,7 +63,9 @@ def check_robots_txt(base):
                              "blocked site-wide.")}
         return {"present": True, "status": res["final_status"], "sitemaps": sitemaps,
                 "disallows_all": False, "verdict": "pass",
-                "note": f"robots.txt present with {len(sitemaps)} sitemap reference(s)."}
+                "note": ("robots.txt present with "
+                         f"{common.count_noun(len(sitemaps), 'sitemap reference')}."
+                         if sitemaps else "robots.txt present; no sitemap reference.")}
     return {"present": False, "status": res["final_status"], "sitemaps": [],
             "verdict": "warn", "note": "No usable robots.txt at /robots.txt."}
 

@@ -127,8 +127,11 @@ def _issue_name(issue):
     raw_note = issue.get("note")
     note = raw_note.strip() if isinstance(raw_note, str) else ""
     scan = issue.get("scan") if isinstance(issue.get("scan"), str) else ""
-    body = f"{check}: {note}" if check and note else (check or note)
-    return f"[{scan}] {body}".strip()
+    # Reader-facing line: the area label and the scanner's own sentence; the
+    # check id appears only when there is no note to speak with.
+    body = note or check
+    area = common.issue_area(scan)
+    return f"{area}: {body}".strip(": ").strip()
 
 
 def _delta_rows(prev, curr):
@@ -148,7 +151,7 @@ def _delta_rows(prev, curr):
                 direction = "improved" if rank > prev_rank else "declined"
             else:
                 direction = "held"
-        rows.append({"category": name,
+        rows.append({"category": common.category_label(name),
                      "prev_band": prev_band,
                      "band": band,
                      "prev_score": p, "score": c, "direction": direction})
@@ -158,7 +161,7 @@ def _delta_rows(prev, curr):
     for name in prev_bands:
         if name == "overall" or name in curr_bands:
             continue
-        rows.append({"category": name,
+        rows.append({"category": common.category_label(name),
                      "prev_band": prev_bands.get(name),
                      "band": None,
                      "prev_score": _score(prev, name), "score": _score(curr, name),
@@ -176,9 +179,16 @@ def build_trend(entries):
     quarters = [q for q, _ in points]
     prev, curr = points[-2][1], points[-1][1]
     diff = scan_site.diff_issues(prev, curr)
+    series = _series(points)
+    # Reader-facing titles for the category chart panels, carried as data so
+    # the chart renderer never needs the category-key vocabulary itself.
+    series_labels = {k: common.category_short(k[:-len("_score")])
+                     for k in series
+                     if k.endswith("_score") and k != "overall_score"}
     return {
         "quarters": quarters,
-        "series": _series(points),
+        "series": series,
+        "series_labels": series_labels,
         "latest_delta": {
             "prev_quarter": quarters[-2],
             "quarter": quarters[-1],

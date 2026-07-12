@@ -254,6 +254,18 @@ def section_heading(document, text, number=None):
     return para
 
 
+def section_note(document, text):
+    """One muted line under a section heading stating how to read the section
+    (method, not findings; it never varies with the data). The difference
+    between a table dropped on the page and a table introduced."""
+    note = document.add_paragraph()
+    note.paragraph_format.space_before = Pt(0)
+    note.paragraph_format.space_after = Pt(8)
+    note.paragraph_format.keep_with_next = True
+    add_run(note, text, size=8.5, italic=True, color=MUTED_RGB)
+    return note
+
+
 def _rule_paragraph(document, size, color, right_indent=None,
                     space_before=0, space_after=10):
     """A horizontal rule drawn as a paragraph bottom border. A right indent
@@ -275,14 +287,44 @@ def _rule_paragraph(document, size, color, right_indent=None,
     return rule
 
 
+def _plural(n, noun):
+    """'1 page' / '12 pages'. A '(s)' suffix reads as a form letter, not a
+    designed document; n is shown as given (it may be a hand-authored string)."""
+    try:
+        one = float(n) == 1
+    except (TypeError, ValueError):
+        one = False
+    return f"{n} {noun}" + ("" if one else "s")
+
+
 def _scope_text(scope):
     bits = []
     pages = (scope or {}).get("pages_reviewed")
     if pages:
-        bits.append(f"{pages} page(s) reviewed")
+        bits.append(f"{_plural(pages, 'page')} reviewed")
     if (scope or {}).get("method"):
         bits.append(str(scope["method"]))  # coerce so a non-string method cannot crash join
     return "  |  ".join(bits)
+
+
+BAND_DISPLAY_ORDER = ["Strong", "Adequate", "Weak", "Poor", "Not measured"]
+
+
+def _band_breakdown(rows):
+    """'10 areas measured: 7 Strong, 2 Adequate, 1 Weak' from the scorecard
+    rows - counted, never invented; '' when there are no rows to count."""
+    rows = rows or []
+    counts = {}
+    for row in rows:
+        band = row.get("band") if isinstance(row, dict) else None
+        band = _hkey(band) if band else "Not measured"
+        counts[band] = counts.get(band, 0) + 1
+    if not counts:
+        return ""
+    ordered = ([b for b in BAND_DISPLAY_ORDER if b in counts]
+               + [b for b in counts if b not in BAND_DISPLAY_ORDER])
+    parts = ", ".join(f"{counts[b]} {b}" for b in ordered)
+    return f"{_plural(len(rows), 'area')} measured: {parts}"
 
 
 def add_cover(document, data, section_titles):
@@ -318,17 +360,25 @@ def add_cover(document, data, section_titles):
     _rule_paragraph(document, size=28, color=GOLD_HEX,
                     right_indent=PAGE_WIDTH - Inches(2.3), space_after=18)
 
-    overall = (data.get("scorecard") or {}).get("overall")
+    scorecard = data.get("scorecard") or {}
+    overall = scorecard.get("overall")
     if overall:
         overall = str(overall)  # tolerate a non-string band from hand-authored data
         posture = document.add_paragraph()
-        posture.paragraph_format.space_after = Pt(16)
+        posture.paragraph_format.space_after = Pt(6)
         add_run(posture, "OVERALL POSTURE   ", size=9, bold=True,
                 color=MUTED_RGB, letter_spacing=24)
         fill = BAND_FILL.get(_hkey(overall), BAND_FILL["Not measured"])
         chip = add_run(posture, f"  {overall.upper()}  ", size=9, bold=True,
                        color=text_color_for_fill(fill), letter_spacing=24)
         _shade_run(chip, fill)
+        breakdown = _band_breakdown(scorecard.get("rows"))
+        if breakdown:
+            counts = document.add_paragraph()
+            counts.paragraph_format.space_after = Pt(16)
+            add_run(counts, breakdown, size=9, color=MUTED_RGB)
+        else:
+            posture.paragraph_format.space_after = Pt(16)
 
     meta_lines = [data.get("target_url", ""), data.get("date", ""),
                   _scope_text(data.get("scope"))]
@@ -446,8 +496,8 @@ def add_trend_table(document, delta):
     headers = ["Area", delta.get("prev_quarter") or "Prior",
                delta.get("quarter") or "Current", "Score", "Direction"]
     add_data_table(document, headers,
-                   [Inches(1.35), Inches(1.1), Inches(1.1),
-                    Inches(2.15), Inches(1.3)],
+                   [Inches(1.7), Inches(1.05), Inches(1.05),
+                    Inches(2.0), Inches(1.2)],
                    [trend_row(r) for r in delta.get("scorecard", [])])
 
 
@@ -487,7 +537,7 @@ def add_trend_section(document, trend, chart_dir, prefix, number):
     movement = document.add_paragraph()
     movement.paragraph_format.space_before = Pt(10)
     add_run(movement,
-            f"{delta.get('resolved_findings', 0)} finding(s) resolved since "
+            f"{_plural(delta.get('resolved_findings', 0), 'finding')} resolved since "
             f"{delta.get('prev_quarter', 'the previous quarter')}; "
             f"{delta.get('new_findings', 0)} new.", size=10, bold=True)
     for item in delta.get("resolved_examples") or []:
@@ -713,6 +763,10 @@ def add_vitals_panel(document, web_vitals):
         fill = VITALS_FILL.get(_hkey(rating), BAND_FILL["Not measured"])
         run = add_run(p3, f" {rating} ", size=7.5, bold=True, color=text_color_for_fill(fill))
         _shade_run(run, fill)
+        # The published Good threshold the verdict was graded against, so the
+        # reader sees distance-to-good, not just a color.
+        if m.get("target"):
+            add_run(p3, f"   {m['target']}", size=7.5, color=MUTED_RGB)
     set_col_widths(table, [Inches(7.0 / len(metrics))] * len(metrics))
     keep_rows_together(table)
     src = document.add_paragraph()
@@ -838,9 +892,18 @@ def add_data_table(document, headers, widths, rows):
 
 
 def _chip(cell, text, fill):
-    shade_cell(cell, fill)
-    set_cell_text(cell, text, size=8.5, bold=True, color=text_color_for_fill(fill),
-                  align=WD_ALIGN_PARAGRAPH.CENTER)
+    """A compact badge: a shaded run centered in a white cell, not a full-cell
+    fill. A tall row (a finding whose evidence names many pages) then shows a
+    small constant-size chip instead of a giant colored slab, which is the
+    difference between a designed table and a heat map."""
+    cell.text = ""
+    para = cell.paragraphs[0]
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(0)
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = add_run(para, f" {text} ", size=8, bold=True,
+                  color=text_color_for_fill(fill))
+    _shade_run(run, fill)
 
 
 SCORE_BAR_BLOCK = chr(0x2588)  # FULL BLOCK; solid segments print cleanly
@@ -1075,6 +1138,10 @@ def build(data, out_path, chart_dir=None):
 
         rows = scorecard["rows"]
         has_scores = any(_finite_number(r.get("score")) for r in rows)
+        section_note(document,
+                     "Each area rolls its automated checks into a posture band."
+                     + (" The bar is the measured pass score, 0 to 1."
+                        if has_scores else ""))
 
         def scorecard_row(row):
             def write(cells):
@@ -1121,6 +1188,9 @@ def build(data, out_path, chart_dir=None):
     if findings:
         section_heading(document, "Key findings hurting the site",
                         number_of.get("Key findings hurting the site"))
+        section_note(document,
+                     "Ordered by severity. The evidence column names every "
+                     "affected page; paths are on the reviewed site.")
 
         def finding_row(row):
             def write(cells):

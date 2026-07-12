@@ -170,7 +170,7 @@ def _scan(url, page=None):
                                      if parsed["jsonld_types"] else "No JSON-LD structured data.")},
         "hreflang": {"alternates": parsed["hreflang"],
                      "verdict": "info",
-                     "note": f"{len(parsed['hreflang'])} hreflang alternate(s)."},
+                     "note": f"{common.count_noun(len(parsed['hreflang']), 'hreflang alternate')}."},
         "image_alt": _image_alt_check(parsed["images"], inconclusive),
     }
 

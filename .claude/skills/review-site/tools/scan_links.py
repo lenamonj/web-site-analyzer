@@ -170,8 +170,8 @@ def _mixed_content(html, is_https):
                 "note": "No insecure http resources referenced."}
     active = [f for f in found if f["active"]]
     verdict = "fail" if active else "warn"
-    note = (f"{len(found)} insecure http reference(s); {len(active)} are active content "
-            f"(script/iframe/stylesheet).")
+    note = (f"{common.count_noun(len(found), 'insecure http reference')}, of which "
+            f"{len(active)} active content (script/iframe/stylesheet).")
     return {"count": len(found), "items": found[:15], "verdict": verdict, "note": note}
 
 
@@ -214,10 +214,11 @@ def _fragment_check(anchors, ids, base, inconclusive):
     if missing:
         examples = ", ".join("#" + m for m in missing[:5])
         return {"verdict": "warn", "count": len(targets), "missing": missing[:10],
-                "note": (f"{len(missing)} in-page anchor target(s) do not exist on the page "
-                         f"({examples}); those links scroll nowhere.")}
+                "note": (f"{common.count_noun(len(missing), 'in-page anchor target')} "
+                         f"missing from the page ({examples}); those links scroll nowhere.")}
     return {"verdict": "pass", "count": len(targets),
-            "note": f"All {len(targets)} in-page fragment link(s) resolve to an element id."}
+            "note": f"{common.count_noun(len(targets), 'in-page fragment link')} "
+                    "checked; all resolve to an element id."}
 
 
 def _scan(url, page=None):

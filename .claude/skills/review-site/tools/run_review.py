@@ -138,7 +138,8 @@ def main():
     cap = out.get("capture")
     if cap is not None:
         if cap.get("captured"):
-            print(f"Rendered evidence captured for {len(cap['captured'])} page(s) "
+            print("Rendered evidence captured for "
+                  f"{common.count_noun(len(cap['captured']), 'page')} "
                   "and consumed by a re-scan.")
         if cap.get("note"):
             print(f"Capture: {cap['note']}")

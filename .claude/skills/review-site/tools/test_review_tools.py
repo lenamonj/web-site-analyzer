@@ -2461,7 +2461,7 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
     def test_issue_line_names_pages(self):
         groups = site.group_issues(self.ISSUES)
         line = site.issue_line(next(g for g in groups if g["check"] == "landmarks"))
-        self.assertIn("on 3 page(s)", line)
+        self.assertIn("on 3 pages", line)
         self.assertIn("+1 more", line)
 
     def test_diff_issues_reports_new_and_resolved(self):
@@ -2550,11 +2550,13 @@ class TestIssueGroupingAndDelta(unittest.TestCase):
             "issues_grouped": {"fail": site.group_issues(self.ISSUES[:4]), "warn": []},
         }
         data = drpt.draft(scan)
-        landmarks = next(f for f in data["findings"] if "landmarks" in f["finding"])
-        self.assertEqual(landmarks["area"], "a11y")
-        self.assertIn("3 page(s)", landmarks["evidence"])
+        landmarks = next(f for f in data["findings"] if "Missing landmark" in f["finding"])
+        self.assertEqual(landmarks["area"], "Accessibility")
+        # host is "x", so same-host pages compact to their paths, all named.
+        self.assertEqual(landmarks["evidence"], "3 pages: /a, /b, /c")
         # One grouped finding, not three per-page duplicates.
-        self.assertEqual(sum(1 for f in data["findings"] if "landmarks" in f["finding"]), 1)
+        self.assertEqual(sum(1 for f in data["findings"]
+                             if "Missing landmark" in f["finding"]), 1)
 
 
 class TestCrux(unittest.TestCase):
@@ -2941,7 +2943,8 @@ class TestFindingsHistory(unittest.TestCase):
                       "issues": {"fail": [], "warn": []}}
             trend = trends_mod.build_trend([base, second])          # must not raise
             self.assertIsNotNone(trend, f"bad_band={bad_band!r}")
-            row = next(r for r in trend["latest_delta"]["scorecard"] if r["category"] == "seo")
+            row = next(r for r in trend["latest_delta"]["scorecard"]
+                       if r["category"] == "SEO and on-page")
             self.assertIsNone(row["band"])                          # corrupt band -> None, missed cleanly
             self.assertEqual(row["direction"], "held")              # unhashable band -> no rank -> held
         # a resolved issue carrying a non-string note must not crash _issue_name
@@ -2960,8 +2963,9 @@ class TestFindingsHistory(unittest.TestCase):
         good_curr = {"measured_at_utc": "2026-04-15T10:00:00Z", "bands": {"seo": "Strong"},
                      "metrics": {"scores": {"seo": 0.9}}, "issues": {"fail": [], "warn": []}}
         t = trends_mod.build_trend([good_prev, good_curr])
-        self.assertEqual(t["latest_delta"]["resolved_examples"], ["[scan_seo:https://x/] h1: No H1"])
-        seo = next(r for r in t["latest_delta"]["scorecard"] if r["category"] == "seo")
+        self.assertEqual(t["latest_delta"]["resolved_examples"], ["scan_seo: No H1"])
+        seo = next(r for r in t["latest_delta"]["scorecard"]
+                   if r["category"] == "SEO and on-page")
         self.assertEqual(seo["direction"], "improved")
 
     def test_delta_prefers_ledger_over_stale_json(self):
@@ -4142,14 +4146,28 @@ class TestDraftReportData(unittest.TestCase):
     def test_scorecard_overall_is_a_band_string(self):
         d = drpt.draft(self.SCAN)
         self.assertEqual(d["scorecard"]["overall"], "Weak")
-        self.assertEqual({r["category"] for r in d["scorecard"]["rows"]}, {"security", "seo"})
+        # Rows carry reader-facing names, never raw category keys (a CEO
+        # document must not say dns_email or a11y).
+        self.assertEqual({r["category"] for r in d["scorecard"]["rows"]},
+                         {"Security posture", "SEO and on-page"})
+
+    def test_scorecard_detail_reads_as_plain_english(self):
+        rows = {r["category"]: r for r in drpt.draft(self.SCAN)["scorecard"]["rows"]}
+        self.assertEqual(rows["Security posture"]["detail"],
+                         "0 of 7 checks pass, 6 failures, 1 warning")
+        self.assertEqual(rows["SEO and on-page"]["detail"],
+                         "4 of 7 checks pass, 3 warnings")
+        # The debug-dump format must be gone for good.
+        for r in rows.values():
+            self.assertNotIn("pass/warn/fail", r["detail"])
+            self.assertNotIn("(score", r["detail"])
 
     def test_scorecard_rows_carry_the_numeric_score(self):
         # The builder draws its score bar from this number (PLAN.md section
         # 35); it must be the measured score, copied, never re-derived.
         rows = {r["category"]: r for r in drpt.draft(self.SCAN)["scorecard"]["rows"]}
-        self.assertEqual(rows["security"]["score"], 0.07)
-        self.assertEqual(rows["seo"]["score"], 0.79)
+        self.assertEqual(rows["Security posture"]["score"], 0.07)
+        self.assertEqual(rows["SEO and on-page"]["score"], 0.79)
 
     def test_scanner_crash_is_surfaced_and_caveats_the_headline(self):
         # P64: a crashed scanner leaves its category Not measured, so the report
@@ -4158,22 +4176,32 @@ class TestDraftReportData(unittest.TestCase):
         # category. The no-crash path (base SCAN) carries neither.
         base = drpt.draft(self.SCAN)
         self.assertEqual(base["scorecard"]["scanner_errors"], [])
-        self.assertNotIn("could not measure their category", base["bottom_line"])
+        self.assertNotIn("could not measure", base["bottom_line"])
         crashed = json.loads(json.dumps(self.SCAN))
         crashed["scanner_errors"] = [{"tool": "scan_tls", "scope": "host",
                                       "error": "cert parse crash"}]
         d = drpt.draft(crashed)
         self.assertEqual([e["tool"] for e in d["scorecard"]["scanner_errors"]], ["scan_tls"])
         self.assertIn("scan_tls", d["bottom_line"])
-        self.assertIn("could not measure their category", d["bottom_line"])
+        self.assertIn("could not measure", d["bottom_line"])
+        self.assertIn("covers only the measured categories", d["bottom_line"])
 
     def test_findings_map_severity_ordering_and_evidence(self):
         d = drpt.draft(self.SCAN)
         self.assertEqual([f["severity"] for f in d["findings"]], ["High", "High", "Medium"])
-        a11y = next(f for f in d["findings"] if f["area"] == "a11y")
+        # Areas are reader-facing labels mapped from the scan labels.
+        a11y = next(f for f in d["findings"] if f["area"] == "Accessibility")
         self.assertEqual(a11y["evidence"], "https://example.com")
-        host = next(f for f in d["findings"] if f["area"] == "http_security")
+        host = next(f for f in d["findings"] if f["area"] == "Security")
         self.assertIn("example-com_scan.json", host["evidence"])
+
+    def test_finding_text_is_the_note_without_a_check_prefix(self):
+        # The scanner's own sentence is the finding; a "check_id:" prefix turns
+        # the deliverable into tool output. The note stays verbatim-traceable.
+        findings = {f["finding"] for f in drpt.draft(self.SCAN)["findings"]}
+        self.assertIn("No HSTS.", findings)
+        self.assertIn("Images missing alt.", findings)
+        self.assertNotIn("hsts: No HSTS.", findings)
 
     def test_schema_has_every_builder_key(self):
         d = drpt.draft(self.SCAN)
@@ -4287,9 +4315,10 @@ class TestDraftReportData(unittest.TestCase):
             "tls": {"band": "Strong", "pass": 4, "warn": 0, "fail": 0, "score": 1.0},
         }
         d = drpt.draft(scan)
-        # TLS (1.0) must lead security (0.97), and the bottom line names it.
+        # TLS (1.0) must lead security (0.97), and the bottom line names it
+        # with its acronym capitals intact.
         self.assertTrue(d["assessment"]["strengths"][0].startswith("TLS and certificates"))
-        self.assertIn("strongest area is tls and certificates", d["bottom_line"])
+        self.assertIn("strongest area is TLS and certificates", d["bottom_line"])
 
     def test_action_plan_orders_by_measured_breadth_within_a_verdict(self):
         scan = json.loads(json.dumps(self.SCAN))
@@ -4307,7 +4336,7 @@ class TestDraftReportData(unittest.TestCase):
         plan = drpt.draft(scan)["action_plan"]
         # Site-wide (host) first, then 12 pages, then 1 page.
         self.assertEqual([a["affects"] for a in plan[:3]],
-                         ["site-wide", "12 page(s)", "https://x/a"])
+                         ["site-wide", "12 pages", "https://x/a"])
 
     def test_action_plan_maps_checks_to_imperatives_fail_first(self):
         d = drpt.draft(self.SCAN)
@@ -4351,6 +4380,59 @@ class TestDraftReportData(unittest.TestCase):
              "note": "Heavy.", "pages": ["https://x/about/"]}], "warn": []}
         plan = drpt.draft(scan)["action_plan"]
         self.assertEqual(plan[0]["affects"], "https://x/about/")
+
+    def test_same_host_pages_compact_to_paths_nothing_dropped(self):
+        # Pages on the reviewed host compact to their path (the host is named
+        # once on the cover), so a many-page enumeration stays readable while
+        # still naming EVERY page. Off-host pages keep their full URL.
+        scan = json.loads(json.dumps(self.SCAN))
+        pages = ["https://example.com/", "https://example.com/a/",
+                 "https://example.com/b/deep/page/", "https://other.example/x"]
+        scan["issues_grouped"] = {"fail": [
+            {"scan": "a11y", "check": "landmarks", "verdict": "fail",
+             "note": "Missing landmarks.", "pages": pages}], "warn": []}
+        f = drpt.draft(scan)["findings"][0]
+        self.assertEqual(f["evidence"],
+                         "4 pages: /, /a/, /b/deep/page/, https://other.example/x")
+        # The plan's affects column compacts the same way for small sets.
+        scan["issues_grouped"]["fail"][0]["pages"] = pages[:3]
+        plan = drpt.draft(scan)["action_plan"]
+        self.assertEqual(plan[0]["affects"], "/, /a/, /b/deep/page/")
+
+    def test_strongest_area_skips_the_cwv_strength_line(self):
+        # The CWV "all Good" line is inserted ahead of the category strengths;
+        # the bottom line's "strongest area" must still name a CATEGORY, not
+        # quote the whole vitals sentence.
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["scorecard"]["categories"] = {
+            "tls": {"band": "Strong", "pass": 4, "warn": 0, "fail": 0, "score": 1.0}}
+        scan["host_scans"] = {"crux": {"checks": {
+            "field_lcp": {"verdict": "pass", "value": 1000},
+            "field_cls": {"verdict": "pass", "value": 0.0},
+            "field_inp": {"verdict": "pass", "value": 61}}}}
+        d = drpt.draft(scan)
+        self.assertTrue(d["assessment"]["strengths"][0].startswith("Core Web Vitals"))
+        self.assertIn("strongest area is TLS and certificates", d["bottom_line"])
+        self.assertNotIn("strongest area is core Web Vitals", d["bottom_line"])
+
+    def test_zero_graded_category_reads_no_checks_measured(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["scorecard"]["categories"]["readability"] = {
+            "band": "Not measured", "pass": 0, "warn": 0, "fail": 0, "score": None}
+        rows = {r["category"]: r for r in drpt.draft(scan)["scorecard"]["rows"]}
+        self.assertEqual(rows["Content readability"]["detail"], "no checks measured")
+
+    def test_web_vitals_carry_the_published_good_threshold(self):
+        scan = json.loads(json.dumps(self.SCAN))
+        scan["host_scans"] = {"crux": {"checks": {
+            "field_lcp": {"verdict": "warn", "value": 2700},
+            "field_cls": {"verdict": "pass", "value": 0.05},
+            "field_inp": {"verdict": "pass", "value": 96}}}}
+        wv = drpt.draft(scan)["web_vitals"]
+        targets = {m["label"]: m["target"] for m in wv["metrics"]}
+        self.assertEqual(targets, {"LCP": "good is 2.5s or less",
+                                   "CLS": "good is 0.10 or less",
+                                   "INP": "good is 200ms or less"})
 
     def test_bottom_line_names_band_and_top_priority(self):
         d = drpt.draft(self.SCAN)
@@ -5622,18 +5704,22 @@ class TestTrends(unittest.TestCase):
                                fails=("hsts", "csp")),
                    self._entry("2026-04-10T10:00:00Z", overall=0.8, seo=0.9,
                                fails=("csp",), pages=6)]
-        d = trends_mod.build_trend(entries)["latest_delta"]
+        t = trends_mod.build_trend(entries)
+        d = t["latest_delta"]
         self.assertEqual(d["prev_quarter"], "2026-Q1")
         self.assertEqual(d["quarter"], "2026-Q2")
-        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        # Delta rows carry the same reader-facing names as the main scorecard.
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "SEO and on-page")
         self.assertEqual(seo_row["direction"], "improved")
         self.assertEqual(seo_row["prev_score"], 0.8)
         self.assertEqual(seo_row["score"], 0.9)
         self.assertEqual(d["new_findings"], 0)
         self.assertEqual(d["resolved_findings"], 1)
-        self.assertEqual(d["resolved_examples"],
-                         ["[http_security] hsts: hsts missing"])
+        # Resolved lines read as area + the scanner's sentence, not tool ids.
+        self.assertEqual(d["resolved_examples"], ["Security: hsts missing"])
         self.assertEqual(d["pages_scanned"], {"prev": 5, "current": 6})
+        # Chart panel titles travel as data so the renderer needs no key map.
+        self.assertEqual(t["series_labels"], {"seo_score": "SEO"})
 
     def test_missing_score_falls_back_to_band_direction(self):
         entries = [self._entry("2026-01-10T10:00:00Z", with_metrics=False,
@@ -5641,7 +5727,7 @@ class TestTrends(unittest.TestCase):
                    self._entry("2026-04-10T10:00:00Z",
                                bands={"overall": "Strong", "seo": "Strong"})]
         d = trends_mod.build_trend(entries)["latest_delta"]
-        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "SEO and on-page")
         self.assertEqual(seo_row["direction"], "improved")
 
     def test_missing_score_and_band_movement_down_is_declined(self):
@@ -5650,7 +5736,7 @@ class TestTrends(unittest.TestCase):
                    self._entry("2026-04-10T10:00:00Z",
                                bands={"overall": "Weak", "seo": "Weak"})]
         d = trends_mod.build_trend(entries)["latest_delta"]
-        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "SEO and on-page")
         self.assertEqual(seo_row["direction"], "declined")
 
     def test_missing_score_and_same_band_holds(self):
@@ -5665,7 +5751,7 @@ class TestTrends(unittest.TestCase):
                    self._entry("2026-04-10T10:00:00Z",
                                bands={"overall": "Adequate", "seo": "Strong"})]
         d = trends_mod.build_trend(entries)["latest_delta"]
-        seo_row = next(r for r in d["scorecard"] if r["category"] == "seo")
+        seo_row = next(r for r in d["scorecard"] if r["category"] == "SEO and on-page")
         self.assertEqual(seo_row["direction"], "held")
 
     def test_delta_includes_prev_only_category_as_held(self):
@@ -5679,8 +5765,8 @@ class TestTrends(unittest.TestCase):
                                bands={"overall": "Adequate", "seo": "Strong"})]
         d = trends_mod.build_trend(entries)["latest_delta"]
         self.assertEqual([r["category"] for r in d["scorecard"]],
-                         ["seo", "design"])
-        design_row = next(r for r in d["scorecard"] if r["category"] == "design")
+                         ["SEO and on-page", "Design signals"])
+        design_row = next(r for r in d["scorecard"] if r["category"] == "Design signals")
         self.assertEqual(design_row["prev_band"], "Strong")
         self.assertIsNone(design_row["band"])
         self.assertEqual(design_row["direction"], "held")

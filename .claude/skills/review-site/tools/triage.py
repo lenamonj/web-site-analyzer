@@ -251,7 +251,7 @@ def main():
               "pass a --file, or list domains on the command line.")
         sys.exit(1)
 
-    print(f"Triaging {len(domains)} site(s), homepage-only, serial "
+    print(f"Triaging {common.count_noun(len(domains), 'site')}, homepage-only, serial "
           f"({delay}s between sites)...\n")
 
     def show(row):

@@ -660,7 +660,7 @@ def main():
         sys.exit(1)
 
     plan = plan_from_scan(scan, cap=cap)
-    print(f"Capture plan: {len(plan['pages'])} page(s), "
+    print(f"Capture plan: {common.count_noun(len(plan['pages']), 'page')}, "
           f"{len(plan['dom_pages'])} needing DOM snapshots")
     for url in plan["dropped"]:
         print(f"  dropped (over --pages cap): {url}")

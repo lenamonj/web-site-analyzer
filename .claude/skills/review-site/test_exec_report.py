@@ -44,8 +44,10 @@ SAMPLE = {
     "scope": {"pages_reviewed": 12, "method": "Passive external scan"},
     "progress": {"previous_date": "2026-06-01", "new_issues": 1, "resolved_issues": 4},
     "web_vitals": {"source": "field", "captured_note": "Real Chrome users, 28-day p75 (CrUX)",
-                   "metrics": [{"label": "LCP", "value": "0.9s", "rating": "Good"},
-                               {"label": "CLS", "value": "0.31", "rating": "Poor"},
+                   "metrics": [{"label": "LCP", "value": "0.9s", "rating": "Good",
+                                "target": "good is 2.5s or less"},
+                               {"label": "CLS", "value": "0.31", "rating": "Poor",
+                                "target": "good is 0.10 or less"},
                                {"label": "INP", "value": "350ms", "rating": "Needs work"}]},
     "key_dates": {"note": "Public certificate and domain-registration facts, passively measured.",
                   "items": [{"label": "SSL certificate renews", "value": "2026-09-10",
@@ -179,16 +181,31 @@ class TestExecReport(unittest.TestCase):
         self.assertIn("12", tile_text)
 
     def test_scope_line_and_progress_strip(self):
-        self.assertIn("12 page(s) reviewed  |  Passive external scan", self.text)
+        self.assertIn("12 pages reviewed  |  Passive external scan", self.text)
+        self.assertNotIn("page(s)", self.text.replace("2 page(s)", ""))  # data passes through; no builder-made "(s)"
         self.assertIn("Since the previous review (2026-06-01):", self.text)
         self.assertIn("4 resolved", self.text)
         self.assertIn("1 new", self.text)
+
+    def test_cover_counts_measured_bands(self):
+        # The cover states the measured band mix, counted from the scorecard rows.
+        self.assertIn("2 areas measured: 1 Strong, 1 Poor", self.text)
+
+    def test_section_notes_introduce_tables(self):
+        self.assertIn("Each area rolls its automated checks into a posture band."
+                      " The bar is the measured pass score, 0 to 1.", self.text)
+        self.assertIn("Ordered by severity. The evidence column names every "
+                      "affected page; paths are on the reviewed site.", self.text)
 
     def test_web_vitals_panel_renders_values_and_source(self):
         self.assertIn("CORE WEB VITALS", self.text)  # section headings render uppercase
         self.assertIn("0.9s", self.text)
         self.assertIn("350ms", self.text)
         self.assertIn("Real Chrome users, 28-day p75 (CrUX)", self.text)
+        # The published Good threshold renders beside the rating chip when the
+        # data supplies one; a metric without a target adds nothing.
+        self.assertIn("good is 2.5s or less", self.text)
+        self.assertIn("good is 0.10 or less", self.text)
         # The rating chips carry the vitals fill colors.
         panel = next(t for t in self.doc.tables
                      if any("0.9s" in c.text for c in t.rows[0].cells))
@@ -264,15 +281,21 @@ class TestExecReport(unittest.TestCase):
         self.assertNotIn("RECOMMENDED PLAN OF ACTION", self.text)
 
     def test_scorecard_band_chips_use_band_fills(self):
+        # Chips are compact shaded runs, not full-cell fills: a tall row must
+        # show a constant-size badge, never a giant colored slab.
         table = self._table_with_header("POSTURE")
-        fills = [_cell_fill(row.cells[1]) for row in table.rows[1:]]
+        fills = [_cell_fill_of_run(row.cells[1]) for row in table.rows[1:]]
         self.assertEqual(fills, [ber.BAND_FILL["Poor"], ber.BAND_FILL["Strong"]])
+        self.assertTrue(all(_cell_fill(row.cells[1]) is None for row in table.rows[1:]),
+                        "band cells must not be cell-filled; the chip is a run")
 
     def test_findings_sorted_most_severe_first_with_chips(self):
         table = self._table_with_header("SEVERITY")
         sevs = [row.cells[0].text.strip() for row in table.rows[1:]]
         self.assertEqual(sevs, ["Critical", "High", "Low"])
-        self.assertEqual(_cell_fill(table.rows[1].cells[0]), ber.SEVERITY_FILL["Critical"])
+        self.assertEqual(_cell_fill_of_run(table.rows[1].cells[0]),
+                         ber.SEVERITY_FILL["Critical"])
+        self.assertIsNone(_cell_fill(table.rows[1].cells[0]))
 
     def test_recommendations_sorted_by_rank(self):
         table = self._table_with_header("RECOMMENDATION")
@@ -324,8 +347,8 @@ TREND_2Q = {
                        "direction": "held"}],
         "new_findings": 1, "resolved_findings": 2,
         "resolved_examples": [
-            "[a11y] link_text: 2 link(s) have no discernible text.",
-            "[seo] headings: No H1 on the page."],
+            "Accessibility: 2 links with no discernible text.",
+            "SEO: No H1 on the page."],
         "pages_scanned": {"prev": 12, "current": 12},
     },
 }
@@ -363,7 +386,7 @@ class TestTrendSection(unittest.TestCase):
         self.assertIn("AREA", headers)
         self.assertTrue(any("No H1 on the page." in t for t in texts))
         self.assertTrue(any(
-            "2 finding(s) resolved since 2026-Q2; 1 new." in t for t in texts))
+            "2 findings resolved since 2026-Q2; 1 new." in t for t in texts))
         self.assertTrue(any("Pages reviewed: 12 in 2026-Q2, 12 in 2026-Q3"
                             in t for t in texts))
 

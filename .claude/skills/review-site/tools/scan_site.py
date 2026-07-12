@@ -55,8 +55,10 @@ def _dup_check(mapping, label, n_pages):
         return {"verdict": "info", "note": f"Single page; cross-page {label} comparison not applicable."}
     dups = {value: urls for value, urls in mapping.items() if value and len(urls) >= 2}
     if dups:
+        verb = "repeats" if len(dups) == 1 else "repeat"
         return {"verdict": "warn", "duplicates": {v: u for v, u in list(dups.items())[:5]},
-                "note": f"{len(dups)} {label} value(s) repeat across pages; each page should have a unique {label}."}
+                "note": f"{common.count_noun(len(dups), f'{label} value')} {verb} across "
+                        f"pages; each page should have a unique {label}."}
     return {"verdict": "pass", "note": f"Each reviewed page has a distinct {label}."}
 
 
@@ -349,7 +351,8 @@ def issue_line(group):
     if pages:
         shown = ", ".join(pages[:2])
         more = len(pages) - 2
-        line += f" (on {len(pages)} page(s): {shown}" + (f", +{more} more)" if more > 0 else ")")
+        line += (f" (on {common.count_noun(len(pages), 'page')}: {shown}"
+                 + (f", +{more} more)" if more > 0 else ")"))
     return line
 
 
@@ -555,7 +558,8 @@ def write_digest_md(result, path, history=None):
     rendered_pages = sum(1 for ps in result.get("page_scans", [])
                          if ps.get("rendered_snapshot_used"))
     if rendered_pages:
-        lines.insert(5, f"- Rendered DOM snapshots used for {rendered_pages} page(s); "
+        lines.insert(5, "- Rendered DOM snapshots used for "
+                        f"{common.count_noun(rendered_pages, 'page')}; "
                         "those structural verdicts are measured from the browser-built DOM.")
     sc = result.get("scorecard", {})
     if sc:

@@ -18,6 +18,7 @@ Usage:
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import common
 import trends
@@ -27,14 +28,9 @@ DRAFT_SEVERITY = {"fail": "High", "warn": "Medium"}
 RATING = {"pass": "Good", "warn": "Needs work", "fail": "Poor"}
 MAX_ACTIONS = 10
 
-# Plain-language names for the scorecard categories in the summary.
-CATEGORY_LABEL = {
-    "security": "Security posture", "tls": "TLS and certificates",
-    "dns_email": "Email authentication", "seo": "SEO and on-page",
-    "accessibility": "Accessibility", "links": "Link health",
-    "performance": "Performance and delivery", "readability": "Content readability",
-    "privacy": "Privacy and tracking", "design": "Design signals",
-}
+# Plain-language names for the scorecard categories (shared with trends so the
+# QoQ table and the scorecard speak the same names; see common.CATEGORY_LABEL).
+CATEGORY_LABEL = common.CATEGORY_LABEL
 
 # Standard remediation for each measured failure. The imperative restates the
 # measured problem as its accepted fix (not invented advice); unmapped checks
@@ -99,30 +95,64 @@ ACTION = {
     "cls": "Reduce Cumulative Layout Shift",
     "tbt": "Reduce Total Blocking Time",
     "contrast": "Fix low-contrast text to meet WCAG 1.4.3",
+    "canonical": "Add a canonical link to every indexable page",
+    "robots_meta": "Confirm the noindex robots meta on the affected pages is intentional",
+    "open_graph": "Complete the Open Graph tags (title, description, image)",
+    "twitter_card": "Add Twitter card tags",
+    "structured_data": "Add JSON-LD structured data",
+    "dkim": "Publish DKIM keys for the sending domain",
+    "dnssec": "Enable DNSSEC on the zone",
+    "mta_sts": "Publish an MTA-STS policy",
+    "tls_rpt": "Publish a TLS-RPT reporting record",
+    "caa": "Publish a CAA record naming the allowed certificate authorities",
 }
 
 
-def _page_list(pages):
+def _compact_page(url, host):
+    """A page reference for the report: the path alone when the page lives on
+    the reviewed host (the report names that host once, on the cover), the full
+    URL when it does not. The homepage compacts to '/'. Nothing is dropped;
+    every page stays individually identifiable."""
+    if not host:
+        return url
+    parsed = urlparse(url)
+    if parsed.netloc.lower() == host.lower():
+        path = parsed.path or "/"
+        return path + (f"?{parsed.query}" if parsed.query else "")
+    return url
+
+
+def _page_list(pages, host):
     # Reports must name every subject; never hide affected pages behind "+N more".
     # Full enumeration, however many pages a finding touches (a severity-ranked
-    # finding must say exactly where it applies, even at crawl scale).
-    return ", ".join(pages)
+    # finding must say exactly where it applies, even at crawl scale). Same-host
+    # pages compact to their path so the enumeration stays readable.
+    return ", ".join(_compact_page(p, host) for p in pages)
 
 
-def _affects(issue):
+# One pluralization used everywhere a count reaches the report.
+_plural = common.count_noun
+
+
+def _affects(issue, host):
     pages = issue.get("pages")
     if not pages:
         return "site-wide"
     if len(pages) <= 3:
-        return ", ".join(pages)
-    return f"{len(pages)} page(s)"
+        return _page_list(pages, host)
+    return _plural(len(pages), "page")
 
 
-# Issue-list labels differ from scorecard category names; map back so the
-# worst-finding lookup lands on the right category.
-LABEL_TO_CATEGORY = {"http_security": "security", "a11y": "accessibility",
-                     "perf": "performance", "pagesec": "security", "crawl": "seo",
-                     "vitals": "performance", "crux": "performance"}
+# Issue-list labels differ from scorecard category names; the shared map in
+# common also serves the trend layer's resolved-item lines.
+LABEL_TO_CATEGORY = common.ISSUE_LABEL_TO_CATEGORY
+
+
+def _area_label(scan_label):
+    """Reader-facing area for a finding row: the scan label mapped to its
+    scorecard category and shown by its short name (a11y -> Accessibility,
+    crux -> Performance). An unknown label passes through unchanged."""
+    return common.issue_area(scan_label)
 
 
 def _worst_by_category(scan):
@@ -136,6 +166,32 @@ def _worst_by_category(scan):
     return worst
 
 
+def _graded_counts(g):
+    p, w, f = g.get("pass", 0), g.get("warn", 0), g.get("fail", 0)
+    return p, w, f, (g.get("graded") or p + w + f)
+
+
+def _checks_phrase(g):
+    """'11 of 13 checks pass' from a category's measured counts; a category
+    with nothing graded says so instead of the absurd '0 of 0 checks pass'."""
+    p, _, _, total = _graded_counts(g)
+    if total == 0:
+        return "no checks measured"
+    return f"{p} of {_plural(total, 'check')} pass"
+
+
+def _weakness_phrase(g):
+    """The failure story in plain words: '3 of 6 checks failing, 2 warnings'.
+    Zero counts are dropped instead of printed as noise."""
+    p, w, f, total = _graded_counts(g)
+    bits = []
+    if f:
+        bits.append(f"{f} of {_plural(total, 'check')} failing")
+    if w:
+        bits.append(_plural(w, "warning"))
+    return ", ".join(bits) if bits else _checks_phrase(g)
+
+
 def _assessment(scan):
     """Strengths and weaknesses read straight from the measured scorecard.
     Ordered by score so 'strongest' and 'weakest' claims are true: strengths
@@ -146,13 +202,14 @@ def _assessment(scan):
                     if g.get("band") == "Strong")
     weak = sorted((g.get("score") or 0, name, g) for name, g in cats.items()
                   if g.get("band") in ("Weak", "Poor"))
-    strengths = [f"{CATEGORY_LABEL.get(name, name)}: strong ({g.get('pass', 0)} checks pass)"
+    strengths = [f"{CATEGORY_LABEL.get(name, name)}: strong "
+                 f"({_checks_phrase(g)})"
                  for _, name, g in reversed(strong)]
     weaknesses = []
     for _, name, g in weak:
         note = worst.get(name)
-        detail = f"{g.get('fail', 0)} failing, {g.get('warn', 0)} warnings"
-        weaknesses.append(f"{CATEGORY_LABEL.get(name, name)}: {g['band'].lower()} ({detail})"
+        weaknesses.append(f"{CATEGORY_LABEL.get(name, name)}: {g['band'].lower()} "
+                          f"({_weakness_phrase(g)})"
                           + (f". Example: {note}" if note else ""))
     wv = _web_vitals(scan)
     # Claim "all Good" only when every expected metric for the source was measured
@@ -196,6 +253,7 @@ def _action_plan(scan):
     ahead of cosmetics at equal breadth, so a site-wide consent exposure never
     falls off the capped list behind a heading-order warning."""
     grouped = scan.get("issues_grouped") or scan.get("issues", {}) or {}
+    host = scan.get("host", "")
     ordered = (sorted(grouped.get("fail", []), key=_plan_order)
                + sorted(grouped.get("warn", []), key=_plan_order))
     plan, seen = [], set()
@@ -207,7 +265,7 @@ def _action_plan(scan):
         plan.append({
             "priority": "High" if i.get("verdict") == "fail" else "Medium",
             "action": _action_for(i),
-            "affects": _affects(i),
+            "affects": _affects(i, host),
         })
         if len(plan) >= MAX_ACTIONS:
             break
@@ -215,13 +273,16 @@ def _action_plan(scan):
 
 
 def _vitals_metrics(checks, spec):
-    """One report metric per measured (non-info) vitals check, in order."""
+    """One report metric per measured (non-info) vitals check, in order. The
+    target is the published Good threshold the verdict was graded against
+    (Google's Core Web Vitals thresholds; Lighthouse's for lab TBT), so the
+    report can show how far a number is from good, not just a color."""
     out = []
-    for key, label, fmt in spec:
+    for key, label, fmt, target in spec:
         c = checks.get(key) or {}
         if c.get("verdict") in RATING and c.get("value") is not None:
             out.append({"label": label, "value": fmt(c["value"]),
-                        "rating": RATING[c["verdict"]]})
+                        "rating": RATING[c["verdict"]], "target": target})
     return out
 
 
@@ -230,9 +291,9 @@ def _web_vitals(scan):
     over a lab capture. Returns None when neither was measured."""
     crux = (scan.get("host_scans") or {}).get("crux") or {}
     field = _vitals_metrics(crux.get("checks", {}), [
-        ("field_lcp", "LCP", lambda v: f"{v / 1000:.1f}s"),
-        ("field_cls", "CLS", lambda v: f"{v:.2f}"),
-        ("field_inp", "INP", lambda v: f"{int(v)}ms")])
+        ("field_lcp", "LCP", lambda v: f"{v / 1000:.1f}s", "good is 2.5s or less"),
+        ("field_cls", "CLS", lambda v: f"{v:.2f}", "good is 0.10 or less"),
+        ("field_inp", "INP", lambda v: f"{int(v)}ms", "good is 200ms or less")])
     if field:
         # complete == all three of LCP, CLS, INP were measured; only then is an
         # "all in the Good range" claim about the full Core Web Vitals honest.
@@ -240,9 +301,9 @@ def _web_vitals(scan):
                 "captured_note": "Real Chrome users, 28-day p75 (CrUX)"}
     for ps in scan.get("page_scans", []) or []:
         lab = _vitals_metrics((ps.get("vitals") or {}).get("checks", {}), [
-            ("lcp", "LCP", lambda v: f"{v / 1000:.1f}s"),
-            ("cls", "CLS", lambda v: f"{v:.2f}"),
-            ("tbt", "TBT", lambda v: f"{int(v)}ms")])
+            ("lcp", "LCP", lambda v: f"{v / 1000:.1f}s", "good is 2.5s or less"),
+            ("cls", "CLS", lambda v: f"{v:.2f}", "good is 0.10 or less"),
+            ("tbt", "TBT", lambda v: f"{int(v)}ms", "good is 200ms or less")])
         if lab:
             return {"source": "lab", "metrics": lab, "complete": len(lab) == 3,
                     "captured_note": "Lab capture, one load"}
@@ -255,10 +316,20 @@ def _scorecard(scan):
     rows = []
     for name, g in (sc.get("categories") or {}).items():
         score = g.get("score")
-        detail = f"pass/warn/fail = {g.get('pass', 0)}/{g.get('warn', 0)}/{g.get('fail', 0)}"
-        if score is not None:
-            detail += f" (score {score})"
-        row = {"category": name, "band": g.get("band", "Not measured"), "detail": detail}
+        # Plain-English measured detail; the raw counts stay verifiable in the
+        # scan JSON, the report reads like a document rather than a debug dump.
+        errors = g.get("errors")
+        if errors:
+            detail = "scanner error: " + ", ".join(str(e) for e in errors)
+        else:
+            detail = _checks_phrase(g)
+            p, w, f, _ = _graded_counts(g)
+            extra = ([_plural(f, "failure")] if f else []) + \
+                    ([_plural(w, "warning")] if w else [])
+            if extra:
+                detail += ", " + ", ".join(extra)
+        row = {"category": CATEGORY_LABEL.get(name, name),
+               "band": g.get("band", "Not measured"), "detail": detail}
         if score is not None:
             # Numeric copy of the measured score so the report can draw a
             # truthful score bar without parsing the display string.
@@ -271,7 +342,7 @@ def _scorecard(scan):
             "scanner_errors": scan.get("scanner_errors") or []}
 
 
-def _finding_from_issue(issue, slug):
+def _finding_from_issue(issue, slug, host):
     scan_label = issue.get("scan", "")
     check = issue.get("check", "")
     note = issue.get("note", "")
@@ -280,7 +351,7 @@ def _finding_from_issue(issue, slug):
         # A grouped issue: one finding whose evidence names EVERY affected
         # page (a severity-ranked finding must say exactly where it applies).
         area = scan_label
-        evidence = (f"{len(pages)} page(s): {_page_list(pages)}"
+        evidence = (f"{len(pages)} pages: {_page_list(pages, host)}"
                     if len(pages) > 1 else pages[0])
     elif ":" in scan_label:
         area, url = scan_label.split(":", 1)
@@ -289,8 +360,11 @@ def _finding_from_issue(issue, slug):
         area = scan_label
         evidence = f"{check} ({slug}_scan.json)" if check else f"{slug}_scan.json"
     return {
-        "area": area,
-        "finding": f"{check}: {note}" if check else note,
+        "area": _area_label(area),
+        # The note alone is the finding; it is the scanner's own sentence and
+        # stays verbatim-traceable to the scan JSON without a check_id: prefix
+        # turning a boardroom document into tool output.
+        "finding": note or check,
         "evidence": evidence,
         "severity": DRAFT_SEVERITY.get(issue.get("verdict"), "Low"),
     }
@@ -347,7 +421,7 @@ def draft(scan, trend=None):
     # deliverable must not do.
     issues = scan.get("issues_grouped") or scan.get("issues", {}) or {}
     ordered = list(issues.get("fail", [])) + list(issues.get("warn", []))
-    findings = [_finding_from_issue(i, slug) for i in ordered]
+    findings = [_finding_from_issue(i, slug, scan.get("host", "")) for i in ordered]
 
     measured_at = scan.get("measured_at_utc", "")
     date = measured_at.split("T", 1)[0] if "T" in measured_at else measured_at
@@ -376,20 +450,27 @@ def draft(scan, trend=None):
 
     assessment = _assessment(scan)
     action_plan = _action_plan(scan)
-    strongest = assessment["strengths"][0].split(":")[0] if assessment["strengths"] else None
+    # The strongest AREA comes from a category strength ("Label: strong (...)"),
+    # never from the colon-free Core Web Vitals line inserted ahead of them.
+    cat_strengths = [s for s in assessment["strengths"] if ":" in s]
+    strongest = cat_strengths[0].split(":")[0] if cat_strengths else None
     top_priority = action_plan[0]["action"] if action_plan else None
     bits = [f"DRAFT (sharpen for the CEO): measured posture is {scorecard['overall']} "
-            f"across {n_pages} page(s)"]
+            f"across {_plural(n_pages, 'page')}"]
     # A crashed scanner leaves its category Not measured, so the overall posture
     # covers only what was measured; say so rather than let an uncaveated band read
     # as a clean bill for a category that never ran.
     sc_errors = scorecard.get("scanner_errors") or []
     if sc_errors:
         tools = ", ".join(sorted({str(e.get("tool")) for e in sc_errors}))
-        bits.append(f"{len(sc_errors)} scanner(s) could not measure their category "
-                    f"({tools}), so this posture covers only the measured categories")
+        bits.append(f"{common.count_noun(len(sc_errors), 'scanner')} ({tools}) could "
+                    "not measure, so this posture covers only the measured categories")
     if strongest:
-        bits.append(f"the strongest area is {strongest.lower()}")
+        # Mid-sentence case: lowercase the label unless it opens with an
+        # acronym (TLS, SEO) that must keep its capitals.
+        first_word = strongest.split(" ", 1)[0]
+        shown = strongest if first_word.isupper() else strongest[0].lower() + strongest[1:]
+        bits.append(f"the strongest area is {shown}")
     if top_priority:
         bits.append(f"the top priority is to {top_priority[0].lower() + top_priority[1:]}")
     bottom_line = "; ".join(bits) + "."

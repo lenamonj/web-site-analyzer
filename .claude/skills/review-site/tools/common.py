@@ -619,6 +619,56 @@ def finalize(result, category):
     return result
 
 
+# Reader-facing names for the scorecard categories (registry tool categories).
+# The report is a CEO document: raw keys like dns_email or a11y must never
+# reach it. CATEGORY_LABEL is the full name for roomy contexts (scorecard,
+# assessment, trend table); CATEGORY_SHORT fits narrow table columns and
+# chart panel titles. Both fall back to the raw key for an unknown category.
+CATEGORY_LABEL = {
+    "security": "Security posture", "tls": "TLS and certificates",
+    "dns_email": "Email authentication", "seo": "SEO and on-page",
+    "accessibility": "Accessibility", "links": "Link health",
+    "performance": "Performance and delivery", "readability": "Content readability",
+    "privacy": "Privacy and tracking", "design": "Design signals",
+}
+CATEGORY_SHORT = {
+    "security": "Security", "tls": "TLS", "dns_email": "Email auth",
+    "seo": "SEO", "accessibility": "Accessibility", "links": "Links",
+    "performance": "Performance", "readability": "Readability",
+    "privacy": "Privacy", "design": "Design",
+}
+
+# Issue-list scan labels differ from scorecard category names; map back so a
+# finding or resolved-item line lands on the right reader-facing category.
+ISSUE_LABEL_TO_CATEGORY = {
+    "http_security": "security", "a11y": "accessibility", "perf": "performance",
+    "pagesec": "security", "crawl": "seo", "vitals": "performance",
+    "crux": "performance", "cross_page": "seo",
+}
+
+
+def issue_area(scan_label):
+    """Reader-facing area for an issue's scan label ('a11y:https://x/' ->
+    'Accessibility'). An unknown label passes through unchanged."""
+    label = (scan_label or "").split(":", 1)[0]
+    return category_short(ISSUE_LABEL_TO_CATEGORY.get(label, label))
+
+
+def category_label(name):
+    return CATEGORY_LABEL.get(name, name)
+
+
+def category_short(name):
+    return CATEGORY_SHORT.get(name, name)
+
+
+def count_noun(n, noun):
+    """'1 link' / '3 links'. Scanner notes land verbatim in the executive
+    report, so they must read as sentences, never as '3 link(s)' form-letter
+    output. Regular plurals only; phrase notes to avoid irregular nouns."""
+    return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
 def summarize(checks):
     """Pass/warn/fail/info counts across a checks map, for a result's summary.
     Defined once instead of re-implemented in every scanner's _scan. A check

@@ -106,10 +106,14 @@ def _form_check(parsed, inconclusive):
     if unlabeled:
         return {"count": len(controls), "unlabeled": len(unlabeled),
                 "examples": unlabeled[:5], "placeholder_only": placeholder_only,
-                "verdict": "fail", "note": f"{len(unlabeled)} control(s) have no programmatic label."}
+                "verdict": "fail",
+                "note": f"{common.count_noun(len(unlabeled), 'form control')} "
+                        "without a programmatic label."}
     if placeholder_only:
         return {"count": len(controls), "unlabeled": 0, "placeholder_only": placeholder_only,
-                "verdict": "warn", "note": f"{len(placeholder_only)} control(s) rely on placeholder only."}
+                "verdict": "warn",
+                "note": f"{common.count_noun(len(placeholder_only), 'control')} "
+                        "labeled only by placeholder text."}
     return {"count": len(controls), "unlabeled": 0, "verdict": "pass",
             "note": "All form controls have a programmatic label."}
 
@@ -148,8 +152,9 @@ def _landmark_check(parsed, inconclusive):
         return {"landmarks": sorted(landmarks), "verdict": "pass",
                 "note": "Main and navigation landmarks present."}
     missing = [x for x, ok in (("main", has_main), ("nav", has_nav)) if not ok]
+    word = "landmark" if len(missing) == 1 else "landmarks"
     return {"landmarks": sorted(landmarks), "verdict": "warn",
-            "note": f"Missing landmark(s): {', '.join(missing)}."}
+            "note": f"Missing {word}: {', '.join(missing)}."}
 
 
 def _link_text_check(parsed, inconclusive):
@@ -172,10 +177,12 @@ def _link_text_check(parsed, inconclusive):
     if empty:
         return {"count": len(anchors), "empty_links": len(empty), "vague_links": len(vague),
                 "examples": empty[:5], "verdict": "fail",
-                "note": f"{len(empty)} link(s) have no discernible text."}
+                "note": f"{common.count_noun(len(empty), 'link')} with no discernible text."}
     if vague:
         return {"count": len(anchors), "empty_links": 0, "vague_links": len(vague),
-                "verdict": "warn", "note": f"{len(vague)} link(s) use generic text like 'click here'."}
+                "verdict": "warn",
+                "note": f"{common.count_noun(len(vague), 'link')} using generic "
+                        "text like 'click here'."}
     return {"count": len(anchors), "empty_links": 0, "vague_links": 0,
             "verdict": "pass", "note": "Link text is descriptive."}
 
@@ -208,12 +215,14 @@ def _scan(url, page=None):
                         else "info" if inconclusive else "pass"),
             "note": ("Tab order not assessable from static HTML (client-rendered)."
                      if inconclusive
-                     else f"{parsed['positive_tabindex']} element(s) use a positive tabindex."
+                     else f"{common.count_noun(parsed['positive_tabindex'], 'element')} "
+                          "with a positive tabindex."
                      if parsed["positive_tabindex"] else "No positive tabindex values.")},
         "empty_buttons": {
             "count": parsed["buttons_empty"],
             "verdict": "warn" if parsed["buttons_empty"] and not inconclusive else "info" if inconclusive else "pass",
-            "note": (f"{parsed['buttons_empty']} button(s) have no accessible text."
+            "note": (f"{common.count_noun(parsed['buttons_empty'], 'button')} "
+                     "with no accessible text."
                      if parsed["buttons_empty"] else "No empty buttons in static HTML.")},
     }
 
