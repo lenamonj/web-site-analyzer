@@ -410,3 +410,37 @@ budget on background-agent wait-turns.
 **Learnings:** the anchor recorded by the prior run (commit e498f91) makes this relaunch a one-step ratchet rather than a full re-audit, which is the intended fast path when nothing but the ledger moved since convergence.
 
 **Next:** converged. Nothing open. Outputting the promise.
+
+## iter 1/10 | f48e8ba2 | 2026-07-12 | AUDIT | audit
+**Task:** Fresh audit after the ratchet broke: BACKLOG's Converged anchor is 67dbb6aa but f224650 (the
+executive-grade report upgrade, 20 source files) changed implementing code since it, so the prior
+zero-High/zero-Medium scores no longer carry and the backlog was empty.
+
+**Changed:** PLAN.md (new section 39 recording the Verify command and definition of done, both referenced
+by the closing rule but never written down; the prompt directs the first audit to fill them), BACKLOG.md
+(new Phase X section with X1), JOURNAL.md (this entry).
+
+**Checkpoint:** pending
+
+**Verification:** Fresh battery at f224650: scanner suite 395 OK, builder+charts 62 OK (54+8), compileall
+clean, dash check clean over every skill .py. check_readme_counts.py exits 1 (badge, summary, suite
+comments, tree annotation all stale; actual 395/54/449) and ci.yml runs it as its own step, so CI is red
+on the pushed main: filed as X1, the audit's one Medium. Zero High. Consumer sweep of the changed string
+contracts: triage.py matches verdicts and bands, never note text; README carries no old-format strings;
+tests updated in the same commit. Envelope sweep of the changed surface: labels flow as data with
+fallbacks for old drafts and ledgers (verified by rebuilding the old dws draft through the new builder);
+count_noun call sites are all len()/int counts; _compact_page keeps full URLs on host mismatch including
+port and case differences; the strongest-area pick is structurally safe (category strengths always carry
+a colon from their own format); chip rendering and score bars are pinned by the updated builder tests.
+Lows, declined with reasons: the builder's local _plural twin of common.count_noun stays because the
+builder cannot import tools/ across the JSON seam (documented in both places); the findings section note
+says "paths are on the reviewed site" which reads loosely when hand-authored evidence uses full URLs
+(cosmetic copy, method text, not a measurement).
+
+**Learnings:** the ratchet did its job: it refused to converge on a tree whose code moved after
+certification, and the one real regression the upgrade left (stale README counts) sat exactly in the gap
+the count guard was built for. Filling PLAN section 39 turns the previously implicit gate into the
+written one the closing rule points at.
+
+**Next:** execute X1 (README counts, the only open task), then re-verify the full gate including the
+count guard and assess convergence.

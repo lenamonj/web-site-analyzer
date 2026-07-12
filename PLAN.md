@@ -1294,6 +1294,25 @@ Defect classes audited clean (class -> outcome):
 
 Definition-of-done note: this record does not by itself satisfy convergence,
 which requires a single full-audit pass executed in one iteration that rescores
-every applicable dimension at zero High and zero Medium (see "Definition of
-done" at the top of this file). The record exists so that pass does not repeat
-these closed sweeps.
+every applicable dimension at zero High and zero Medium (see section 39). The
+record exists so that pass does not repeat these closed sweeps.
+
+## 39. Verify command and definition of done
+Filled during the 2026-07-12 audit (the sections above referenced a Definition
+of done that was never written down; this is the gate phases M-W actually
+applied, now recorded).
+
+Verify command (the project's real gate, mirroring ci.yml):
+- python -m unittest test_review_tools            (run in tools/)
+- python -m unittest test_exec_report             (run in the skill root)
+- python -m unittest test_report_charts           (run in the skill root)
+- python .claude/skills/review-site/tools/check_readme_counts.py  (repo root)
+All four green is the gate. A red guard is a real failure even when the code
+suites pass, because CI runs it as its own step.
+
+Definition of done (Improvement mode): a single fresh-evidence audit pass,
+executed within one iteration, that rescores every applicable dimension
+(architecture, correctness, error handling, security, performance, testing,
+documentation, dependency hygiene) at zero High and zero Medium in-envelope
+(section 2a), with the Verify command green at the same tree, and a Converged
+line naming the full commit hash appended under ## Converged in BACKLOG.md.

@@ -5,6 +5,23 @@ highest-priority unblocked `todo`. Keep tasks small enough to finish and verify
 in a single run; split anything larger. See PLAN.md for the design each task
 serves.
 
+## Phase X - Post-report-upgrade audit findings (2026-07-12)
+Audit of the tree at f224650 (the executive-grade report upgrade: 20 files,
+plain-language labels, count_noun pluralization, evidence path compaction,
+run-chip design system). Fresh battery green at this tree: scanner 395,
+builder 54, charts 8, compileall clean, dash-clean, no triage/README consumers
+of the changed note strings. One Medium, zero High. Verify command and
+definition of done were unfilled in PLAN.md and were recorded during this
+audit (PLAN.md section 39).
+
+- [ ] X1 (Medium): README test counts are stale after the report upgrade, so
+  check_readme_counts.py exits 1 and the CI guard step is red on the pushed
+  main (badge, summary line, both suite comments, and the file-tree annotation
+  still carry the old counts; actual scanner 395, builder 54, total 449).
+  Update every count the guard checks in README.md.
+  Acceptance: python .claude/skills/review-site/tools/check_readme_counts.py
+  exits 0.
+
 ## Phase W - Eleventh (certifying re-audit of V1/V2/V3) findings (2026-07-05)
 Ran the certifying re-audit after V1/V2/V3 landed. Fresh battery green (scanner 389, builder 51, charts 8,
 README guard exit 0 at 440, compileall clean). git diff --name-only HEAD confirms only the changed code
