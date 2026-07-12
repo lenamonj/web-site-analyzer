@@ -3982,3 +3982,5 @@ audit checkpoint 53de067 that only README.md and state files changed since the
 audit, so the audit scores carry: zero High, zero Medium in-envelope. The
 anchoring commit hash is on the Converged line appended below after the
 convergence commit.
+
+Converged: fb91f843b999f2198e8f6b8dc8746ed61545ee72 - 2026-07-12

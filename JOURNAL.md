@@ -453,7 +453,7 @@ comments, file-tree annotation) to the post-upgrade sizes, then run the certifyi
 comment 54, tree annotation 395), BACKLOG.md (X1 line deleted per ledger discipline; convergence evidence
 appended under Converged), JOURNAL.md (this entry).
 
-**Checkpoint:** pending
+**Checkpoint:** fb91f84
 
 **Verification:** Acceptance: check_readme_counts.py exits 0 ("README counts in sync: scanner 395,
 builder 54, total 449; 14 scanners, 10 categories"). Verify gate green at this tree: scanner suite 395
