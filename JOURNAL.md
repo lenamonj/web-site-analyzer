@@ -420,7 +420,7 @@ zero-High/zero-Medium scores no longer carry and the backlog was empty.
 by the closing rule but never written down; the prompt directs the first audit to fill them), BACKLOG.md
 (new Phase X section with X1), JOURNAL.md (this entry).
 
-**Checkpoint:** pending
+**Checkpoint:** 53de067
 
 **Verification:** Fresh battery at f224650: scanner suite 395 OK, builder+charts 62 OK (54+8), compileall
 clean, dash check clean over every skill .py. check_readme_counts.py exits 1 (badge, summary, suite
