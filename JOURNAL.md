@@ -444,3 +444,27 @@ written one the closing rule points at.
 
 **Next:** execute X1 (README counts, the only open task), then re-verify the full gate including the
 count guard and assess convergence.
+
+## iter 2/10 | f48e8ba2 | 2026-07-12 | X1 | converged
+**Task:** X1 (Medium): update the README test counts the CI guard checks (badge, summary line, both suite
+comments, file-tree annotation) to the post-upgrade sizes, then run the certifying gate for convergence.
+
+**Changed:** README.md (five count sites: badge 449, summary 449 total, scanner comment 395, builder
+comment 54, tree annotation 395), BACKLOG.md (X1 line deleted per ledger discipline; convergence evidence
+appended under Converged), JOURNAL.md (this entry).
+
+**Checkpoint:** pending
+
+**Verification:** Acceptance: check_readme_counts.py exits 0 ("README counts in sync: scanner 395,
+builder 54, total 449; 14 scanners, 10 categories"). Verify gate green at this tree: scanner suite 395
+OK, builder 54 OK, charts 8 OK, compileall clean. Certification: git diff --name-only 53de067 (the audit
+checkpoint) lists only JOURNAL.md and README.md, so no implementing code changed since the iteration-1
+fresh audit scored zero High and one Medium; with X1 fixed the tree stands at zero High, zero Medium
+in-envelope with the Verify command green, which is the PLAN section 39 definition of done.
+
+**Learnings:** the audit-then-fix split cost one extra iteration but kept the certification honest: the
+convergence claim rests on an audit of exactly this code plus a diff proving nothing else moved. Note for
+the user: the X1 fix is committed locally only (jeffy never pushes), so CI on the pushed main stays red
+until these commits are pushed.
+
+**Next:** converged. Nothing open. Outputting the promise.

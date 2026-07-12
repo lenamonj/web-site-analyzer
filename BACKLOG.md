@@ -14,14 +14,6 @@ of the changed note strings. One Medium, zero High. Verify command and
 definition of done were unfilled in PLAN.md and were recorded during this
 audit (PLAN.md section 39).
 
-- [ ] X1 (Medium): README test counts are stale after the report upgrade, so
-  check_readme_counts.py exits 1 and the CI guard step is red on the pushed
-  main (badge, summary line, both suite comments, and the file-tree annotation
-  still carry the old counts; actual scanner 395, builder 54, total 449).
-  Update every count the guard checks in README.md.
-  Acceptance: python .claude/skills/review-site/tools/check_readme_counts.py
-  exits 0.
-
 ## Phase W - Eleventh (certifying re-audit of V1/V2/V3) findings (2026-07-05)
 Ran the certifying re-audit after V1/V2/V3 landed. Fresh battery green (scanner 389, builder 51, charts 8,
 README guard exit 0 at 440, compileall clean). git diff --name-only HEAD confirms only the changed code
@@ -3977,3 +3969,16 @@ U6/V-series/W1 code + tests changed, plus a fresh battery); error handling None 
 ledger-crash class, independently confirmed complete); correctness/code-quality None (W1 fixed; F2/F3/F4
 Declined by the Operating envelope as machine-generated / beyond-realistic-slip). Zero open findings.
 Converged: 67dbb6aa024f0fcbeeef612c6f0c813c0d37e012 - 2026-07-05
+
+Evidence (2026-07-12 run, iterations 1-2 of 10): the f224650 report upgrade broke
+the prior anchor, so iteration 1 re-audited the tree with fresh evidence (scanner
+395, builder 54, charts 8 green; compileall clean; dash-clean; consumer sweep of
+every changed string contract; envelope sweep of the 20 changed files), scoring
+zero High and one Medium: X1, stale README test counts failing the CI count
+guard. Iteration 2 fixed X1 (README.md only, a docs file, no implementing code),
+re-ran the full Verify gate green at the same tree (guard exit 0 at 449, all
+three suites green, compileall clean), and confirmed via git diff against the
+audit checkpoint 53de067 that only README.md and state files changed since the
+audit, so the audit scores carry: zero High, zero Medium in-envelope. The
+anchoring commit hash is on the Converged line appended below after the
+convergence commit.
